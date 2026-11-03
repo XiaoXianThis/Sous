@@ -7,23 +7,24 @@
 - [x] 初始化 wokspace，创建 core、web、desktop 三个 app
 - [x] 写决策记录 0001～0008、需求、设计
 - [x] 第一轮评审：修正 12 个问题，补充决策记录 0009～0011，写入 Super-agent 参考文档
-- [ ] 用户确认 spec 和 `docs/api` 契约初稿
-- [ ] `apps/core`：初始化 Go module，搭好包结构，填写任务表（install/dev/test/build）
-- [ ] `apps/web`：初始化 Svelte + PWA，填写任务表
-- [ ] 加上 `.github/workflows`：push 和 PR 时跑测试（同步更新 `.gitignore` 白名单）
-- [ ] event、store：建事件表并做迁移，实现单一写入者的追加写入、订阅、视图投影，带单元测试
-- [ ] effects：副作用队列（事务内入队、提交后执行、退避重试、连续失败 3 次才报告）
-- [ ] 配置加载（hub.yaml / node.yaml + 环境变量）
+- [x] 用户确认 spec 和 `docs/api` 契约初稿
+- [x] `apps/core`：初始化 Go module，搭好包结构，填写任务表（install/dev/test/build）
+- [x] `apps/web`：初始化 Svelte + PWA，填写任务表
+- [x] 加上 `.github/workflows`：push 和 PR 时跑测试（同步更新 `.gitignore` 白名单）
+- [x] event、store：建事件表并做迁移，实现单一写入者的追加写入、订阅、视图投影，带单元测试
+- [x] effects：副作用队列（事务内入队、提交后执行、退避重试、连续失败 3 次才报告）
+- [x] 配置加载（hub.yaml + 环境变量；node.yaml 随 M2）
 
 ## M1 能聊天
 
-- [ ] provider：统一消息格式，以及 openai-chat、openai-responses、anthropic 三个适配器（流式输出 + 工具调用）
-- [ ] 实测 DeepSeek 的工具调用，确定各角色的默认模型
-- [ ] auth：Passkey 注册和登录，会话管理，`sous-hub admin passkey-reset`
-- [ ] channel/web：REST 接口 + `/ws` 事件流（支持 since 断点续传；流式片段只推送、不入库）
-- [ ] supervisor：线程串行队列和批次合并、主线、事件归属、上下文组装、发言策略、提示词分层、基础工具（memory、notify）
+- [x] provider：统一消息格式，以及 openai-chat、openai-responses、anthropic 三个适配器（流式输出 + 工具调用）
+- [x] 实测 DeepSeek 的工具调用，确定各角色的默认模型（可用模型为 `deepseek-v4-pro`、`deepseek-flash`；主管用 v4-pro，思考模式下的工具循环正常）
+- [x] auth：Passkey 注册和登录，会话管理，`sous-hub admin passkey-reset`（完整的 Passkey 流程待在真实设备上验收）
+- [x] channel/web：REST 接口 + `/ws` 事件流（支持 since 断点续传；流式片段只推送、不入库）
+- [x] supervisor：线程串行队列和批次合并（`reply_to`）、主线、上下文组装、提示词分层、工具循环（内置 current_time）
+- [ ] supervisor：发言策略、memory 和 notify 工具
 - [ ] memory：sqlite FTS5
-- [ ] web：登录、线程列表、流式对话
+- [x] web：登录、线程列表、流式对话
 - [ ] `work/infra/`：Hub 的部署文件（docker compose 或 systemd）和备份脚本（`VACUUM INTO`），部署到 agent.wxian.cc
 - [ ] 验收：手机和电脑的浏览器都能登录、对话，两边的历史保持一致
 

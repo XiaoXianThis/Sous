@@ -1,0 +1,20 @@
+# Local development. Run from apps/core: go run ./cmd/sous-hub -config configs/hub.dev.yaml
+# Paths are relative to this file.
+listen: 127.0.0.1:8787
+public_url: http://localhost:8787
+data_dir: ../.data
+web_dir: ../../../build/web
+dev: true # enables the loopback-only dev login
+env_file: ../.env # local secrets such as DEEPSEEK_API_KEY; ignored by git
+
+providers:
+  - name: mock
+    kind: mock
+  - name: deepseek
+    kind: openai-chat
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY
+
+roles:
+  # Use mock/echo to work offline without an API key.
+  supervisor: deepseek/deepseek-v4-pro

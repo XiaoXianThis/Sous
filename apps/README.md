@@ -13,7 +13,7 @@ Each subdirectory is an independent app that follows its own language's conventi
 
 | app | purpose | stack | depends on |
 |---|---|---|---|
-| core | 服务端 Hub + 客户端 daemon / CLI | Go, SQLite | none |
+| core | 服务端 Hub + 客户端 daemon / CLI | Go, SQLite | web（运行时托管 build/web） |
 | web | PWA：聊天、任务、审批、设置 | Svelte | core（契约 core-hub-http） |
 | desktop | 托盘 + 窗口，内嵌 web | Go, Wails v3 | web（build/web）；core（契约 core-daemon-ipc、core-hub-http） |
 

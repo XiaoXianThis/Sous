@@ -18,10 +18,12 @@
 | POST | `/auth/passkey/register/begin` `/finish` | 注册 Passkey（首次使用一次性链接；之后要求已登录） |
 | POST | `/auth/passkey/login/begin` `/finish` | 登录 |
 | POST | `/auth/logout` | 退出 |
+| POST | `/auth/dev-login` | 仅当 `dev: true` 且请求直接来自本机回环地址时可用，否则 404 |
+| GET | `/me` | `{logged_in, has_passkey, dev_login}`，不需要登录 |
 | GET/POST | `/threads` | 列出、创建线程 |
 | GET/PATCH | `/threads/{id}` | 读取、改名或归档 |
-| GET | `/threads/{id}/messages?before=` | 分页读取历史消息 |
-| POST | `/threads/{id}/messages` | 发送消息 `{"content": "..."}`；回复通过 `/ws` 推送 |
+| GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
+| POST | `/threads/{id}/messages` | 发送消息 `{"content": "..."}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送 |
 | GET/POST | `/tasks` | 列出（可按状态、项目过滤）、创建任务 |
 | GET/PATCH | `/tasks/{id}` | 读取、修改（标题、优先级、权限模式、指定机器或 agent） |
 | POST | `/tasks/{id}/dispatch` | 派发 `{"node_id"?, "agent"?}` |
@@ -39,15 +41,20 @@
 | PATCH/DELETE | `/projects/{id}` | 修改项目；`nodes: [{node_id, path, priority}]` |
 | GET/PUT/DELETE | `/memories` `/memories/{id}` | 记忆管理 |
 | GET/POST/DELETE | `/schedules` `/schedules/{id}` | 定时任务 |
-| GET | `/usage?from=&to=&group=` | token 用量统计 |
+| GET | `/usage?days=` | 最近 N 天（默认 30）的 token 用量，按 provider、model、role 汇总 |
 | GET/PATCH | `/settings` | 权限模式默认值、角色与模型的对应、通知开关、免打扰时段（不返回任何密钥） |
 | POST/DELETE | `/push/subscriptions` | Web Push 订阅 |
 | GET | `/push/vapid-public-key` | |
 | GET | `/updates` | 各平台最新版本信息（来自 GitHub Releases 缓存） |
 
+另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。
+
+**消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。
+
 ## WebSocket `/ws`
 
 - 连接地址：`/ws?since=<seq>`。服务端先补发 `seq > since` 的事件，然后实时推送新事件。
 - 服务端发给客户端的帧：`{"seq": 123, "id": "...", "ts": 0, "type": "task.status", "thread_id"?, "task_id"?, "run_id"?, "payload": {...}}`。事件类型见 `work/specs/sous-mvp/design.md` 第 4 节。
-- 客户端发给服务端的帧：`{"op": "ping"}`。写操作一律走 REST。
-- 服务端每 30 秒发一次 `{"op":"ping"}`；客户端断线后重连，带上最后收到的 seq。
+- `seq` 为 0 的是临时事件（目前只有 `message.assistant.delta`，payload `{message_id, delta, thinking?}`），只实时推送，不补发。回复结束后会推送同一个 `message_id` 的 `message.assistant`。
+- 写操作一律走 REST；客户端不需要发任何帧。服务端用 WebSocket 协议层的 ping 保活（每 30 秒）。
+- 客户端跟不上推送时，服务端会以 1013（Try Again Later）关闭连接；客户端带上最后收到的 seq 重连即可补齐。

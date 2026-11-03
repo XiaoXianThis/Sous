@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    # The Hub runs on Linux; the client must also work on macOS and Windows.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/core/go.mod
+          cache-dependency-path: apps/core/go.sum
+      - name: Install wok
+        run: go install github.com/XiaoXianThis/wokspace/apps/wok@latest
+      - name: Check gofmt
+        if: runner.os != 'Windows'
+        working-directory: apps/core
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: wok run core vet
+      - run: wok test core
+      - run: wok build core
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install wok
+        run: go install github.com/XiaoXianThis/wokspace/apps/wok@latest
+      - run: wok install web
+      - run: wok run web check
+      - run: wok test web
+      - run: wok build web
+
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install wok
+        run: go install github.com/XiaoXianThis/wokspace/apps/wok@latest
+      - run: wok check
