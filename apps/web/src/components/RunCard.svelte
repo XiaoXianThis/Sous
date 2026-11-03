@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api'
   import { isActive, type RunView } from '../lib/runs'
+  import ApprovalCard from './ApprovalCard.svelte'
   import TextViewer from './TextViewer.svelte'
 
   let { view, nodeName }: { view: RunView; nodeName: (id: string) => string } = $props()
@@ -10,6 +11,7 @@
   const statusText: Record<string, string> = {
     queued: '排队中', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
   }
+  const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付' }
   const toolIcon: Record<string, string> = { completed: '✓', failed: '✕', in_progress: '…', pending: '·' }
   let busy = $state('')
   let error = $state('')
@@ -35,18 +37,20 @@
     })
   }
 
-  function optionClass(kind: string) {
-    return kind.startsWith('allow') ? 'btn small' : 'btn small ghost'
-  }
 </script>
 
 <section class="run {run.status}" data-testid="run-card">
   <header>
     <span class="badge">{statusText[run.status] ?? run.status}</span>
-    <strong>{run.agent}</strong>
+    {#if purposeText[run.purpose]}<span class="purpose">{purposeText[run.purpose]}</span>{/if}
+    <strong>{run.purpose === 'deliver' ? 'sous' : run.agent}</strong>
     <span class="where">@ {nodeName(run.node_id)}{#if run.branch} · {run.branch}{/if}</span>
   </header>
-  <p class="prompt" title={run.prompt}>{run.prompt}</p>
+  {#if run.purpose === 'deliver'}
+    <p class="prompt">push 分支并创建 PR{run.title ? `：${run.title}` : ''}</p>
+  {:else}
+    <p class="prompt" title={run.prompt}>{run.prompt}</p>
+  {/if}
   {#if run.repo_path}<p class="meta">仓库：{run.repo_path}</p>{/if}
 
   {#if view.plan.length}
@@ -68,15 +72,7 @@
   {#if view.statusLine && isActive(run)}<p class="status-line">{view.statusLine}</p>{/if}
 
   {#each pending as a (a.id)}
-    <div class="approval" role="group" aria-label="审批">
-      <p class="ask">需要你批准：<strong>{a.title}</strong></p>
-      {#if a.detail}<pre class="detail">{a.detail}</pre>{/if}
-      <div class="options">
-        {#each a.options as o}
-          <button class={optionClass(o.kind)} disabled={!!busy} onclick={() => act(a.id, () => api.decide(a.id, o.option_id))}>{o.name}</button>
-        {/each}
-      </div>
-    </div>
+    <ApprovalCard approval={a} />
   {/each}
 
   {#if view.output && isActive(run)}
@@ -88,13 +84,14 @@
     {#if run.summary}<p class="summary">{run.summary}</p>{/if}
     {#if run.error}<p class="err">{run.error}</p>{/if}
     {#if run.diffstat}<p class="meta">{run.diffstat}</p>{/if}
+    {#if run.pr_url}<p class="meta"><a href={run.pr_url} target="_blank" rel="noreferrer">{run.pr_url}</a>{run.conflict ? '（有冲突）' : ''}</p>{/if}
   {/if}
 
   <footer>
     {#if isActive(run)}
       <button class="link" disabled={!!busy} onclick={() => act('cancel', () => api.cancelRun(run.id))}>取消</button>
     {/if}
-    {#if run.diffstat}<button class="link" disabled={!!busy} onclick={() => open('diff')}>查看改动</button>{/if}
+    {#if run.diffstat && run.purpose !== 'deliver'}<button class="link" disabled={!!busy} onclick={() => open('diff')}>查看改动</button>{/if}
     {#if run.status !== 'queued'}<button class="link" disabled={!!busy} onclick={() => open('log')}>日志</button>{/if}
   </footer>
   {#if error}<p class="err" role="alert">{error}</p>{/if}
@@ -127,17 +124,12 @@
   .ico { display: inline-block; width: 1.2em; }
   .more { font-style: italic; }
   .status-line { margin: 0; font-size: 13px; color: var(--muted); }
-  .approval {
-    border: 1px solid var(--warm); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px;
-    background: color-mix(in srgb, var(--warm) 8%, var(--panel));
-  }
-  .ask { margin: 0; }
-  .detail, .output {
+  .purpose { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+  .meta a { color: var(--accent); }
+  .output {
     margin: 0; max-height: 200px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
     background: var(--bg); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  .options { display: flex; gap: 8px; flex-wrap: wrap; }
-  .btn.small { padding: 6px 14px; font-size: 14px; }
   .summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .err { margin: 0; color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
   footer { display: flex; gap: 14px; }

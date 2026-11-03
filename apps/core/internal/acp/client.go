@@ -63,6 +63,12 @@ type ToolCallInfo struct {
 	Title      string          `json:"title"`
 	Kind       string          `json:"kind"`
 	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	Locations  []Location      `json:"locations,omitempty"`
+}
+
+// Location is a file a tool call touches.
+type Location struct {
+	Path string `json:"path"`
 }
 
 // Decision answers a permission request: the chosen option, or none to cancel.

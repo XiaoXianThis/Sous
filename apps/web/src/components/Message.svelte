@@ -2,6 +2,19 @@
   import type { Message } from '../lib/types'
 
   let { message }: { message: Message } = $props()
+
+  // Turns http(s) links in plain text into parts, so PR links are clickable.
+  function linkify(text: string): { text: string; url?: string }[] {
+    const out: { text: string; url?: string }[] = []
+    let last = 0
+    for (const m of text.matchAll(/https?:\/\/[^\s<>"'（）)，。]+/g)) {
+      if (m.index! > last) out.push({ text: text.slice(last, m.index) })
+      out.push({ text: m[0], url: m[0] })
+      last = m.index! + m[0].length
+    }
+    if (last < text.length) out.push({ text: text.slice(last) })
+    return out
+  }
   let showThinking = $state(false)
   const time = $derived(
     new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
@@ -14,17 +27,18 @@
 <article
   class="msg {message.role}"
   class:error={message.error}
-  class:notice={message.kind === 'notice'}
+  class:notice={message.kind === 'notice' || message.kind === 'report'}
   data-testid="message-{message.kind ?? message.role}"
 >
   {#if message.kind === 'notice'}<span class="badge">提醒</span>{/if}
+  {#if message.kind === 'report'}<span class="badge">任务汇报</span>{/if}
   {#if message.thinking}
     <button class="thinking-toggle" onclick={() => (showThinking = !showThinking)}>
       {showThinking ? '收起思考过程' : '查看思考过程'}
     </button>
     {#if showThinking}<div class="thinking">{message.thinking}</div>{/if}
   {/if}
-  <div class="body">{message.content}{#if message.streaming}<span class="caret"></span>{/if}</div>
+  <div class="body">{#each linkify(message.content) as part}{#if part.url}<a href={part.url} target="_blank" rel="noreferrer">{part.text}</a>{:else}{part.text}{/if}{/each}{#if message.streaming}<span class="caret"></span>{/if}</div>
   {#if !message.streaming}<time>{time}</time>{/if}
 </article>
 {/if}
@@ -33,6 +47,8 @@
   .msg { display: grid; gap: 4px; max-width: 100%; }
   .msg.user { justify-items: end; }
   .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .body a { color: var(--accent); }
+  .user .body a { color: inherit; }
   .user .body {
     background: var(--user-bubble); color: var(--user-text); padding: 9px 14px;
     border-radius: 18px 18px 4px 18px; max-width: min(85%, 560px);

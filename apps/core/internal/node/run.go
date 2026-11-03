@@ -14,6 +14,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/workspace"
 )
@@ -48,6 +49,7 @@ type run struct {
 	followUps  []string
 	approvals  map[string]chan string
 	turnText   strings.Builder
+	workdir    string
 }
 
 func newRun(d *Daemon, s proto.RunStart) *run {
@@ -84,28 +86,22 @@ func (r *run) execute() {
 		r.end("cancelled", "", "", "", errors.New(r.stopReasonText()))
 		return
 	}
+	if r.spec.Purpose == proto.PurposeDeliver {
+		r.deliver()
+		return
+	}
 	spec, ok := agents.Find(r.d.specs, r.spec.Agent)
 	if !ok {
 		r.end("failed", "", "", "", fmt.Errorf("这台机器不认识 agent %q", r.spec.Agent))
 		return
 	}
 
-	var ws workspace.Prepared
-	var err error
-	if r.spec.RepoPath != "" {
-		r.status("正在创建独立的 git worktree")
-		ws, err = workspace.PrepareCode(r.ctx, r.d.root, r.spec.RepoPath, r.spec.RunID)
-	} else {
-		ws, err = workspace.PrepareGeneral(r.d.root, r.spec.RunID)
-	}
+	ws, err := r.prepare()
 	if err != nil {
 		r.end("failed", "", "", "", fmt.Errorf("准备工作目录失败：%w", err))
 		return
 	}
-	r.mu.Lock()
-	r.isStarted = true
-	r.mu.Unlock()
-	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch}))
+	r.markStarted(ws)
 
 	status, stop, err := r.drive(spec, ws)
 
@@ -117,6 +113,28 @@ func (r *run) execute() {
 		r.sendDiff(diff)
 	}
 	r.end(status, stop, r.summary(), stat, err)
+}
+
+// prepare creates or reuses the run's working directory. All runs of a
+// task share one: its worktree and branch, or its scratch directory.
+func (r *run) prepare() (workspace.Prepared, error) {
+	key := r.spec.TaskID
+	if key == "" {
+		key = r.spec.RunID
+	}
+	if r.spec.RepoPath != "" {
+		r.status("正在准备独立的 git worktree")
+		return workspace.PrepareTask(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title))
+	}
+	return workspace.PrepareGeneral(r.d.root, key)
+}
+
+func (r *run) markStarted(ws workspace.Prepared) {
+	r.mu.Lock()
+	r.isStarted = true
+	r.workdir = ws.Dir
+	r.mu.Unlock()
+	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch, BaseBranch: ws.BaseBranch}))
 }
 
 // drive starts the agent, opens a session and sends the prompt, then any
@@ -234,18 +252,76 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 	}
 }
 
-// onPermission forwards the agent's question to the Hub and waits for the
-// user's answer. In open mode it allows at once.
+// onPermission classifies what the agent asks to do and decides by the
+// run's permission mode (design §8): allow or refuse at once, or ask the
+// Hub, where the user or the approver agent answers.
 func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.Decision {
-	if r.spec.PermissionMode == proto.ModeOpen {
-		for _, kind := range []string{"allow_always", "allow_once"} {
-			for _, o := range req.Options {
-				if o.Kind == kind {
-					return acp.Decision{OptionID: o.OptionID}
-				}
+	r.mu.Lock()
+	workdir := r.workdir
+	r.mu.Unlock()
+	paths := make([]string, len(req.ToolCall.Locations))
+	for i, l := range req.ToolCall.Locations {
+		paths[i] = l.Path
+	}
+	cat, why := r.d.policy.Classify(policy.Request{
+		ToolKind: req.ToolCall.Kind, Title: req.ToolCall.Title, RawInput: req.ToolCall.RawInput, Paths: paths, Workdir: workdir,
+	})
+	title := req.ToolCall.Title
+	if title == "" {
+		title = "agent 请求执行一个操作"
+	}
+	switch policy.Decide(r.spec.PermissionMode, cat) {
+	case policy.Allow:
+		r.recordPolicy(title, cat, "allow")
+		return acp.Decision{OptionID: pickOption(req.Options, "allow_once", "allow_always")}
+	case policy.Deny:
+		r.recordPolicy(title+"（"+why+"）", cat, "deny")
+		return acp.Decision{OptionID: pickOption(req.Options, "reject_once", "reject_always")}
+	case policy.AskAI:
+		return acp.Decision{OptionID: r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, "ai", toOptions(req.Options))}
+	}
+	return acp.Decision{OptionID: r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, "user", toOptions(req.Options))}
+}
+
+func permissionDetail(why string, raw json.RawMessage) string {
+	d := prettyJSON(raw)
+	if why != "" && !strings.Contains(d, why) {
+		d = why + "\n\n" + d
+	}
+	return truncate(strings.TrimSpace(d), detailRunes)
+}
+
+func toOptions(in []acp.PermissionOption) []proto.Option {
+	out := make([]proto.Option, len(in))
+	for i, o := range in {
+		out[i] = proto.Option{OptionID: o.OptionID, Name: o.Name, Kind: o.Kind}
+	}
+	return out
+}
+
+// pickOption returns the first option of the given kinds, in order.
+func pickOption(opts []acp.PermissionOption, kinds ...string) string {
+	for _, k := range kinds {
+		for _, o := range opts {
+			if o.Kind == k {
+				return o.OptionID
 			}
 		}
 	}
+	return ""
+}
+
+// recordPolicy reports a decision the node made by itself, so every
+// approval, automatic or not, is in the event log (requirements R5.5).
+func (r *run) recordPolicy(title string, cat policy.Category, decision string) {
+	r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{
+		RunID: r.spec.RunID, Kind: proto.UpdatePermission, Title: title, Category: string(cat), Status: decision,
+	}))
+}
+
+// ask sends an approval request to the Hub and waits for the answer: the
+// chosen option id, or "" when the run stops first.
+func (r *run) ask(title, toolKind, detail string, cat policy.Category, review string, opts []proto.Option) string {
 	approvalID := ids.New()
 	ch := make(chan string, 1)
 	r.mu.Lock()
@@ -256,24 +332,15 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 		delete(r.approvals, approvalID)
 		r.mu.Unlock()
 	}()
-
-	opts := make([]proto.Option, len(req.Options))
-	for i, o := range req.Options {
-		opts[i] = proto.Option{OptionID: o.OptionID, Name: o.Name, Kind: o.Kind}
-	}
-	title := req.ToolCall.Title
-	if title == "" {
-		title = "agent 请求执行一个操作"
-	}
 	r.d.ob.reliable(proto.New(proto.TApprovalRequest, proto.ApprovalRequest{
-		ApprovalID: approvalID, RunID: r.spec.RunID, Title: title, ToolKind: req.ToolCall.Kind,
-		Detail: truncate(prettyJSON(req.ToolCall.RawInput), detailRunes), Options: opts,
+		ApprovalID: approvalID, RunID: r.spec.RunID, Title: title, ToolKind: toolKind,
+		Detail: detail, Options: opts, Category: string(cat), Review: review,
 	}))
 	select {
 	case opt := <-ch:
-		return acp.Decision{OptionID: opt}
+		return opt
 	case <-r.ctx.Done():
-		return acp.Decision{}
+		return ""
 	}
 }
 
@@ -370,8 +437,13 @@ func prettyJSON(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &v) != nil {
 		return string(raw)
 	}
-	out, _ := json.MarshalIndent(v, "", "  ")
-	return string(out)
+	// Shell commands are full of < > &: keep them readable.
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	enc.Encode(v)
+	return strings.TrimSpace(b.String())
 }
 
 func truncate(s string, n int) string {

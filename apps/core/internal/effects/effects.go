@@ -31,11 +31,13 @@ type Runner struct {
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
+	inflight map[int64]bool
+	wg       sync.WaitGroup
 }
 
 // NewRunner creates a runner. wake may be nil; interval is the polling period.
 func NewRunner(s *store.Store, wake <-chan struct{}, interval time.Duration) *Runner {
-	return &Runner{store: s, wake: wake, interval: interval, now: time.Now, handlers: map[string]Handler{}}
+	return &Runner{store: s, wake: wake, interval: interval, now: time.Now, handlers: map[string]Handler{}, inflight: map[int64]bool{}}
 }
 
 // Handle registers the handler for an effect kind.
@@ -57,14 +59,17 @@ func Backoff(attempts int) time.Duration {
 	return d
 }
 
-// Run processes due effects until ctx is done.
+// Run processes due effects until ctx is done. Effects run concurrently, so
+// a slow one (a model call) does not hold up the others; one effect never
+// runs twice at once.
 func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	for {
-		r.RunOnce(ctx)
+		r.start(ctx)
 		select {
 		case <-ctx.Done():
+			r.wg.Wait()
 			return
 		case <-t.C:
 		case <-r.wake:
@@ -72,36 +77,60 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce runs every effect that is due now.
+// RunOnce runs every effect that is due now and waits for them.
 func (r *Runner) RunOnce(ctx context.Context) {
+	r.start(ctx)
+	r.wg.Wait()
+}
+
+func (r *Runner) start(ctx context.Context) {
 	due, err := r.store.DueEffects(ctx, r.now(), 100)
 	if err != nil {
 		slog.Error("effects: list due", "err", err)
 		return
 	}
 	for _, e := range due {
-		r.mu.RLock()
-		h := r.handlers[e.Kind]
-		r.mu.RUnlock()
-		var runErr error
-		if h == nil {
-			runErr = fmt.Errorf("no handler for effect kind %q", e.Kind)
-		} else {
-			runErr = safeRun(ctx, h, e)
-		}
-		if runErr == nil {
-			if err := r.store.CompleteEffect(ctx, e.ID); err != nil {
-				slog.Error("effects: complete", "id", e.ID, "err", err)
-			}
+		r.mu.Lock()
+		if r.inflight[e.ID] {
+			r.mu.Unlock()
 			continue
 		}
-		attempts := e.Attempts + 1
-		if attempts >= FailThreshold {
-			slog.Warn("effects: failing", "kind", e.Kind, "key", e.Key, "attempts", attempts, "err", runErr)
+		r.inflight[e.ID] = true
+		h := r.handlers[e.Kind]
+		r.mu.Unlock()
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.runOne(ctx, h, e)
+			r.mu.Lock()
+			delete(r.inflight, e.ID)
+			r.mu.Unlock()
+		}()
+	}
+}
+
+func (r *Runner) runOne(ctx context.Context, h Handler, e store.Effect) {
+	var runErr error
+	if h == nil {
+		runErr = fmt.Errorf("no handler for effect kind %q", e.Kind)
+	} else {
+		runErr = safeRun(ctx, h, e)
+	}
+	if runErr == nil {
+		if err := r.store.CompleteEffect(ctx, e.ID); err != nil {
+			slog.Error("effects: complete", "id", e.ID, "err", err)
 		}
-		if err := r.store.RetryEffect(ctx, e.ID, runErr.Error(), r.now().Add(Backoff(attempts))); err != nil {
-			slog.Error("effects: retry", "id", e.ID, "err", err)
-		}
+		return
+	}
+	if ctx.Err() != nil {
+		return // shutting down; it runs again after the restart
+	}
+	attempts := e.Attempts + 1
+	if attempts >= FailThreshold {
+		slog.Warn("effects: failing", "kind", e.Kind, "key", e.Key, "attempts", attempts, "err", runErr)
+	}
+	if err := r.store.RetryEffect(ctx, e.ID, runErr.Error(), r.now().Add(Backoff(attempts))); err != nil {
+		slog.Error("effects: retry", "id", e.ID, "err", err)
 	}
 }
 

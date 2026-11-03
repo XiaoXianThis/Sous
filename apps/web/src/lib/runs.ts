@@ -34,9 +34,11 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
     if (!runs[id]) {
       runs[id] = {
         run: {
-          id, thread_id: ev.thread_id ?? '', node_id: p.node_id, agent: p.agent, kind: p.kind, repo_path: p.repo_path ?? '',
-          prompt: p.prompt, status: 'queued', workdir: '', branch: '', summary: '', diffstat: '', error: '',
-          created_at: ev.ts, started_at: 0, ended_at: 0,
+          id, thread_id: ev.thread_id ?? '', task_id: ev.task_id ?? '', node_id: p.node_id, agent: p.agent, kind: p.kind,
+          repo_path: p.repo_path ?? '', prompt: p.prompt, status: 'queued', workdir: '', branch: p.branch ?? '',
+          summary: '', diffstat: '', error: '', created_at: ev.ts, started_at: 0, ended_at: 0,
+          purpose: p.purpose || 'work', permission_mode: p.permission_mode || 'default', base_branch: p.base_branch ?? '',
+          pr_url: '', conflict: false, title: p.title ?? '',
         },
         seq: ev.seq, tools: [], plan: [], output: '', thinking: '', statusLine: '', approvals: [],
       }
@@ -60,6 +62,7 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
     case 'run.ended':
       Object.assign(v.run, {
         status: p.status, summary: p.summary ?? '', diffstat: p.diffstat ?? '', error: p.error ?? '', ended_at: ev.ts,
+        pr_url: p.pr_url ?? '', conflict: !!p.conflict,
       })
       v.statusLine = ''
       for (const a of v.approvals) if (a.status === 'pending') a.status = 'expired'
@@ -67,8 +70,9 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
     case 'approval.requested':
       if (!v.approvals.some((a) => a.id === p.approval_id)) {
         v.approvals.push({
-          id: p.approval_id, run_id: id, title: p.title, tool_kind: p.tool_kind ?? '', detail: p.detail ?? '',
-          options: p.options ?? [], status: 'pending', option_id: '', created_at: ev.ts,
+          id: p.approval_id, run_id: id, task_id: ev.task_id ?? '', title: p.title, tool_kind: p.tool_kind ?? '',
+          detail: p.detail ?? '', options: p.options ?? [], status: 'pending', option_id: '', created_at: ev.ts,
+          category: p.category ?? '', review: p.review === 'ai' ? 'ai' : 'user', escalation: '',
         })
       }
       break
@@ -77,6 +81,16 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
       if (a && a.status === 'pending') {
         a.status = 'decided'
         a.option_id = p.option_id ?? ''
+        a.decided_by = p.decided_by
+        a.note = p.note
+      }
+      break
+    }
+    case 'approval.escalated': {
+      const a = v.approvals.find((a) => a.id === p.approval_id)
+      if (a && a.status === 'pending') {
+        a.review = 'user'
+        a.escalation = p.note ?? ''
       }
       break
     }
@@ -98,6 +112,15 @@ function applyUpdate(v: RunView, p: any) {
       break
     case 'status':
       v.statusLine = p.text ?? ''
+      break
+    case 'permission':
+      // A decision the machine's policy made by itself: shown among the steps.
+      v.tools.push({
+        id: `permission-${v.tools.length}`,
+        title: `${p.decision === 'deny' ? '已拒绝' : '自动放行'}：${p.title ?? ''}`,
+        status: p.decision === 'deny' ? 'failed' : 'completed',
+        kind: 'permission',
+      })
       break
     case 'plan':
       v.plan = (p.plan ?? []).map((e: any) => ({ content: e.content, status: e.status ?? '' }))

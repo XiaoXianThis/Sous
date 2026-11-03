@@ -12,11 +12,15 @@ export interface ChatState {
   memoryRev: number
   /** Bumped whenever a machine changes, so the machine list reloads. */
   nodesRev: number
+  /** Bumped whenever a task or project changes, so task views reload. */
+  tasksRev: number
+  /** Bumped whenever something that belongs in the inbox may have changed. */
+  inboxRev: number
   runs: Record<string, RunView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, runs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, runs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -70,8 +74,17 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
   const p = ev.payload ?? {}
   if (ev.type.startsWith('node.')) {
     state.nodesRev++
+    state.tasksRev++ // queued tasks may start
     return true
   }
+  if (ev.type.startsWith('task.') || ev.type.startsWith('project.')) {
+    state.tasksRev++
+    if (ev.type === 'task.status' || ev.type === 'task.updated') state.inboxRev++
+    return true
+  }
+  // A run that ends expires its pending approvals without an approval event.
+  if (ev.type.startsWith('approval.') || ev.type === 'run.ended') state.inboxRev++
+  if (ev.type === 'run.ended' || ev.type === 'run.queued') state.tasksRev++
   if (applyRunEvent(state.runs, ev)) return true
   switch (ev.type) {
     case 'thread.created': {

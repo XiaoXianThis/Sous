@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
@@ -17,9 +18,11 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/httpapi"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/notify"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/supervisor"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 )
 
@@ -31,6 +34,8 @@ type Hub struct {
 	Supervisor *supervisor.Supervisor
 	Effects    *effects.Runner
 	Nodes      *nodehub.Hub
+	Tasks      *task.Engine
+	Notifier   *notify.Notifier
 	HTTP       *httpapi.Server
 }
 
@@ -65,22 +70,53 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		st.Close()
 		return nil, err
 	}
-	provName, model := cfg.Model(config.RoleSupervisor)
+	role := func(r string) task.Model {
+		p, m := cfg.Model(r)
+		return task.Model{Provider: providers[p], Name: m}
+	}
+	h.Tasks = task.New(h.Log, h.Nodes)
+	h.Tasks.Reviewer, h.Tasks.Approver = role(config.RoleReviewer), role(config.RoleApprover)
+
+	sup := role(config.RoleSupervisor)
+	tools := tool.NewRegistry(
+		tool.CurrentTime{},
+		tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
+		tool.Notify{Log: h.Log},
+	)
+	for _, t := range h.Tasks.Tools() {
+		tools.Register(t)
+	}
 	h.Supervisor = supervisor.New(supervisor.Options{
 		Log:      h.Log,
-		Provider: providers[provName],
-		Model:    model,
-		Tools: tool.NewRegistry(
-			tool.CurrentTime{},
-			tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
-			tool.Notify{Log: h.Log},
-			nodehub.RunAgentTool{Hub: h.Nodes},
-		),
-		Environment: h.Nodes.Environment,
+		Provider: sup.Provider,
+		Model:    sup.Name,
+		Tools:    tools,
+		Environment: func(ctx context.Context, threadID string) []string {
+			return append(h.Nodes.Environment(ctx), h.Tasks.Environment(ctx, threadID)...)
+		},
 	})
+
+	vapid, err := notify.LoadVAPID(cfg.DataDir)
+	if err != nil {
+		st.Close()
+		return nil, fmt.Errorf("web push keys: %w", err)
+	}
+	h.Notifier = &notify.Notifier{Log: h.Log, Sender: &notify.Sender{VAPID: vapid, Subject: pushSubject(cfg)}}
+
 	h.Effects = effects.NewRunner(st, h.Log.EffectsEnqueued(), 2*time.Second)
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes)
+	h.Effects.Handle(store.EffectTaskAdvance, h.Tasks.Advance)
+	h.Effects.Handle(store.EffectApprove, h.Tasks.Approve)
+	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(cfg.Roles))
 	return h, nil
+}
+
+// pushSubject is the contact push services see in the VAPID token.
+func pushSubject(cfg *config.Hub) string {
+	if strings.HasPrefix(cfg.PublicURL, "https://") {
+		return cfg.PublicURL
+	}
+	return "mailto:sous@localhost"
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
@@ -95,6 +131,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	h.Supervisor.Start(runCtx)
+	h.Tasks.Start(runCtx)
 	go h.Effects.Run(runCtx)
 
 	srv := &http.Server{Addr: h.Cfg.Listen, Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second}

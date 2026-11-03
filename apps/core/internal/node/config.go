@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
 )
 
 // Config is ~/.sous/node.json. It holds the device token, so it is written
@@ -25,6 +27,8 @@ type Config struct {
 	// Agents overrides how an agent's ACP server starts, by agent name:
 	// {"claude": ["/path/to/claude-agent-acp"]}.
 	Agents map[string][]string `json:"agents,omitempty"`
+	// Policy holds the floor rules (design §8); they apply in every mode.
+	Policy policy.Config `json:"policy,omitempty"`
 }
 
 // Root is ~/.sous, where the config, worktrees and scratch directories live.

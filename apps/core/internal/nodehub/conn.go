@@ -36,7 +36,16 @@ type nodeConn struct {
 
 	mu         sync.Mutex
 	dispatched map[string]bool
-	threads    map[string]string // run id -> thread id, for relaying output
+	refs       map[string]runRef // run id -> where its events go
+}
+
+// runRef is the thread and task a run's events belong to.
+type runRef struct{ thread, task string }
+
+// stamp sets the run, thread and task of an event.
+func (r runRef) stamp(ev event.Event, runID string) event.Event {
+	ev.ThreadID, ev.TaskID, ev.RunID = r.thread, r.task, runID
+	return ev
 }
 
 // ServeNode handles GET /node: a daemon's connection, authenticated by its
@@ -59,7 +68,7 @@ func (h *Hub) ServeNode(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(maxFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &nodeConn{hub: h, nodeID: node.ID, ws: ws, out: make(chan proto.Frame, sendBuffer), ctx: ctx, cancel: cancel,
-		dispatched: map[string]bool{}, threads: map[string]string{}}
+		dispatched: map[string]bool{}, refs: map[string]runRef{}}
 	defer cancel()
 	defer ws.CloseNow()
 
@@ -178,7 +187,7 @@ func (c *nodeConn) welcome(ctx context.Context) {
 		resume = append(resume, r.ID)
 		c.mu.Lock()
 		c.dispatched[r.ID] = true
-		c.threads[r.ID] = r.ThreadID
+		c.refs[r.ID] = runRef{r.ThreadID, r.TaskID}
 		c.mu.Unlock()
 	}
 	c.send(proto.New(proto.TWelcome, proto.Welcome{NodeID: c.nodeID, ResumeRuns: resume}))
@@ -197,32 +206,34 @@ func (c *nodeConn) dispatch(r store.Run) {
 		return
 	}
 	c.dispatched[r.ID] = true
-	c.threads[r.ID] = r.ThreadID
+	c.refs[r.ID] = runRef{r.ThreadID, r.TaskID}
 	c.mu.Unlock()
 	c.send(proto.New(proto.TRunStart, proto.RunStart{
-		RunID: r.ID, Agent: r.Agent, Kind: r.Kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: proto.ModeDefault,
+		RunID: r.ID, Agent: r.Agent, Kind: r.Kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.Mode,
+		TaskID: r.TaskID, Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
 	}))
 }
 
-// threadOf returns the thread a run belongs to.
-func (c *nodeConn) threadOf(ctx context.Context, runID string) (string, error) {
+// refOf returns the thread and task a run belongs to.
+func (c *nodeConn) refOf(ctx context.Context, runID string) (runRef, error) {
 	c.mu.Lock()
-	t, ok := c.threads[runID]
+	ref, ok := c.refs[runID]
 	c.mu.Unlock()
 	if ok {
-		return t, nil
+		return ref, nil
 	}
 	r, err := c.hub.log.Store.Run(ctx, runID)
 	if err != nil {
-		return "", err
+		return runRef{}, err
 	}
 	if r.NodeID != c.nodeID {
-		return "", fmt.Errorf("run %s belongs to another machine", runID)
+		return runRef{}, fmt.Errorf("run %s belongs to another machine", runID)
 	}
+	ref = runRef{r.ThreadID, r.TaskID}
 	c.mu.Lock()
-	c.threads[runID] = r.ThreadID
+	c.refs[runID] = ref
 	c.mu.Unlock()
-	return r.ThreadID, nil
+	return ref, nil
 }
 
 // store appends an event whose id is the frame id, so a resent frame is
@@ -244,53 +255,50 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 			return err
 		}
 		agents, _ := json.Marshal(inv.Agents)
-		return c.store(ctx, f, event.New(event.NodeInventory, event.ActorSystem, "", event.NodePayload{NodeID: c.nodeID, Agents: agents}))
+		return c.store(ctx, f, event.New(event.NodeInventory, event.ActorSystem, "", event.NodePayload{NodeID: c.nodeID, Agents: agents, Concurrency: inv.Concurrency}))
 
 	case proto.TRunStarted:
 		var p proto.RunStarted
 		if err := f.Decode(&p); err != nil {
 			return err
 		}
-		thread, err := c.threadOf(ctx, p.RunID)
+		ref, err := c.refOf(ctx, p.RunID)
 		if err != nil {
 			return err
 		}
-		ev := event.New(event.RunStarted, event.ActorSystem, thread, event.RunStartedPayload{Workdir: p.Workdir, Branch: p.Branch})
-		ev.RunID = p.RunID
-		return c.store(ctx, f, ev)
+		ev := event.New(event.RunStarted, event.ActorSystem, "", event.RunStartedPayload{Workdir: p.Workdir, Branch: p.Branch, BaseBranch: p.BaseBranch})
+		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 
 	case proto.TRunUpdate, proto.TRunOutput:
 		var p proto.RunUpdate
 		if err := f.Decode(&p); err != nil {
 			return err
 		}
-		thread, err := c.threadOf(ctx, p.RunID)
+		ref, err := c.refOf(ctx, p.RunID)
 		if err != nil {
 			return err
 		}
 		plan, _ := json.Marshal(p.Plan)
-		payload := event.RunUpdatePayload{Kind: p.Kind, Text: p.Text, ToolCallID: p.ToolCallID, Title: p.Title, Status: p.Status, ToolKind: p.ToolKind}
+		payload := event.RunUpdatePayload{Kind: p.Kind, Text: p.Text, ToolCallID: p.ToolCallID, Title: p.Title, Status: p.Status, ToolKind: p.ToolKind, Category: p.Category}
+		if p.Kind == proto.UpdatePermission {
+			payload.Decision = p.Status
+		}
 		if len(p.Plan) > 0 {
 			payload.Plan = plan
 		}
+		c.appendLog(p)
 		if f.T == proto.TRunOutput {
-			c.appendLog(p)
-			ev := event.New(event.RunOutput, event.ActorSystem, thread, payload)
-			ev.RunID = p.RunID
-			c.hub.log.Emit(ev)
+			c.hub.log.Emit(ref.stamp(event.New(event.RunOutput, event.ActorSystem, "", payload), p.RunID))
 			return nil
 		}
-		c.appendLog(p)
-		ev := event.New(event.RunUpdate, event.ActorSystem, thread, payload)
-		ev.RunID = p.RunID
-		return c.store(ctx, f, ev)
+		return c.store(ctx, f, ref.stamp(event.New(event.RunUpdate, event.ActorSystem, "", payload), p.RunID))
 
 	case proto.TRunDiff:
 		var p proto.RunDiff
 		if err := f.Decode(&p); err != nil {
 			return err
 		}
-		if _, err := c.threadOf(ctx, p.RunID); err != nil {
+		if _, err := c.refOf(ctx, p.RunID); err != nil {
 			return err
 		}
 		return c.writeDiff(p)
@@ -300,25 +308,25 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		if err := f.Decode(&p); err != nil {
 			return err
 		}
-		thread, err := c.threadOf(ctx, p.RunID)
+		ref, err := c.refOf(ctx, p.RunID)
 		if err != nil {
 			return err
 		}
 		if r, err := c.hub.log.Store.Run(ctx, p.RunID); err == nil && isFinal(r.Status) {
 			return nil // already ended, for example cancelled while the node was away
 		}
-		ev := event.New(event.RunEnded, event.ActorSystem, thread, event.RunEndedPayload{
+		ev := event.New(event.RunEnded, event.ActorSystem, "", event.RunEndedPayload{
 			Status: p.Status, StopReason: p.StopReason, Summary: p.Summary, DiffStat: p.DiffStat, Error: p.Error,
+			PRURL: p.PRURL, Conflict: p.Conflict,
 		})
-		ev.RunID = p.RunID
-		return c.store(ctx, f, ev)
+		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 
 	case proto.TApprovalRequest:
 		var p proto.ApprovalRequest
 		if err := f.Decode(&p); err != nil {
 			return err
 		}
-		thread, err := c.threadOf(ctx, p.RunID)
+		ref, err := c.refOf(ctx, p.RunID)
 		if err != nil {
 			return err
 		}
@@ -326,11 +334,11 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		for i, o := range p.Options {
 			opts[i] = event.ApprovalOption{OptionID: o.OptionID, Name: o.Name, Kind: o.Kind}
 		}
-		ev := event.New(event.ApprovalRequested, event.ActorSystem, thread, event.ApprovalRequestedPayload{
+		ev := event.New(event.ApprovalRequested, event.ActorSystem, "", event.ApprovalRequestedPayload{
 			ApprovalID: p.ApprovalID, Title: p.Title, ToolKind: p.ToolKind, Detail: p.Detail, Options: opts,
+			Category: p.Category, Review: p.Review,
 		})
-		ev.RunID = p.RunID
-		return c.store(ctx, f, ev)
+		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 	}
 	return nil // unknown frames from newer daemons are ignored
 }
@@ -362,6 +370,8 @@ func (c *nodeConn) appendLog(p proto.RunUpdate) {
 		line = b.String()
 	case proto.UpdateStatus:
 		line = "\n[sous] " + p.Text + "\n"
+	case proto.UpdatePermission:
+		line = fmt.Sprintf("\n[sous] 权限：%s（%s）%s\n", map[string]string{"allow": "自动放行", "deny": "拒绝"}[p.Status], p.Category, p.Title)
 	}
 	f, err := os.OpenFile(c.hub.LogPath(p.RunID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {

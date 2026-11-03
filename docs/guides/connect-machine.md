@@ -15,6 +15,8 @@
   | Kiro | 按 Kiro CLI 的说明登录（sous 对 Kiro 的支持尚未实测） |
 
 - Claude Code 和 Codex 是通过 ACP 适配器运行的，需要先装好 Node.js（包含 `npx`）。
+- 代码任务完成后，sous 会 push 分支并创建 PR，所以这台电脑上的 git 要能 push 到项目的 `origin`，并且装好、登录 GitHub CLI：`gh auth login`。sous 永远不会合并 PR。
+- 在网页的“项目”里登记项目：它在这台电脑上的路径，以及多台电脑之间的优先级。
 
 ## 2. 安装 sous 客户端
 
@@ -72,8 +74,21 @@ Register-ScheduledTask -TaskName "sous" -Action $action -Trigger $trigger -Descr
 sous 的文件都在 `~/.sous/`（Windows 上是 `%USERPROFILE%\.sous\`），可以用 `--home` 或环境变量 `SOUS_HOME` 改到别处：
 
 - `node.json`：配对信息和设备令牌（只有你能读）。
-- `worktrees/<仓库名>/<id>/`：每个代码任务的独立 git worktree，分支名为 `sous/<id>`。你的原始仓库和工作区不会被修改。
+- `worktrees/<仓库名>/<id>/`：每个代码任务的独立 git worktree，同一个任务的多次执行共用它，分支名为 `sous/<标题>-<id>`。任务完成或取消后 worktree 会被删除，分支保留。你的原始仓库和工作区不会被修改。
 - `scratch/<id>/`：不涉及仓库的一般任务的工作目录。
+
+## 底线规则
+
+不论权限模式是什么，agent 要执行的命令命中底线规则（比如删除 home 目录、格式化磁盘、`curl … | sh`）都会被直接拒绝。规则只在这台电脑上生效，可以在 `node.json` 里调整，改完重启 daemon：
+
+```json
+"policy": {
+  "extra_floor": ["\\bdrop\\s+database\\b"],
+  "floor_disabled": false
+}
+```
+
+`extra_floor` 追加规则，`floor` 整个替换默认规则，`floor_disabled: true` 关掉底线。规则按命令文本匹配，换个写法就能绕过：它是安全网，不是隔离。
 
 ## 不再使用
 

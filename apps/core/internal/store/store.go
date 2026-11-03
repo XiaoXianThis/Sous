@@ -113,7 +113,7 @@ func (w *Writer) Append(ev event.Event) (event.Event, error) {
 	if ev.Seq, err = res.LastInsertId(); err != nil {
 		return ev, err
 	}
-	if err := project(w.ctx, w.tx, ev); err != nil {
+	if err := project(w, ev); err != nil {
 		return ev, fmt.Errorf("project %s: %w", ev.Type, err)
 	}
 	w.events = append(w.events, ev)

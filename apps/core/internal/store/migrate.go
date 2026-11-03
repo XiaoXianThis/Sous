@@ -162,6 +162,84 @@ CREATE TABLE approvals (
 );
 CREATE INDEX approvals_status ON approvals(status, created_at);
 `,
+	// 4: tasks, projects and routing, task runs, approval policy, push subscriptions.
+	`
+CREATE TABLE projects (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  repo_url      TEXT NOT NULL DEFAULT '',
+  default_mode  TEXT NOT NULL DEFAULT '',
+  default_agent TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE project_nodes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  node_id    TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  priority   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (project_id, node_id)
+);
+
+CREATE TABLE tasks (
+  id               TEXT PRIMARY KEY,
+  parent_id        TEXT NOT NULL DEFAULT '',
+  origin_thread_id TEXT NOT NULL DEFAULT '',
+  kind             TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  detail           TEXT NOT NULL DEFAULT '',
+  status           TEXT NOT NULL,
+  status_reason    TEXT NOT NULL DEFAULT '',
+  priority         INTEGER NOT NULL DEFAULT 0,
+  project_id       TEXT NOT NULL DEFAULT '',
+  agent_pref       TEXT NOT NULL DEFAULT '',
+  node_pref        TEXT NOT NULL DEFAULT '',
+  permission_mode  TEXT NOT NULL DEFAULT '',
+  branch           TEXT NOT NULL DEFAULT '',
+  base_branch      TEXT NOT NULL DEFAULT '',
+  pr_url           TEXT NOT NULL DEFAULT '',
+  review_note      TEXT NOT NULL DEFAULT '',
+  next             TEXT NOT NULL DEFAULT '',
+  dismissed        INTEGER NOT NULL DEFAULT 0,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
+);
+CREATE INDEX tasks_status ON tasks(status, priority, created_at);
+CREATE INDEX tasks_parent ON tasks(parent_id);
+
+CREATE TABLE task_deps (
+  task_id    TEXT NOT NULL,
+  depends_on TEXT NOT NULL,
+  PRIMARY KEY (task_id, depends_on)
+);
+
+ALTER TABLE nodes ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 2;
+
+ALTER TABLE runs ADD COLUMN task_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN purpose TEXT NOT NULL DEFAULT 'work';
+ALTER TABLE runs ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE runs ADD COLUMN base_branch TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN conflict INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN title TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN force INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX runs_task ON runs(task_id, created_at);
+
+ALTER TABLE approvals ADD COLUMN task_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE approvals ADD COLUMN category TEXT NOT NULL DEFAULT '';
+ALTER TABLE approvals ADD COLUMN review TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE approvals ADD COLUMN escalation TEXT NOT NULL DEFAULT '';
+
+-- Push subscriptions hold the browser's keys: local state, not events.
+CREATE TABLE push_subscriptions (
+  endpoint   TEXT PRIMARY KEY,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

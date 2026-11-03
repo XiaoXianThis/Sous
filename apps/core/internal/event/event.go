@@ -39,6 +39,8 @@ const (
 
 	ApprovalRequested Type = "approval.requested"
 	ApprovalDecided   Type = "approval.decided"
+	// ApprovalEscalated: the approver agent handed the decision to the user.
+	ApprovalEscalated Type = "approval.escalated"
 )
 
 // Ephemeral reports whether events of this type are published but never stored.
@@ -51,6 +53,8 @@ const (
 	ActorUser       = "user"
 	ActorSupervisor = "supervisor"
 	ActorSystem     = "system"
+	ActorReviewer   = "reviewer"
+	ActorApprover   = "approver"
 )
 
 // Event is one immutable fact. Seq is assigned when the event is stored and is

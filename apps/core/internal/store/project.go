@@ -1,14 +1,15 @@
 package store
 
 import (
-	"context"
-	"database/sql"
-
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 )
 
 // project updates the views for one stored event, inside the write transaction.
-func project(ctx context.Context, tx *sql.Tx, ev event.Event) error {
+func project(w *Writer, ev event.Event) error {
+	ctx, tx := w.ctx, w.tx
+	if err := enqueueEffects(w, ev); err != nil {
+		return err
+	}
 	switch ev.Type {
 	case event.ThreadCreated:
 		var p event.ThreadCreatedPayload
@@ -59,8 +60,12 @@ func project(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 
 	case event.NodePaired, event.NodeUpdated, event.NodeRevoked, event.NodeOnline, event.NodeOffline, event.NodeInventory,
 		event.RunQueued, event.RunStarted, event.RunUpdate, event.RunEnded,
-		event.ApprovalRequested, event.ApprovalDecided:
-		return projectRun(ctx, tx, ev)
+		event.ApprovalRequested, event.ApprovalDecided, event.ApprovalEscalated:
+		return projectRun(w, ev)
+
+	case event.TaskCreated, event.TaskUpdated, event.TaskStatus, event.TaskReviewed,
+		event.ProjectPut, event.ProjectDeleted:
+		return projectTask(w, ev)
 
 	case event.UsageRecorded:
 		var p event.UsagePayload

@@ -1,14 +1,19 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { chat, newThread, notificationState, openThread, send, ui } from '../lib/app.svelte'
+  import { onMount, tick } from 'svelte'
+  import { chat, followHash, newThread, openThread, send, ui } from '../lib/app.svelte'
   import { isAnswering } from '../lib/reduce'
   import { api } from '../lib/api'
   import type { RunView } from '../lib/runs'
   import type { Message, Node } from '../lib/types'
+  import Inbox from './Inbox.svelte'
   import Machines from './Machines.svelte'
   import Memories from './Memories.svelte'
   import MessageView from './Message.svelte'
+  import Projects from './Projects.svelte'
   import RunCard from './RunCard.svelte'
+  import Settings from './Settings.svelte'
+  import TaskDetail from './TaskDetail.svelte'
+  import Tasks from './Tasks.svelte'
 
   let { onLogout }: { onLogout: () => void } = $props()
 
@@ -21,7 +26,25 @@
   let stick = true
   let showMemories = $state(false)
   let showMachines = $state(false)
+  let showProjects = $state(false)
+  let showSettings = $state(false)
   let nodes = $state<Node[]>([])
+
+  // Links from push notifications.
+  onMount(() => {
+    followHash(location.hash)
+    const onHash = () => followHash(location.hash)
+    addEventListener('hashchange', onHash)
+    // The service worker posts the link when a notification is clicked while the app is open.
+    const onSW = (e: MessageEvent) => {
+      if (e.data?.type === 'open' && typeof e.data.url === 'string') followHash(new URL(e.data.url, location.origin).hash)
+    }
+    navigator.serviceWorker?.addEventListener('message', onSW)
+    return () => {
+      removeEventListener('hashchange', onHash)
+      navigator.serviceWorker?.removeEventListener('message', onSW)
+    }
+  })
 
   // Machine names for run cards; reloaded when a machine changes.
   $effect(() => {
@@ -38,13 +61,21 @@
     }
     return items.sort((a, b) => a.seq - b.seq)
   })
-  const pendingApprovals = $derived(
-    Object.values(chat.runs).reduce((n, r) => n + r.approvals.filter((a) => a.status === 'pending').length, 0),
-  )
-  let notify = $state(notificationState())
+  let pendingApprovals = $state(0)
+  $effect(() => {
+    void chat.inboxRev
+    api.approvals().then((r) => (pendingApprovals = r.approvals.filter((a) => a.review === 'user').length)).catch(() => {})
+  })
 
-  async function enableNotifications() {
-    notify = await Notification.requestPermission()
+  async function showInbox() {
+    const main = chat.threads.find((t) => t.kind === 'main')
+    if (main) await select(main.id)
+    ui.focusInbox++
+  }
+
+  function showTasks() {
+    drawer = false
+    ui.view = 'tasks'
   }
 
   const thread = $derived(chat.threads.find((t) => t.id === ui.current))
@@ -120,6 +151,13 @@
 
 {#if showMemories}<Memories onClose={() => (showMemories = false)} />{/if}
 {#if showMachines}<Machines onClose={() => (showMachines = false)} />{/if}
+{#if showProjects}<Projects onClose={() => (showProjects = false)} />{/if}
+{#if showSettings}<Settings onClose={() => (showSettings = false)} />{/if}
+{#if ui.task}
+  {#key ui.task}
+    <TaskDetail id={ui.task} onClose={() => (ui.task = '')} onOpenTask={(id) => (ui.task = id)} onOpenThread={(id) => select(id)} />
+  {/key}
+{/if}
 
 <div class="layout" class:drawer>
   <aside>
@@ -133,8 +171,8 @@
       {#each chat.threads as t (t.id)}
         <button
           class="thread"
-          class:active={t.id === ui.current}
-          aria-current={t.id === ui.current ? 'page' : undefined}
+          class:active={ui.view === 'chat' && t.id === ui.current}
+          aria-current={ui.view === 'chat' && t.id === ui.current ? 'page' : undefined}
           aria-label={t.title}
           onclick={() => select(t.id)}
         >
@@ -144,20 +182,26 @@
       {/each}
     </nav>
     <div class="side-links">
-      <button class="side-link" onclick={() => { drawer = false; showMemories = true }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3zM9.5 21h5"/></svg>
-        记忆
+      <button class="side-link" class:active={ui.view === 'tasks'} onclick={showTasks}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="10" rx="1.5"/></svg>
+        任务
+      </button>
+      <button class="side-link" onclick={() => { drawer = false; showProjects = true }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        项目
       </button>
       <button class="side-link" onclick={() => { drawer = false; showMachines = true }}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
         机器
       </button>
-      {#if notify === 'default'}
-        <button class="side-link" onclick={enableNotifications}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></svg>
-          开启通知
-        </button>
-      {/if}
+      <button class="side-link" onclick={() => { drawer = false; showMemories = true }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3zM9.5 21h5"/></svg>
+        记忆
+      </button>
+      <button class="side-link" onclick={() => { drawer = false; showSettings = true }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        设置
+      </button>
     </div>
     <footer class="side-foot">
       <span class="status {ui.status}">{statusText[ui.status]}</span>
@@ -166,18 +210,24 @@
   </aside>
   <button class="scrim" aria-label="关闭列表" onclick={() => (drawer = false)}></button>
 
+  {#if ui.view === 'tasks'}
+    <Tasks onOpenTask={(id) => (ui.task = id)} onMenu={() => (drawer = true)} />
+  {:else}
   <section class="main">
     <header class="top">
       <button class="icon-btn menu" aria-label="对话列表" onclick={() => (drawer = true)}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <h2>{thread?.title ?? ''}</h2>
-      {#if pendingApprovals > 0}<span class="pending" title="等你审批的操作">待审批 {pendingApprovals}</span>{/if}
+      {#if pendingApprovals > 0}<button class="pending" title="等你审批的操作" onclick={showInbox}>待审批 {pendingApprovals}</button>{/if}
       <span class="status-dot {ui.status}" title={statusText[ui.status]}></span>
     </header>
 
     <div class="messages" bind:this={scroller} onscroll={onScroll}>
       <div class="inner">
+        {#if thread?.kind === 'main'}
+          {#key ui.focusInbox}<Inbox onOpenTask={(id) => (ui.task = id)} focus={ui.focusInbox > 0} />{/key}
+        {/if}
         {#if timeline.length === 0}
           <div class="empty">
             {#if thread?.kind === 'main'}
@@ -220,6 +270,7 @@
       </div>
     </form>
   </section>
+  {/if}
 </div>
 
 <style>
@@ -245,6 +296,7 @@
     padding: 8px 12px; border-radius: 10px; text-align: left; font-size: 14px;
   }
   .side-link:hover { background: var(--line); color: var(--text); }
+  .side-link.active { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }
   .side-foot {
     display: flex; justify-content: space-between; align-items: center;
     padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); font-size: 13px; color: var(--muted);
@@ -264,7 +316,7 @@
   .top h2 { margin: 0; font-size: 16px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .menu { display: none; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .pending { font-size: 12px; font-weight: 600; color: var(--warm); border: 1px solid var(--warm); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .pending { font-size: 12px; font-weight: 600; color: var(--warm); border: 1px solid var(--warm); background: transparent; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 
   .messages { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
   .inner { max-width: 760px; margin: 0 auto; padding: 20px 16px 8px; display: grid; gap: 14px; }

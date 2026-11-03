@@ -12,6 +12,8 @@ type NodePayload struct {
 	Hostname string          `json:"hostname,omitempty"`
 	Version  string          `json:"version,omitempty"`
 	Agents   json.RawMessage `json:"agents,omitempty"` // node.inventory: []proto.AgentInfo
+	// Concurrency is how many runs the node executes at once (node.inventory).
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // Run kinds.
@@ -37,22 +39,32 @@ type RunQueuedPayload struct {
 	RepoPath       string `json:"repo_path,omitempty"`
 	Prompt         string `json:"prompt"`
 	PermissionMode string `json:"permission_mode"`
+	// Task runs only.
+	Purpose    string `json:"purpose,omitempty"`     // work / rebase / deliver
+	Branch     string `json:"branch,omitempty"`      // the task's branch, reused by every run
+	BaseBranch string `json:"base_branch,omitempty"` // the branch a pull request targets
+	Title      string `json:"title,omitempty"`       // the task title, for commits and pull requests
+	Force      bool   `json:"force,omitempty"`       // deliver: push with --force-with-lease after a rebase
 }
 
 type RunStartedPayload struct {
-	Workdir string `json:"workdir"`
-	Branch  string `json:"branch,omitempty"`
+	Workdir    string `json:"workdir"`
+	Branch     string `json:"branch,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 // RunUpdatePayload mirrors proto.RunUpdate.
 type RunUpdatePayload struct {
-	Kind       string          `json:"kind"` // tool / plan / text / thought / status
+	Kind       string          `json:"kind"` // tool / plan / text / thought / status / permission
 	Text       string          `json:"text,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Title      string          `json:"title,omitempty"`
 	Status     string          `json:"status,omitempty"`
 	ToolKind   string          `json:"tool_kind,omitempty"`
 	Plan       json.RawMessage `json:"plan,omitempty"`
+	// permission: what the node's policy decided on its own.
+	Category string `json:"category,omitempty"`
+	Decision string `json:"decision,omitempty"` // allow / deny
 }
 
 type RunEndedPayload struct {
@@ -61,6 +73,9 @@ type RunEndedPayload struct {
 	Summary    string `json:"summary,omitempty"`
 	DiffStat   string `json:"diffstat,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Deliver runs: the pull request, and whether it conflicts with its base.
+	PRURL    string `json:"pr_url,omitempty"`
+	Conflict bool   `json:"conflict,omitempty"`
 }
 
 type ApprovalOption struct {
@@ -75,11 +90,22 @@ type ApprovalRequestedPayload struct {
 	ToolKind   string           `json:"tool_kind,omitempty"`
 	Detail     string           `json:"detail,omitempty"`
 	Options    []ApprovalOption `json:"options"`
+	// Category is the node policy's class of the action (read, exec-other,
+	// git-remote, ...). Review says who decides: "user", or "ai" for the
+	// approver agent, which hands what it is unsure of to the user.
+	Category string `json:"category,omitempty"`
+	Review   string `json:"review,omitempty"`
 }
 
 type ApprovalDecidedPayload struct {
 	ApprovalID string `json:"approval_id"`
-	OptionID   string `json:"option_id"` // empty: cancelled
-	DecidedBy  string `json:"decided_by"`
+	OptionID   string `json:"option_id"`  // empty: cancelled
+	DecidedBy  string `json:"decided_by"` // user / approver
 	Note       string `json:"note,omitempty"`
+}
+
+// ApprovalEscalatedPayload: the approver agent handed an approval to the user.
+type ApprovalEscalatedPayload struct {
+	ApprovalID string `json:"approval_id"`
+	Note       string `json:"note"`
 }

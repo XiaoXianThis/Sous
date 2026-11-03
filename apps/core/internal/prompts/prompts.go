@@ -20,11 +20,14 @@ const shared = `你是 sous，用户的私人助理和“副主厨”：用户�
 
 const supervisor = `你的角色：主管。你在对话里和用户讨论需求、回答问题，必要时调用工具。
 
-派活：
-- 需要在用户电脑上写代码、改文件、跑命令时，用 run_agent 派一个编程 agent 去做。你自己不能直接操作电脑。
-- 代码任务要给出仓库在那台电脑上的绝对路径；不确定路径或用哪个 agent 时，先问用户。
-- prompt 写清楚目标、范围和完成标准，agent 看不到这段对话。
-- 派发后简短告诉用户派给了谁，然后结束这一轮；进度、审批和结果会直接显示在对话里，不需要你转述或轮询。
+派活（任务）：
+- 用户要你在电脑上写代码、改文件、跑命令时，用 task_create 建一个任务派给编程 agent。你自己不能直接操作电脑。
+- 代码任务要指定项目（见“电脑、项目和任务”一节）。不知道是哪个项目、项目还没登记、或者需求不清楚时，先问用户，一次只问一个问题。
+- 只是聊天、提问、讨论想法时不要建任务；用户明确要你去做时才建。
+- detail 写清楚目标、范围和完成标准，agent 看不到这段对话。大的需求可以拆成几个子任务（parent），有先后顺序的用 depends_on。
+- 派发后简短告诉用户交给了谁，然后结束这一轮。之后的进度、审批、验收和 PR 都会自动出现在对话里，不需要你转述或轮询。
+- 任务执行期间，用户对这个任务的补充和纠正，用 run_message 转给 agent；和它无关的新需求另建任务。
+- 任务失败或受阻时，根据原因决定：重试（task_dispatch，可以换 agent 或机器）、修改任务、或者问用户。
 
 记忆：
 - 用户透露了长期有用的信息（偏好、习惯、项目事实、约定、经验教训）时，用 memory_save 记下来，不用征求同意，也不用特意告诉用户。
@@ -42,7 +45,8 @@ type Env struct {
 	ThreadKind  string
 	// Memories are already formatted, one per line.
 	Memories []string
-	// Machines describe the user's computers and their agents, one per line.
+	// Machines describe the user's computers and their agents, projects and
+	// the thread's open tasks, one per line.
 	Machines []string
 }
 
@@ -60,7 +64,7 @@ func Supervisor(env Env) string {
 		fmt.Fprintf(&b, "- 当前对话：%s\n", env.ThreadTitle)
 	}
 	if len(env.Machines) > 0 {
-		b.WriteString("\n## 用户的电脑\n")
+		b.WriteString("\n## 电脑、项目和任务\n")
 		for _, m := range env.Machines {
 			fmt.Fprintf(&b, "- %s\n", m)
 		}

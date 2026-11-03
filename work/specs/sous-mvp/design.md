@@ -246,8 +246,17 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 - 五个 agent 都支持 ACP，所以第一期**没有实现** jsonstream / PTY / shell 退路；`Worker` 的位置由 `internal/acp` + `internal/node/run.go` 承担。需要时再加。
 - Go 版 ACP 客户端是自己实现的（`internal/acp`，stdio 上按行分隔的 JSON-RPC 2.0），不声明 fs 和 terminal 能力，agent 用自己的工具在 worktree 里干活。
 - 测试用的假 agent 在 `internal/acp/acptest`：在测试二进制里运行，覆盖写文件、认证、未登录、慢任务、崩溃几种行为。
-- **第一期的审批是直通的**：agent 发起的每个权限请求都原样交给用户在界面上选择（M3 才加操作分类、自动审批和底线规则）。
+- **权限请求先过本地策略**（M3，`internal/policy`）：按第 8 节分类和查表，自动放行或拒绝的操作作为 `run.update`（`kind: permission`）写进事件日志；需要审批的才发 `approval.request`。各家 agent 的“每步询问”模式（`default`、`ask`、`manual`）在 `default` 和 `auto` 下启用；`open` 下切到 agent 的放行模式。
 - **设备令牌目前存在 `~/.sous/node.json`（权限 0600）**，还没有放进系统钥匙串。
+
+**任务的执行（M3 实现）**：
+- 引擎在 `internal/task`，状态变化都是 `task.status` 事件。Run 结束时，投影在同一个事务里给 effects 队列加一条 `task.advance`，由引擎决定下一步：验收（reviewer 读完整 diff，超过 6 万字截断并附文件列表）→ 不通过就带着原因再派一个 work Run（同一个 worktree 和分支；从上次手动派发算起最多 3 次，之后转为受阻）→ 通过后，代码任务排一个 deliver Run，一般任务直接完成。
+- deliver Run 报告 PR 有冲突时，引擎派 rebase Run（交给写代码的那个 agent，最多 2 次），之后再交付一次（`--force-with-lease`）。
+- 任务排队（`queued`）时，`next` 记着下一个 Run 的用途（work / rebase / deliver），`status_reason` 写着在等什么。机器上线、上报清单、有 Run 结束、依赖的任务完成时，以及每分钟一次，引擎重试所有排队的任务；第一次开始等机器时推送通知。
+- 后续的 Run 固定派到持有分支的那台机器（router 的 `Sticky`）。任务完成或取消后，向跑过它的机器发 `workspace.remove` 删除 worktree（离线就保留）。
+- 汇报：任务完成、失败、受阻时，引擎在发起它的线程里发一条 `kind: report` 的消息（主线发起的就在主线），`task.status` 事件负责推送。
+- 主管的任务工具：`task_create`、`task_update`、`task_cancel`、`task_dispatch`、`task_list`、`run_message`、`run_cancel`（M2 的 `run_agent` 已移除）。线程里有执行中的任务时，提示里会写出来，并要求用户的补充用 `run_message` 转给 agent；用 `task_update` 改执行中任务的说明时，新说明也会自动转给 agent。
+- effects 并发执行（同一条不会同时跑两次），所以验收和审批的模型调用不会堵住推送。
 
 ## 8. 权限分类
 
@@ -266,7 +275,12 @@ Node 把每个操作归为以下一类，再查表决定处理方式：
 | irreversible | force push、删除分支、发布 | 审批 | 交给用户 | 放行 |
 | floor | 底线规则命中 | 拒绝 | 拒绝 | 拒绝 |
 
-“AI 审批”由 Hub 上的审批 agent（approver 角色）完成：信心不足或者判定有风险时，再转给用户。
+“AI 审批”由 Hub 上的审批 agent（approver 角色）完成：信心不足或者判定有风险时，再转给用户（`approval.escalated`，带上理由）。审批模型连续调用失败 3 次也转给用户。
+
+实现（`internal/policy`，Node 本地执行）：
+- 按 ACP 的 tool kind 分类：read/search/think/fetch → read，edit/move → edit-worktree，delete → delete；路径落在工作目录之外的一律 outside-worktree。
+- execute 从 `rawInput` 里取命令（`command` 可以是字符串或 argv），按 `&&`、`;`、`|` 拆开，取最危险的一段。白名单按工具和子命令判断（`go test`、`npm run build`、`cargo check`……），`npm ci` 和不带包名的 `npm install` 算 exec-safe；`git push --force`、删除远端分支、`npm publish`、`sudo` 算 irreversible。
+- 底线规则是正则，默认包括删除根目录或 home、格式化或覆写磁盘、fork 炸弹、关机重启、`curl … | sh`。`node.json` 的 `policy.floor_disabled` 可以关掉，`floor` 替换、`extra_floor` 追加。
 
 **这张表是安全网，不是安全隔离**（见 docs/decisions/0010）：
 - 它只能拦住 agent 通过 ACP 请求权限的操作；所以除了完全开放模式，其他模式都要求 agent 以“每个操作都询问”的方式启动。
@@ -313,7 +327,7 @@ roles:
 
 - **用户登录**：只用 Passkey（WebAuthn）。第一次启动时，Hub 在日志里打印一个一次性注册链接；注册完第一个 Passkey 之后就关闭注册入口。之后在已登录的设备上可以添加更多 Passkey。
 - **找回**：在服务器上执行 `sous-hub admin passkey-reset`，打印一个新的一次性注册链接（能登录服务器本身就证明是用户本人）。可以加 `--revoke-all` 同时吊销所有旧的 Passkey。
-- **Web Push**：VAPID 密钥对在 Hub 首次启动时自动生成，保存在数据目录里，不写进配置文件。
+- **Web Push**：VAPID 密钥对在 Hub 首次启动时自动生成，保存在数据目录的 `vapid.json`（0600），不写进配置文件。消息按 RFC 8291（aes128gcm）加密，自己实现，没有第三方依赖（`internal/notify`）。推送是 effects 队列里的 `push` 副作用：按类型开关和免打扰过滤（免打扰期间只推审批），推送服务返回 404/410 时删除订阅，每次发送记一条 `notify.sent`。
 - **备份**：`work/infra/` 里提供备份脚本，用 `VACUUM INTO` 生成一致的快照，并同时打包 `runs/` 目录。
 - **会话**：HttpOnly Cookie 加 CSRF 防护；WebSocket 连接在握手时校验会话。
 - **Node 配对**：在界面上生成一个 6 位配对码，10 分钟内有效；`sous pair <code>` 换取设备令牌，令牌保存在系统的密钥存储里（macOS 钥匙串、Windows 凭据管理器、Linux Secret Service；没有的话就存成权限为 0600 的文件）。设备可以在界面上吊销。

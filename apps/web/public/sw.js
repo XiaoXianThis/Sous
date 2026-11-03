@@ -1,6 +1,6 @@
-// sous service worker: keeps the app shell available offline.
-// The API and the event stream are never cached.
-const CACHE = 'sous-shell-v1'
+// sous service worker: keeps the app shell available offline and shows
+// Web Push notifications. The API and the event stream are never cached.
+const CACHE = 'sous-shell-v2'
 const SHELL = ['/', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (e) => {
@@ -46,5 +46,43 @@ self.addEventListener('fetch', (e) => {
           return res
         }),
     ),
+  )
+})
+
+// A push from the Hub: {title, body, url, tag, kind}.
+self.addEventListener('push', (e) => {
+  let m = { title: 'sous', body: '' }
+  try {
+    m = e.data ? e.data.json() : m
+  } catch {
+    m.body = e.data ? e.data.text() : ''
+  }
+  e.waitUntil(
+    self.registration.showNotification(m.title || 'sous', {
+      body: m.body || '',
+      tag: m.tag || undefined,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      data: { url: m.url || '/' },
+      requireInteraction: m.kind === 'approval',
+    }),
+  )
+})
+
+// Clicking a notification opens the page it points at: an open window is
+// focused and told where to go; otherwise a new one opens there.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if (new URL(c.url).origin === self.location.origin) {
+          c.postMessage({ type: 'open', url })
+          return c.focus()
+        }
+      }
+      return self.clients.openWindow(url)
+    }),
   )
 })

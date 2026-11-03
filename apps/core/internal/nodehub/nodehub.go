@@ -139,6 +139,15 @@ type CreateRun struct {
 	Agent    string
 	RepoPath string // empty: a general run in a scratch directory
 	Prompt   string
+
+	// Task runs (the task engine fills these in).
+	TaskID         string
+	Purpose        string // work / rebase / deliver
+	PermissionMode string // empty: default
+	Branch         string
+	BaseBranch     string
+	Title          string
+	Force          bool
 }
 
 // Create queues a run and dispatches it if its machine is connected.
@@ -146,8 +155,14 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 	r.Agent = strings.TrimSpace(r.Agent)
 	r.Prompt = strings.TrimSpace(r.Prompt)
 	r.RepoPath = strings.TrimSpace(r.RepoPath)
-	if r.Agent == "" || r.Prompt == "" {
+	if r.Purpose == proto.PurposeDeliver {
+		r.Agent = "sous" // the node itself pushes and opens the pull request
+	}
+	if r.Agent == "" || (r.Prompt == "" && r.Purpose != proto.PurposeDeliver) {
 		return store.Run{}, errors.New("agent and prompt are required")
+	}
+	if r.PermissionMode == "" {
+		r.PermissionMode = proto.ModeDefault
 	}
 	if r.NodeID == "" {
 		id, err := h.pickNode(ctx, r.Agent)
@@ -163,9 +178,11 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 		kind = event.RunKindCode
 	}
 	ev := event.New(event.RunQueued, event.ActorSupervisor, r.ThreadID, event.RunQueuedPayload{
-		NodeID: r.NodeID, Agent: r.Agent, Kind: kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: proto.ModeDefault,
+		NodeID: r.NodeID, Agent: r.Agent, Kind: kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.PermissionMode,
+		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
 	})
 	ev.RunID = ids.New()
+	ev.TaskID = r.TaskID
 	if _, err := h.log.Append(ctx, ev); err != nil {
 		return store.Run{}, err
 	}
@@ -218,7 +235,7 @@ func (h *Hub) Cancel(ctx context.Context, runID, reason string) error {
 	switch r.Status {
 	case event.RunStatusQueued:
 		ev := event.New(event.RunEnded, event.ActorUser, r.ThreadID, event.RunEndedPayload{Status: event.RunStatusCancelled, Summary: "派发前已取消"})
-		ev.RunID = runID
+		ev.RunID, ev.TaskID = runID, r.TaskID
 		_, err := h.log.Append(ctx, ev)
 		return err
 	case event.RunStatusRunning:
@@ -226,7 +243,7 @@ func (h *Hub) Cancel(ctx context.Context, runID, reason string) error {
 		if c == nil {
 			// The node ends it when it reconnects: it is no longer in resume_runs.
 			ev := event.New(event.RunEnded, event.ActorUser, r.ThreadID, event.RunEndedPayload{Status: event.RunStatusCancelled, Summary: "机器离线时已取消"})
-			ev.RunID = runID
+			ev.RunID, ev.TaskID = runID, r.TaskID
 			_, err := h.log.Append(ctx, ev)
 			return err
 		}
@@ -253,8 +270,13 @@ func (h *Hub) Message(ctx context.Context, runID, text string) error {
 	return nil
 }
 
-// Decide answers an approval and forwards the answer to its machine.
+// Decide answers an approval for the user and forwards the answer to its machine.
 func (h *Hub) Decide(ctx context.Context, approvalID, optionID, note string) error {
+	return h.DecideAs(ctx, approvalID, optionID, note, event.ActorUser)
+}
+
+// DecideAs answers an approval on behalf of by: the user or the approver agent.
+func (h *Hub) DecideAs(ctx context.Context, approvalID, optionID, note, by string) error {
 	a, err := h.log.Store.Approval(ctx, approvalID)
 	if err != nil {
 		return err
@@ -271,10 +293,11 @@ func (h *Hub) Decide(ctx context.Context, approvalID, optionID, note string) err
 			return fmt.Errorf("unknown option %q", optionID)
 		}
 	}
-	ev := event.New(event.ApprovalDecided, event.ActorUser, a.ThreadID, event.ApprovalDecidedPayload{
-		ApprovalID: approvalID, OptionID: optionID, DecidedBy: event.ActorUser, Note: note,
+	ev := event.New(event.ApprovalDecided, by, a.ThreadID, event.ApprovalDecidedPayload{
+		ApprovalID: approvalID, OptionID: optionID, DecidedBy: by, Note: note,
 	})
 	ev.RunID = a.RunID
+	ev.TaskID = a.TaskID
 	if _, err := h.log.Append(ctx, ev); err != nil {
 		return err
 	}
@@ -285,6 +308,41 @@ func (h *Hub) Decide(ctx context.Context, approvalID, optionID, note string) err
 	if c := h.conn(r.NodeID); c != nil {
 		c.send(proto.New(proto.TApprovalDecide, proto.ApprovalDecide{ApprovalID: approvalID, RunID: a.RunID, OptionID: optionID, Note: note}))
 	}
+	return nil
+}
+
+// Escalate hands an approval the approver agent was unsure of to the user.
+func (h *Hub) Escalate(ctx context.Context, approvalID, note string) error {
+	a, err := h.log.Store.Approval(ctx, approvalID)
+	if err != nil {
+		return err
+	}
+	if a.Status != "pending" {
+		return nil
+	}
+	ev := event.New(event.ApprovalEscalated, event.ActorApprover, a.ThreadID, event.ApprovalEscalatedPayload{ApprovalID: approvalID, Note: note})
+	ev.RunID = a.RunID
+	ev.TaskID = a.TaskID
+	_, err = h.log.Append(ctx, ev)
+	return err
+}
+
+// Busy counts the queued and running runs of a node.
+func (h *Hub) Busy(ctx context.Context, nodeID string) int {
+	runs, err := h.log.Store.Runs(ctx, store.RunFilter{NodeID: nodeID, Statuses: []string{event.RunStatusQueued, event.RunStatusRunning}})
+	if err != nil {
+		return 0
+	}
+	return len(runs)
+}
+
+// RemoveWorkspace asks a node to delete a closed task's worktree.
+func (h *Hub) RemoveWorkspace(nodeID, taskID, repoPath string) error {
+	c := h.conn(nodeID)
+	if c == nil {
+		return errors.New("机器不在线")
+	}
+	c.send(proto.New(proto.TWorkspaceRemove, proto.WorkspaceRemove{TaskID: taskID, RepoPath: repoPath}))
 	return nil
 }
 

@@ -15,8 +15,10 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/workspace"
 )
 
 const (
@@ -29,11 +31,12 @@ const (
 var ErrRevoked = errors.New("the Hub rejected this machine's token; pair it again")
 
 type Daemon struct {
-	cfg   Config
-	root  string
-	specs []agents.Spec
-	ob    *outbox
-	sem   chan struct{}
+	cfg    Config
+	root   string
+	specs  []agents.Spec
+	policy *policy.Policy
+	ob     *outbox
+	sem    chan struct{}
 
 	mu   sync.Mutex
 	runs map[string]*run
@@ -54,7 +57,12 @@ func NewDaemon(root string, cfg Config, specs []agents.Spec) *Daemon {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 2
 	}
-	return &Daemon{cfg: cfg, root: root, specs: specs, ob: newOutbox(), sem: make(chan struct{}, cfg.Concurrency),
+	pol, err := policy.New(cfg.Policy)
+	if err != nil {
+		slog.Error("daemon: invalid floor rule in node.json; using the default rules", "err", err)
+		pol, _ = policy.New(policy.Config{})
+	}
+	return &Daemon{cfg: cfg, root: root, specs: specs, policy: pol, ob: newOutbox(), sem: make(chan struct{}, cfg.Concurrency),
 		runs: map[string]*run{}, connected: make(chan struct{}, 1)}
 }
 
@@ -217,6 +225,11 @@ func (d *Daemon) handle(ctx context.Context, f proto.Frame) {
 				r.followUp(m.Text)
 			}
 		}
+	case proto.TWorkspaceRemove:
+		var w proto.WorkspaceRemove
+		if f.Decode(&w) == nil {
+			go d.removeWorkspace(w)
+		}
 	case proto.TApprovalDecide:
 		var a proto.ApprovalDecide
 		if f.Decode(&a) == nil {
@@ -225,6 +238,27 @@ func (d *Daemon) handle(ctx context.Context, f proto.Frame) {
 			}
 		}
 	}
+}
+
+// removeWorkspace deletes a closed task's worktree, unless a run of the
+// task is still here.
+func (d *Daemon) removeWorkspace(w proto.WorkspaceRemove) {
+	d.mu.Lock()
+	for _, r := range d.runs {
+		if r.spec.TaskID == w.TaskID {
+			d.mu.Unlock()
+			return
+		}
+	}
+	d.mu.Unlock()
+	if w.RepoPath == "" {
+		return
+	}
+	if err := workspace.RemoveTask(context.Background(), d.root, w.RepoPath, w.TaskID); err != nil {
+		slog.Warn("daemon: remove worktree", "task", w.TaskID, "err", err)
+		return
+	}
+	slog.Info("daemon: removed the worktree of a closed task", "task", w.TaskID)
 }
 
 func (d *Daemon) run(id string) *run {

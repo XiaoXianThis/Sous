@@ -4,8 +4,11 @@
 //
 // Behaviors (FAKE_ACP_MODE):
 //
-//	write  (default) stream a message, ask permission to write hello.txt,
-//	       write it when allowed, end the turn
+//	write  (default) stream a message, ask permission to run a shell command
+//	       that writes hello.txt, write it when allowed, end the turn
+//	edit   like write, but ask to edit hello.txt (a worktree edit, which
+//	       the node's policy allows by itself)
+//	floor  like write, but ask to run rm -rf ~ (refused by the floor rules)
 //	auth   like write, but session/new fails until authenticate is called
 //	nologin session/new always needs a login
 //	slow   stream a message, then wait until session/cancel
@@ -112,10 +115,17 @@ func runFake(mode string) {
 			return
 		}
 		update(sid, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{{"content": "创建 hello.txt", "priority": "high", "status": "in_progress"}}})
-		update(sid, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Write hello.txt", "kind": "edit", "status": "pending"})
+		kind, input := "execute", map[string]string{"command": "sh -c 'echo hi > hello.txt'"}
+		switch mode {
+		case "edit":
+			kind, input = "edit", map[string]string{"path": "hello.txt"}
+		case "floor":
+			input = map[string]string{"command": "rm -rf ~"}
+		}
+		update(sid, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Write hello.txt", "kind": kind, "status": "pending"})
 		resp := request("session/request_permission", map[string]any{
 			"sessionId": sid,
-			"toolCall":  map[string]any{"toolCallId": "t1", "title": "Write hello.txt", "kind": "edit", "rawInput": map[string]string{"path": "hello.txt"}},
+			"toolCall":  map[string]any{"toolCallId": "t1", "title": "Write hello.txt", "kind": kind, "rawInput": input},
 			"options": []map[string]string{
 				{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
 				{"optionId": "reject", "name": "Reject", "kind": "reject_once"},

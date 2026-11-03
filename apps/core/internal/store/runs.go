@@ -9,9 +9,9 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 )
 
-func projectRun(ctx context.Context, tx *sql.Tx, ev event.Event) error {
+func projectRun(w *Writer, ev event.Event) error {
 	exec := func(q string, args ...any) error {
-		_, err := tx.ExecContext(ctx, q, args...)
+		_, err := w.tx.ExecContext(w.ctx, q, args...)
 		return err
 	}
 	switch ev.Type {
@@ -55,22 +55,41 @@ func projectRun(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		return exec(`UPDATE nodes SET agents = ?, last_seen = ? WHERE id = ?`, string(p.Agents), ev.TS, p.NodeID)
+		conc := p.Concurrency
+		if conc <= 0 {
+			conc = 2
+		}
+		return exec(`UPDATE nodes SET agents = ?, concurrency = ?, last_seen = ? WHERE id = ?`, string(p.Agents), conc, ev.TS, p.NodeID)
 
 	case event.RunQueued:
 		var p event.RunQueuedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		return exec(`INSERT INTO runs(id, thread_id, node_id, agent, kind, repo_path, prompt, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			ev.RunID, ev.ThreadID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, ev.TS)
+		purpose := p.Purpose
+		if purpose == "" {
+			purpose = event.PurposeWork
+		}
+		mode := p.PermissionMode
+		if mode == "" {
+			mode = "default"
+		}
+		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, created_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, ev.TS)
 	case event.RunStarted:
 		var p event.RunStartedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		return exec(`UPDATE runs SET status = ?, workdir = ?, branch = ?, started_at = ? WHERE id = ?`,
-			event.RunStatusRunning, p.Workdir, p.Branch, ev.TS, ev.RunID)
+		if err := exec(`UPDATE runs SET status = ?, workdir = ?, branch = ?, base_branch = CASE WHEN ? = '' THEN base_branch ELSE ? END, started_at = ? WHERE id = ?`,
+			event.RunStatusRunning, p.Workdir, p.Branch, p.BaseBranch, p.BaseBranch, ev.TS, ev.RunID); err != nil {
+			return err
+		}
+		// The first run of a code task names the task's branch.
+		return exec(`UPDATE tasks SET branch = CASE WHEN branch = '' THEN ? ELSE branch END,
+			base_branch = CASE WHEN base_branch = '' THEN ? ELSE base_branch END
+			WHERE id = (SELECT task_id FROM runs WHERE id = ?) AND ? != ''`, p.Branch, p.BaseBranch, ev.RunID, p.Branch)
 	case event.RunUpdate:
 		return nil // the event log is the record; the run row keeps only its state
 	case event.RunEnded:
@@ -78,8 +97,8 @@ func projectRun(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, ended_at = ? WHERE id = ?`,
-			p.Status, p.Summary, p.DiffStat, p.Error, ev.TS, ev.RunID); err != nil {
+		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ? WHERE id = ?`,
+			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, ev.RunID); err != nil {
 			return err
 		}
 		// Questions the run left open can no longer be answered.
@@ -91,8 +110,19 @@ func projectRun(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 			return err
 		}
 		opts, _ := json.Marshal(p.Options)
-		return exec(`INSERT INTO approvals(id, run_id, thread_id, title, tool_kind, detail, options, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			p.ApprovalID, ev.RunID, ev.ThreadID, p.Title, p.ToolKind, p.Detail, string(opts), "pending", ev.TS)
+		review := p.Review
+		if review == "" {
+			review = "user"
+		}
+		return exec(`INSERT INTO approvals(id, run_id, thread_id, task_id, title, tool_kind, detail, options, category, review, status, created_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p.ApprovalID, ev.RunID, ev.ThreadID, ev.TaskID, p.Title, p.ToolKind, p.Detail, string(opts), p.Category, review, "pending", ev.TS)
+	case event.ApprovalEscalated:
+		var p event.ApprovalEscalatedPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`UPDATE approvals SET review = 'user', escalation = ? WHERE id = ? AND status = 'pending'`, p.Note, p.ApprovalID)
 	case event.ApprovalDecided:
 		var p event.ApprovalDecidedPayload
 		if err := ev.Decode(&p); err != nil {
@@ -105,20 +135,21 @@ func projectRun(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 }
 
 type Node struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	OS        string          `json:"os"`
-	Arch      string          `json:"arch"`
-	Hostname  string          `json:"hostname"`
-	Version   string          `json:"version"`
-	Agents    json.RawMessage `json:"agents"`
-	Online    bool            `json:"online"`
-	LastSeen  int64           `json:"last_seen"`
-	CreatedAt int64           `json:"created_at"`
-	Revoked   bool            `json:"revoked"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	OS          string          `json:"os"`
+	Arch        string          `json:"arch"`
+	Hostname    string          `json:"hostname"`
+	Version     string          `json:"version"`
+	Agents      json.RawMessage `json:"agents"`
+	Online      bool            `json:"online"`
+	Concurrency int             `json:"concurrency"`
+	LastSeen    int64           `json:"last_seen"`
+	CreatedAt   int64           `json:"created_at"`
+	Revoked     bool            `json:"revoked"`
 }
 
-const nodeCols = `id, name, os, arch, hostname, version, agents, online, last_seen, created_at, revoked`
+const nodeCols = `id, name, os, arch, hostname, version, agents, online, concurrency, last_seen, created_at, revoked`
 
 func scanNodes(rows *sql.Rows) ([]Node, error) {
 	defer rows.Close()
@@ -126,7 +157,7 @@ func scanNodes(rows *sql.Rows) ([]Node, error) {
 	for rows.Next() {
 		var n Node
 		var agents string
-		if err := rows.Scan(&n.ID, &n.Name, &n.OS, &n.Arch, &n.Hostname, &n.Version, &agents, &n.Online, &n.LastSeen, &n.CreatedAt, &n.Revoked); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.OS, &n.Arch, &n.Hostname, &n.Version, &agents, &n.Online, &n.Concurrency, &n.LastSeen, &n.CreatedAt, &n.Revoked); err != nil {
 			return nil, err
 		}
 		n.Agents = json.RawMessage(agents)
@@ -184,32 +215,40 @@ func (s *Store) NodeByToken(ctx context.Context, tokenHash string) (Node, error)
 }
 
 type Run struct {
-	ID        string `json:"id"`
-	ThreadID  string `json:"thread_id"`
-	NodeID    string `json:"node_id"`
-	Agent     string `json:"agent"`
-	Kind      string `json:"kind"`
-	RepoPath  string `json:"repo_path"`
-	Prompt    string `json:"prompt"`
-	Status    string `json:"status"`
-	Workdir   string `json:"workdir"`
-	Branch    string `json:"branch"`
-	Summary   string `json:"summary"`
-	DiffStat  string `json:"diffstat"`
-	Error     string `json:"error"`
-	CreatedAt int64  `json:"created_at"`
-	StartedAt int64  `json:"started_at"`
-	EndedAt   int64  `json:"ended_at"`
+	ID         string `json:"id"`
+	ThreadID   string `json:"thread_id"`
+	TaskID     string `json:"task_id"`
+	Purpose    string `json:"purpose"`
+	Mode       string `json:"permission_mode"`
+	BaseBranch string `json:"base_branch"`
+	PRURL      string `json:"pr_url"`
+	Conflict   bool   `json:"conflict"`
+	Title      string `json:"title"`
+	Force      bool   `json:"force"`
+	NodeID     string `json:"node_id"`
+	Agent      string `json:"agent"`
+	Kind       string `json:"kind"`
+	RepoPath   string `json:"repo_path"`
+	Prompt     string `json:"prompt"`
+	Status     string `json:"status"`
+	Workdir    string `json:"workdir"`
+	Branch     string `json:"branch"`
+	Summary    string `json:"summary"`
+	DiffStat   string `json:"diffstat"`
+	Error      string `json:"error"`
+	CreatedAt  int64  `json:"created_at"`
+	StartedAt  int64  `json:"started_at"`
+	EndedAt    int64  `json:"ended_at"`
 }
 
-const runCols = `id, thread_id, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at`
+const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at`
 
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	defer rows.Close()
 	out := []Run{}
 	for rows.Next() {
 		var r Run
-		if err := rows.Scan(&r.ID, &r.ThreadID, &r.NodeID, &r.Agent, &r.Kind, &r.RepoPath, &r.Prompt, &r.Status,
+		if err := rows.Scan(&r.ID, &r.ThreadID, &r.TaskID, &r.Purpose, &r.Mode, &r.BaseBranch, &r.PRURL, &r.Conflict, &r.Title, &r.Force, &r.NodeID, &r.Agent, &r.Kind, &r.RepoPath, &r.Prompt, &r.Status,
 			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt); err != nil {
 			return nil, err
 		}
@@ -236,6 +275,7 @@ func (s *Store) Run(ctx context.Context, id string) (Run, error) {
 // RunFilter selects runs; empty fields match everything.
 type RunFilter struct {
 	ThreadID string
+	TaskID   string
 	NodeID   string
 	Statuses []string
 	Limit    int
@@ -248,6 +288,10 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, error) {
 	if f.ThreadID != "" {
 		q += ` AND thread_id = ?`
 		args = append(args, f.ThreadID)
+	}
+	if f.TaskID != "" {
+		q += ` AND task_id = ?`
+		args = append(args, f.TaskID)
 	}
 	if f.NodeID != "" {
 		q += ` AND node_id = ?`
@@ -303,21 +347,26 @@ func (s *Store) RunEvents(ctx context.Context, runID string) ([]event.Event, err
 }
 
 type Approval struct {
-	ID        string                 `json:"id"`
-	RunID     string                 `json:"run_id"`
-	ThreadID  string                 `json:"thread_id"`
-	Title     string                 `json:"title"`
-	ToolKind  string                 `json:"tool_kind"`
-	Detail    string                 `json:"detail"`
-	Options   []event.ApprovalOption `json:"options"`
-	Status    string                 `json:"status"` // pending / decided / expired
-	OptionID  string                 `json:"option_id"`
-	DecidedBy string                 `json:"decided_by"`
-	CreatedAt int64                  `json:"created_at"`
-	DecidedAt int64                  `json:"decided_at"`
+	ID         string                 `json:"id"`
+	RunID      string                 `json:"run_id"`
+	TaskID     string                 `json:"task_id"`
+	Category   string                 `json:"category"`
+	Review     string                 `json:"review"` // user / ai
+	Escalation string                 `json:"escalation"`
+	Note       string                 `json:"note"`
+	ThreadID   string                 `json:"thread_id"`
+	Title      string                 `json:"title"`
+	ToolKind   string                 `json:"tool_kind"`
+	Detail     string                 `json:"detail"`
+	Options    []event.ApprovalOption `json:"options"`
+	Status     string                 `json:"status"` // pending / decided / expired
+	OptionID   string                 `json:"option_id"`
+	DecidedBy  string                 `json:"decided_by"`
+	CreatedAt  int64                  `json:"created_at"`
+	DecidedAt  int64                  `json:"decided_at"`
 }
 
-const approvalCols = `id, run_id, thread_id, title, tool_kind, detail, options, status, option_id, decided_by, created_at, decided_at`
+const approvalCols = `id, run_id, task_id, category, review, escalation, note, thread_id, title, tool_kind, detail, options, status, option_id, decided_by, created_at, decided_at`
 
 func scanApprovals(rows *sql.Rows) ([]Approval, error) {
 	defer rows.Close()
@@ -325,7 +374,7 @@ func scanApprovals(rows *sql.Rows) ([]Approval, error) {
 	for rows.Next() {
 		var a Approval
 		var opts string
-		if err := rows.Scan(&a.ID, &a.RunID, &a.ThreadID, &a.Title, &a.ToolKind, &a.Detail, &opts, &a.Status,
+		if err := rows.Scan(&a.ID, &a.RunID, &a.TaskID, &a.Category, &a.Review, &a.Escalation, &a.Note, &a.ThreadID, &a.Title, &a.ToolKind, &a.Detail, &opts, &a.Status,
 			&a.OptionID, &a.DecidedBy, &a.CreatedAt, &a.DecidedAt); err != nil {
 			return nil, err
 		}

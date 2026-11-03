@@ -1,5 +1,7 @@
 // REST client for docs/api/core-hub-http.md.
-import type { Approval, HubEvent, Me, Memory, MemoryKind, Message, Node, Run, Thread } from './types'
+import type {
+  Approval, HubEvent, Inbox, Me, Memory, MemoryKind, Message, Node, Project, Run, Settings, Task, Thread,
+} from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -62,7 +64,28 @@ export const api = {
   },
   cancelRun: (id: string) => request<{ ok: boolean }>('POST', `/api/v1/runs/${id}/cancel`),
   messageRun: (id: string, text: string) => request<{ ok: boolean }>('POST', `/api/v1/runs/${id}/message`, { text }),
-  decide: (id: string, optionId: string) => request<{ ok: boolean }>('POST', `/api/v1/approvals/${id}/decide`, { option_id: optionId }),
+  decide: (id: string, optionId: string, note = '') =>
+    request<{ ok: boolean }>('POST', `/api/v1/approvals/${id}/decide`, { option_id: optionId, note }),
+  approvals: (status = 'pending') => request<{ approvals: Approval[] }>('GET', `/api/v1/approvals?status=${status}`),
+  inbox: () => request<Inbox>('GET', '/api/v1/inbox'),
+  tasks: (status = '') => request<{ tasks: Task[] }>('GET', `/api/v1/tasks${status ? `?status=${status}` : ''}`),
+  task: (id: string) => request<{ task: Task; runs: Run[]; subtasks: Task[] }>('GET', `/api/v1/tasks/${id}`),
+  createTask: (t: Partial<Task> & { dispatch?: boolean; thread_id?: string }) => request<Task>('POST', '/api/v1/tasks', t),
+  patchTask: (id: string, t: Partial<Task> & { status?: string; reason?: string }) =>
+    request<Task>('PATCH', `/api/v1/tasks/${id}`, t),
+  dispatchTask: (id: string, nodeId = '', agent = '') =>
+    request<Task>('POST', `/api/v1/tasks/${id}/dispatch`, { node_id: nodeId, agent }),
+  cancelTask: (id: string) => request<Task>('POST', `/api/v1/tasks/${id}/cancel`, {}),
+  projects: () => request<{ projects: Project[] }>('GET', '/api/v1/projects'),
+  createProject: (p: Partial<Project>) => request<Project>('POST', '/api/v1/projects', p),
+  updateProject: (id: string, p: Partial<Project>) => request<Project>('PATCH', `/api/v1/projects/${id}`, p),
+  deleteProject: (id: string) => request<{ ok: boolean }>('DELETE', `/api/v1/projects/${id}`),
+  settings: () => request<Settings>('GET', '/api/v1/settings'),
+  patchSettings: (s: Partial<Settings>) => request<Settings>('PATCH', '/api/v1/settings', s),
+  vapidKey: () => request<{ key: string }>('GET', '/api/v1/push/vapid-public-key'),
+  subscribePush: (sub: PushSubscriptionJSON) => request<{ ok: boolean }>('POST', '/api/v1/push/subscriptions', sub),
+  unsubscribePush: (endpoint: string) => request<{ ok: boolean }>('DELETE', '/api/v1/push/subscriptions', { endpoint }),
+  testPush: () => request<{ devices: number; sent: number; errors: string[] }>('POST', '/api/v1/push/test'),
   send: (threadId: string, content: string) =>
     request<{ message_id: string; seq: number }>('POST', `/api/v1/threads/${threadId}/messages`, { content }),
 }

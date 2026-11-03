@@ -2,6 +2,7 @@
 import { api } from './api'
 import { applyEvent, emptyState, mergeHistory, sortThreads } from './reduce'
 import { runFromHistory } from './runs'
+import { parseHash } from './tasks'
 import { EventStream, type StreamStatus } from './stream'
 import type { HubEvent } from './types'
 
@@ -10,6 +11,12 @@ export const chat = $state(emptyState())
 export const ui = $state({
   status: 'connecting' as StreamStatus,
   current: '' as string,
+  /** The main pane: a conversation or the task board. */
+  view: 'chat' as 'chat' | 'tasks',
+  /** The task open in the detail sheet: an id, 'new', or ''. */
+  task: '' as string,
+  /** Scroll the inbox into view (after opening an approval link). */
+  focusInbox: 0,
   loaded: {} as Record<string, boolean>,
   error: '' as string,
 })
@@ -45,6 +52,7 @@ export function stopSession() {
 
 export async function openThread(id: string) {
   ui.current = id
+  ui.view = 'chat'
   if (ui.loaded[id]) return
   const [page, { runs }] = await Promise.all([api.messages(id), api.runs(id)])
   mergeHistory(chat, id, page.messages)
@@ -74,7 +82,7 @@ export async function send(content: string) {
 function maybeNotify(ev: HubEvent) {
   let body = ''
   if (ev.type === 'message.assistant' && ev.payload?.kind === 'notice') body = ev.payload.content
-  else if (ev.type === 'approval.requested') body = `需要你审批：${ev.payload.title}`
+  else if (ev.type === 'approval.requested' && ev.payload.review !== 'ai') body = `需要你审批：${ev.payload.title}`
   if (!body) return
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
   if (document.visibilityState === 'visible') return
@@ -85,6 +93,15 @@ function maybeNotify(ev: HubEvent) {
   }
 }
 
-export function notificationState(): NotificationPermission | 'unsupported' {
-  return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+/** Follows a link from a push notification: #approvals, #task=<id>, #thread=<id>. */
+export async function followHash(hash: string) {
+  const r = parseHash(hash)
+  if (r.thread && chat.threads.some((t) => t.id === r.thread)) await openThread(r.thread)
+  if (r.task) ui.task = r.task
+  if (r.approvals) {
+    const main = chat.threads.find((t) => t.kind === 'main')
+    if (main) await openThread(main.id)
+    ui.focusInbox++
+  }
+  if (r.thread || r.task || r.approvals) history.replaceState(null, '', location.pathname)
 }

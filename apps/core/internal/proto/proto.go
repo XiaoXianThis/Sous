@@ -28,6 +28,8 @@ const (
 
 	TApprovalRequest = "approval.request"
 	TApprovalDecide  = "approval.decide"
+
+	TWorkspaceRemove = "workspace.remove"
 )
 
 // Frame is one message. Frames from the node that must not be lost carry a
@@ -92,7 +94,7 @@ type Ack struct {
 // Permission modes (docs/decisions/0005).
 const (
 	ModeDefault = "default" // ask before changes
-	ModeAuto    = "auto"    // an AI approver decides (M3)
+	ModeAuto    = "auto"    // an AI approver decides, and hands what it is unsure of to the user
 	ModeOpen    = "open"    // allow everything
 )
 
@@ -104,7 +106,23 @@ type RunStart struct {
 	Prompt         string `json:"prompt"`
 	PermissionMode string `json:"permission_mode"`
 	RecoveryNote   string `json:"recovery_note,omitempty"`
+	// Task runs: every run of a task shares one worktree and branch.
+	TaskID string `json:"task_id,omitempty"`
+	// Purpose is work (default), rebase, or deliver: push the branch and
+	// open a pull request, with no agent.
+	Purpose    string `json:"purpose,omitempty"`
+	Branch     string `json:"branch,omitempty"` // empty on a task's first run: the node names it
+	BaseBranch string `json:"base_branch,omitempty"`
+	Title      string `json:"title,omitempty"` // the task title: branch name, commit and PR title
+	Force      bool   `json:"force,omitempty"` // deliver after a rebase: push --force-with-lease
 }
+
+// Run purposes.
+const (
+	PurposeWork    = "work"
+	PurposeRebase  = "rebase"
+	PurposeDeliver = "deliver"
+)
 
 type RunMessage struct {
 	RunID string `json:"run_id"`
@@ -117,9 +135,10 @@ type RunCancel struct {
 }
 
 type RunStarted struct {
-	RunID   string `json:"run_id"`
-	Workdir string `json:"workdir"`
-	Branch  string `json:"branch,omitempty"`
+	RunID      string `json:"run_id"`
+	Workdir    string `json:"workdir"`
+	Branch     string `json:"branch,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 // RunUpdate kinds.
@@ -129,6 +148,9 @@ const (
 	UpdateStatus  = "status"  // a short status line from sous itself
 	UpdateText    = "text"    // agent message text (run.output)
 	UpdateThought = "thought" // agent reasoning text (run.output)
+	// UpdatePermission records what the node's policy decided on its own:
+	// Title is the action, Category its class, Status allow or deny.
+	UpdatePermission = "permission"
 )
 
 type PlanEntry struct {
@@ -146,6 +168,7 @@ type RunUpdate struct {
 	Status     string      `json:"status,omitempty"`
 	ToolKind   string      `json:"tool_kind,omitempty"`
 	Plan       []PlanEntry `json:"plan,omitempty"`
+	Category   string      `json:"category,omitempty"`
 }
 
 // RunDiff carries the run's diff in chunks; Final marks the last one.
@@ -166,6 +189,8 @@ type RunEnded struct {
 	Summary    string `json:"summary,omitempty"`
 	DiffStat   string `json:"diffstat,omitempty"`
 	Error      string `json:"error,omitempty"`
+	PRURL      string `json:"pr_url,omitempty"`   // deliver
+	Conflict   bool   `json:"conflict,omitempty"` // deliver: the PR conflicts with its base
 }
 
 type Option struct {
@@ -181,6 +206,10 @@ type ApprovalRequest struct {
 	ToolKind   string   `json:"tool_kind,omitempty"`
 	Detail     string   `json:"detail,omitempty"`
 	Options    []Option `json:"options"`
+	// Category is the node policy's class of the action; Review is "user",
+	// or "ai" when the Hub's approver agent may decide (auto mode).
+	Category string `json:"category,omitempty"`
+	Review   string `json:"review,omitempty"`
 }
 
 type ApprovalDecide struct {
@@ -188,6 +217,13 @@ type ApprovalDecide struct {
 	RunID      string `json:"run_id"`
 	OptionID   string `json:"option_id"` // empty: cancel the request
 	Note       string `json:"note,omitempty"`
+}
+
+// WorkspaceRemove asks a node to delete a closed task's worktree. The
+// branch stays.
+type WorkspaceRemove struct {
+	TaskID   string `json:"task_id"`
+	RepoPath string `json:"repo_path"`
 }
 
 // PairRequest is the body of POST /api/v1/node/pair.

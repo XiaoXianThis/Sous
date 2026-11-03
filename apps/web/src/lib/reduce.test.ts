@@ -127,3 +127,31 @@ describe('run status line', () => {
     expect(s.runs.r1.statusLine).toBe('')
   })
 })
+
+describe('task and approval events', () => {
+  it('bumps task and inbox revisions', () => {
+    const s = emptyState()
+    applyEvent(s, { ...ev(1, 'task.created', { title: 'x' }), task_id: 'k1' })
+    applyEvent(s, { ...ev(2, 'task.status', { from: 'planned', to: 'queued' }), task_id: 'k1' })
+    expect(s.tasksRev).toBe(2)
+    expect(s.inboxRev).toBe(1)
+  })
+
+  it('tracks task runs, policy decisions and escalations', () => {
+    const s = emptyState()
+    applyEvent(s, { ...ev(1, 'run.queued', { node_id: 'n', agent: 'sous', kind: 'code', purpose: 'deliver', title: 'Add x', permission_mode: 'auto' }), run_id: 'r1', task_id: 'k1' })
+    const v = s.runs.r1
+    expect(v.run).toMatchObject({ purpose: 'deliver', task_id: 'k1', title: 'Add x', permission_mode: 'auto' })
+    applyEvent(s, { ...ev(2, 'run.update', { kind: 'permission', title: 'rm -rf ~', category: 'floor', decision: 'deny' }), run_id: 'r1' })
+    expect(v.tools[0]).toMatchObject({ status: 'failed', title: '已拒绝：rm -rf ~' })
+    applyEvent(s, { ...ev(3, 'approval.requested', { approval_id: 'a1', title: 'push', category: 'git-remote', review: 'ai', options: [] }), run_id: 'r1', task_id: 'k1' })
+    expect(v.approvals[0]).toMatchObject({ review: 'ai', category: 'git-remote' })
+    expect(s.inboxRev).toBe(1)
+    applyEvent(s, { ...ev(4, 'approval.escalated', { approval_id: 'a1', note: '拿不准' }), run_id: 'r1' })
+    expect(v.approvals[0]).toMatchObject({ review: 'user', escalation: '拿不准' })
+    applyEvent(s, { ...ev(5, 'run.ended', { status: 'succeeded', pr_url: 'https://x/pull/1' }), run_id: 'r1' })
+    expect(v.run.pr_url).toBe('https://x/pull/1')
+    expect(v.approvals[0].status).toBe('expired')
+    expect(s.inboxRev).toBe(3) // the badge reloads when a run's approvals expire
+  })
+})
