@@ -384,7 +384,8 @@ func TestHTTPEndpoints(t *testing.T) {
 		return resp.StatusCode
 	}
 	var run store.Run
-	if code := do("POST", "/api/v1/runs", `{"agent":"fake","prompt":"x","repo_path":"`+gitRepo(t)+`"}`, &run); code != 201 {
+	body, _ := json.Marshal(map[string]string{"agent": "fake", "prompt": "x", "repo_path": gitRepo(t)})
+	if code := do("POST", "/api/v1/runs", string(body), &run); code != 201 {
 		t.Fatalf("create run: %d", code)
 	}
 	if code := do("POST", "/api/v1/runs", `{"agent":"missing","prompt":"x"}`, nil); code != 409 {

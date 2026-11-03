@@ -37,6 +37,7 @@ type Daemon struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+	wg   sync.WaitGroup // running runs
 
 	// connected is signalled when a session is established (tests use it).
 	connected chan struct{}
@@ -267,8 +268,10 @@ func (d *Daemon) start(s proto.RunStart) {
 	}
 	r := newRun(d, s)
 	d.runs[s.RunID] = r
+	d.wg.Add(1)
 	d.mu.Unlock()
 	go func() {
+		defer d.wg.Done()
 		r.execute()
 		d.mu.Lock()
 		delete(d.runs, s.RunID)
@@ -276,6 +279,11 @@ func (d *Daemon) start(s proto.RunStart) {
 	}()
 }
 
+// stopAllWait bounds how long shutdown waits for agents to exit.
+const stopAllWait = 15 * time.Second
+
+// stopAll ends every run at once, killing its agent, and waits until the
+// agents have exited, so no agent process outlives the daemon.
 func (d *Daemon) stopAll() {
 	d.mu.Lock()
 	runs := make([]*run, 0, len(d.runs))
@@ -284,6 +292,13 @@ func (d *Daemon) stopAll() {
 	}
 	d.mu.Unlock()
 	for _, r := range runs {
-		r.stop("sous daemon 已停止")
+		r.kill("sous daemon 已停止")
+	}
+	done := make(chan struct{})
+	go func() { d.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(stopAllWait):
+		slog.Warn("daemon: agents did not exit in time")
 	}
 }

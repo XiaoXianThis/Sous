@@ -319,6 +319,16 @@ func (r *run) stop(reason string) {
 	r.cancel()
 }
 
+// kill stops the run without waiting for the agent to wind down.
+func (r *run) kill(reason string) {
+	r.mu.Lock()
+	if r.stopReason == "" {
+		r.stopReason = reason
+	}
+	r.mu.Unlock()
+	r.cancel()
+}
+
 func (r *run) stopReasonText() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
