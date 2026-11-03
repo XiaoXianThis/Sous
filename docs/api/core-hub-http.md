@@ -39,7 +39,9 @@
 | PATCH/DELETE | `/nodes/{id}` | 改名、调整并发上限、吊销 |
 | GET/POST | `/projects` | 列出、创建项目 |
 | PATCH/DELETE | `/projects/{id}` | 修改项目；`nodes: [{node_id, path, priority}]` |
-| GET/PUT/DELETE | `/memories` `/memories/{id}` | 记忆管理 |
+| GET | `/memories?q=&kind=&limit=` | 有 `q` 时按相关度搜索，否则按更新时间列出（可按 `kind` 过滤）；返回 `{memories, kinds}` |
+| POST | `/memories` | 新建 `{kind, content}`，返回 201 和记忆 |
+| PUT/DELETE | `/memories/{id}` | 修改 `{kind, content}` / 删除 |
 | GET/POST/DELETE | `/schedules` `/schedules/{id}` | 定时任务 |
 | GET | `/usage?days=` | 最近 N 天（默认 30）的 token 用量，按 provider、model、role 汇总 |
 | GET/PATCH | `/settings` | 权限模式默认值、角色与模型的对应、通知开关、免打扰时段（不返回任何密钥） |
@@ -49,7 +51,9 @@
 
 另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。
 
-**消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。
+**消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, kind?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。`kind` 为空表示普通消息，`notice` 表示主管主动发出的提醒（总在主线），`silent` 表示主管判断这条消息不需要回复（`content` 是原因）。
+
+**记忆**：`{id, kind: "profile"|"project"|"lesson"|"note", content, created_at, updated_at}`。记忆变化时，`/ws` 推送 `memory.put` / `memory.deleted` 事件。
 
 ## WebSocket `/ws`
 

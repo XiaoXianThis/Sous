@@ -32,6 +32,7 @@ wok check              check the layout
 - [决策记录](decisions/README.md)
 - [接口契约](api/README.md)
 - [架构](architecture/README.md)
+- [部署 Hub](guides/deploy-hub.md)
 
 当前进行中的设计见 `work/specs/sous-mvp/`。
 

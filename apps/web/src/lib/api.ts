@@ -1,5 +1,5 @@
 // REST client for docs/api/core-hub-http.md.
-import type { Me, Message, Thread } from './types'
+import type { Me, Memory, MemoryKind, Message, Thread } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -40,6 +40,15 @@ export const api = {
       'GET',
       `/api/v1/threads/${threadId}/messages?limit=50${before ? `&before=${before}` : ''}`,
     ),
+  memories: (q = '', kind = '') =>
+    request<{ memories: Memory[]; kinds: MemoryKind[] }>(
+      'GET',
+      `/api/v1/memories?${new URLSearchParams({ ...(q && { q }), ...(kind && { kind }) })}`,
+    ),
+  createMemory: (kind: MemoryKind, content: string) => request<Memory>('POST', '/api/v1/memories', { kind, content }),
+  updateMemory: (id: string, kind: MemoryKind, content: string) =>
+    request<Memory>('PUT', `/api/v1/memories/${id}`, { kind, content }),
+  deleteMemory: (id: string) => request<{ ok: boolean }>('DELETE', `/api/v1/memories/${id}`),
   send: (threadId: string, content: string) =>
     request<{ message_id: string; seq: number }>('POST', `/api/v1/threads/${threadId}/messages`, { content }),
 }

@@ -5,6 +5,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -123,14 +124,19 @@ func (s *Supervisor) turn(threadID string) {
 		return // every user message already has a reply
 	}
 
+	mainID, _ := st.MainThreadID(ctx)
+	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID})
 	req := provider.Request{
-		Model:    s.opt.Model,
-		System:   prompts.Supervisor(prompts.Env{Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind}),
+		Model: s.opt.Model,
+		System: prompts.Supervisor(prompts.Env{
+			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind,
+			Memories: s.recall(ctx, history),
+		}),
 		Messages: toProvider(history),
-		Tools:    s.opt.Tools.Specs(),
+		Tools:    append(s.opt.Tools.Specs(), silentSpec),
 	}
 	messageID := ids.New()
-	reply := func(text string, err error) { s.reply(threadID, messageID, upTo, text, err) }
+	reply := func(text string, err error) { s.reply(threadID, messageID, upTo, "", text, err) }
 	var texts []string
 	emit := func(d provider.Delta) {
 		if d.Text == "" && d.Thinking == "" {
@@ -162,10 +168,19 @@ func (s *Supervisor) turn(threadID string) {
 			reply(strings.Join(texts, "\n\n"), nil)
 			return
 		}
+		if reason, ok := silentOnly(calls); ok && len(texts) == 0 {
+			s.reply(threadID, messageID, upTo, event.KindSilent, reason, nil)
+			return
+		}
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
 		for _, c := range calls {
-			r := s.opt.Tools.Call(ctx, c)
+			var r provider.ToolResult
+			if c.Name == silentSpec.Name {
+				r = provider.ToolResult{CallID: c.ID, Content: "stay_silent 只能单独调用；本轮已经发言，请直接回复。", IsError: true}
+			} else {
+				r = s.opt.Tools.Call(ctx, c)
+			}
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
 		}
 		req.Messages = append(req.Messages, results)
@@ -173,8 +188,8 @@ func (s *Supervisor) turn(threadID string) {
 	reply(strings.Join(texts, "\n\n")+"\n\n（这一轮调用工具的次数达到上限，已停止。）", nil)
 }
 
-func (s *Supervisor) reply(threadID, messageID string, replyTo int64, text string, callErr error) {
-	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo}
+func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text string, callErr error) {
+	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo, Kind: kind}
 	if callErr != nil {
 		p.Error = true
 		if p.Content != "" {
@@ -182,7 +197,7 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, text strin
 		}
 		p.Content += "（模型调用失败：" + callErr.Error() + "）"
 	}
-	if strings.TrimSpace(p.Content) == "" {
+	if strings.TrimSpace(p.Content) == "" && kind != event.KindSilent {
 		p.Content = "（模型没有返回内容）"
 	}
 	if _, err := s.opt.Log.Append(s.ctx, event.New(event.MessageAssistant, event.ActorSupervisor, threadID, p)); err != nil {
@@ -231,7 +246,7 @@ func toProvider(msgs []store.Message) []provider.Message {
 	}
 	out := make([]provider.Message, 0, len(msgs))
 	add := func(m store.Message) {
-		if m.Error {
+		if m.Error || m.Kind == event.KindSilent {
 			return
 		}
 		role := provider.RoleUser
@@ -249,6 +264,57 @@ func toProvider(msgs []store.Message) []provider.Message {
 			for _, r := range replies[m.Seq] {
 				add(r)
 			}
+		}
+	}
+	return out
+}
+
+// silentSpec lets the supervisor end a turn without speaking.
+var silentSpec = provider.ToolSpec{
+	Name: "stay_silent",
+	Description: "这条消息不需要回复时调用（比如用户只是确认、道谢，或者明确说只记录不用回答）。" +
+		"必须单独调用，并且本轮不能再输出文字。",
+	Schema: json.RawMessage(`{"type":"object","properties":{"reason":{"type":"string","description":"为什么不回复，一句话"}}}`),
+}
+
+// silentOnly reports whether calls is a lone stay_silent call, and its reason.
+func silentOnly(calls []provider.ToolCall) (string, bool) {
+	if len(calls) != 1 || calls[0].Name != silentSpec.Name {
+		return "", false
+	}
+	var a struct{ Reason string }
+	json.Unmarshal(calls[0].Args, &a)
+	return strings.TrimSpace(a.Reason), true
+}
+
+// RecallLimit is how many memories related to the conversation a turn sees,
+// besides the user's profile memories.
+const RecallLimit = 6
+
+// recall picks the memories a turn should see: the user's profile, plus the
+// ones related to the latest user messages.
+func (s *Supervisor) recall(ctx context.Context, history []store.Message) []string {
+	st := s.opt.Log.Store
+	profile, err := st.Memories(ctx, "profile", 10)
+	if err != nil {
+		slog.Warn("supervisor: load profile memories", "err", err)
+	}
+	var query []string
+	for i := len(history) - 1; i >= 0 && len(query) < 3; i-- {
+		if history[i].Role == "user" {
+			query = append(query, history[i].Content)
+		}
+	}
+	related, err := st.SearchMemories(ctx, strings.Join(query, " "), RecallLimit)
+	if err != nil {
+		slog.Warn("supervisor: search memories", "err", err)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range append(profile, related...) {
+		if !seen[m.ID] {
+			seen[m.ID] = true
+			out = append(out, tool.FormatMemory(m))
 		}
 	}
 	return out

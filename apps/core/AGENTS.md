@@ -16,6 +16,7 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 | vet | go vet ./... | |
 | fmt | gofmt -l -w . | |
 | build | go build -trimpath -o "$WOK_OUT/" ./cmd/... | |
+| build-hub-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub |
 
 ## Conventions
 

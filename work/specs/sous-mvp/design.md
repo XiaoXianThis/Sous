@@ -54,7 +54,7 @@ apps/core/
 │   ├── task/            任务状态机、依赖关系
 │   ├── router/          路由策略
 │   ├── trigger/         cron、超时、巡检 agent
-│   ├── memory/          Memory 接口 + sqlite FTS5 实现
+│   ├── memory/          记忆检索（目前在 store 里：两字片段子串匹配打分）
 │   ├── tool/            Tool 接口、注册表、内置工具、远程 MCP 客户端
 │   ├── channel/         Channel 接口；web 实现（HTTP/WebSocket）
 │   ├── notify/          Notifier 接口；webpush 实现

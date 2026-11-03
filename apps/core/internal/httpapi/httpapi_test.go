@@ -296,3 +296,40 @@ func TestStaticFallback(t *testing.T) {
 		t.Fatal("path traversal")
 	}
 }
+
+func TestMemoriesCRUD(t *testing.T) {
+	e := newEnv(t, true)
+	e.login(t)
+	var m store.Memory
+	if code := e.do(t, "POST", "/api/v1/memories", map[string]string{"kind": "profile", "content": " 喜欢用 Go 写后端 "}, &m); code != 201 || m.Content != "喜欢用 Go 写后端" {
+		t.Fatalf("create: %d %+v", code, m)
+	}
+	if code := e.do(t, "POST", "/api/v1/memories", map[string]string{"kind": "bogus", "content": "x"}, nil); code != 400 {
+		t.Fatalf("bad kind: %d", code)
+	}
+	var list struct {
+		Memories []store.Memory
+		Kinds    []string
+	}
+	e.do(t, "GET", "/api/v1/memories?q="+url.QueryEscape("后端用什么写"), nil, &list)
+	if len(list.Memories) != 1 || list.Memories[0].ID != m.ID || len(list.Kinds) != 4 {
+		t.Fatalf("search: %+v", list)
+	}
+	var upd store.Memory
+	if code := e.do(t, "PUT", "/api/v1/memories/"+m.ID, map[string]string{"kind": "profile", "content": "喜欢用 Rust 写后端"}, &upd); code != 200 || upd.Content != "喜欢用 Rust 写后端" {
+		t.Fatalf("update: %d %+v", code, upd)
+	}
+	if code := e.do(t, "PUT", "/api/v1/memories/nope", map[string]string{"kind": "note", "content": "x"}, nil); code != 404 {
+		t.Fatalf("update missing: %d", code)
+	}
+	if code := e.do(t, "DELETE", "/api/v1/memories/"+m.ID, nil, nil); code != 200 {
+		t.Fatalf("delete: %d", code)
+	}
+	e.do(t, "GET", "/api/v1/memories", nil, &list)
+	if len(list.Memories) != 0 {
+		t.Fatalf("after delete: %+v", list.Memories)
+	}
+	if code := e.do(t, "DELETE", "/api/v1/memories/"+m.ID, nil, nil); code != 404 {
+		t.Fatalf("delete twice: %d", code)
+	}
+}

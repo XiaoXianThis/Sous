@@ -88,6 +88,20 @@ CREATE TABLE settings (
   value TEXT NOT NULL
 );
 `,
+	// 2: memories, and a kind for messages (notices, silent turns).
+	`
+ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE memories (
+  id           TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  content      TEXT NOT NULL,
+  source_event INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX memories_kind ON memories(kind, updated_at);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

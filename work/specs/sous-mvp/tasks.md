@@ -22,10 +22,11 @@
 - [x] auth：Passkey 注册和登录，会话管理，`sous-hub admin passkey-reset`（完整的 Passkey 流程待在真实设备上验收）
 - [x] channel/web：REST 接口 + `/ws` 事件流（支持 since 断点续传；流式片段只推送、不入库）
 - [x] supervisor：线程串行队列和批次合并（`reply_to`）、主线、上下文组装、提示词分层、工具循环（内置 current_time）
-- [ ] supervisor：发言策略、memory 和 notify 工具
-- [ ] memory：sqlite FTS5
+- [x] supervisor：发言策略（`stay_silent`）、memory 和 notify 工具；每轮自动带上“关于你”的记忆和相关记忆
+- [x] memory：SQLite 存储，中文按两字片段、英文按整词做子串匹配并打分（个人规模足够；trigram FTS 对两字中文词召回太差，已放弃）；界面可查看、搜索、编辑、删除
 - [x] web：登录、线程列表、流式对话
-- [ ] `work/infra/`：Hub 的部署文件（docker compose 或 systemd）和备份脚本（`VACUUM INTO`），部署到 agent.wxian.cc
+- [x] `work/infra/`：Hub 的部署文件（systemd、每日备份 timer、Caddy）和部署指南 `docs/guides/deploy-hub.md`
+- [ ] 部署到 agent.wxian.cc（用户操作）
 - [ ] 验收：手机和电脑的浏览器都能登录、对话，两边的历史保持一致
 
 ## M2 能干活

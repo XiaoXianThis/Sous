@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up the sous Hub database every day
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

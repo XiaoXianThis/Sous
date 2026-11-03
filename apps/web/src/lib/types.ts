@@ -16,6 +16,8 @@ export interface Message {
   content: string
   error?: boolean
   reply_to?: number
+  /** "notice" for a proactive notification, "silent" for a turn that chose not to reply. */
+  kind?: 'notice' | 'silent'
   seq: number
   created_at: number
   /** Set while the reply is still streaming; never sent by the server. */
@@ -40,4 +42,14 @@ export interface Me {
   logged_in: boolean
   has_passkey: boolean
   dev_login: boolean
+}
+
+export type MemoryKind = 'profile' | 'project' | 'lesson' | 'note'
+
+export interface Memory {
+  id: string
+  kind: MemoryKind
+  content: string
+  created_at: number
+  updated_at: number
 }

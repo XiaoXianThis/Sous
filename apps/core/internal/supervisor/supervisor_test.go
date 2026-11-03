@@ -190,3 +190,67 @@ func TestMockProviderEndToEnd(t *testing.T) {
 		t.Fatalf("reply: %q", msgs[1].Content)
 	}
 }
+
+func TestStaySilent(t *testing.T) {
+	p := &scripted{responses: []provider.Response{
+		{Message: provider.Message{Role: provider.RoleAssistant, Parts: []provider.Part{{ToolCall: &provider.ToolCall{ID: "s", Name: "stay_silent", Args: []byte(`{"reason":"用户只是道谢"}`)}}}}},
+		{Message: provider.Text(provider.RoleAssistant, "收到")},
+	}}
+	log, main, _ := setup(t, p, nil)
+	say(t, log, main, "谢谢")
+	msgs := waitMessages(t, log, main, 2)
+	if msgs[1].Kind != event.KindSilent || msgs[1].Content != "用户只是道谢" || msgs[1].ReplyTo != msgs[0].Seq {
+		t.Fatalf("silent turn: %+v", msgs[1])
+	}
+	// The silent turn counts as handled, and is hidden from the model.
+	say(t, log, main, "下一句")
+	waitMessages(t, log, main, 4)
+	for _, m := range p.requests[1].Messages {
+		if m.PlainText() == "用户只是道谢" {
+			t.Fatal("silent reason leaked into history")
+		}
+	}
+	if len(p.requests) != 2 {
+		t.Fatalf("model calls: %d", len(p.requests))
+	}
+}
+
+func TestSilentWithTextIsRefused(t *testing.T) {
+	p := &scripted{responses: []provider.Response{
+		{Message: provider.Message{Role: provider.RoleAssistant, Parts: []provider.Part{
+			{Text: "好的"},
+			{ToolCall: &provider.ToolCall{ID: "s", Name: "stay_silent", Args: []byte(`{}`)}},
+		}}},
+		{Message: provider.Text(provider.RoleAssistant, "已记下")},
+	}}
+	log, main, _ := setup(t, p, nil)
+	say(t, log, main, "记一下")
+	msgs := waitMessages(t, log, main, 2)
+	if msgs[1].Kind != "" || !strings.Contains(msgs[1].Content, "已记下") {
+		t.Fatalf("reply: %+v", msgs[1])
+	}
+	res := p.requests[1].Messages[len(p.requests[1].Messages)-1].Parts[0].ToolResult
+	if res == nil || !res.IsError {
+		t.Fatalf("stay_silent with text should be refused: %+v", res)
+	}
+}
+
+func TestRelevantMemoriesReachThePrompt(t *testing.T) {
+	p := &scripted{responses: []provider.Response{{Message: provider.Text(provider.RoleAssistant, "好")}}}
+	log, main, _ := setup(t, p, nil)
+	ctx := context.Background()
+	log.Append(ctx,
+		event.New(event.MemoryPut, "user", "", event.MemoryPayload{MemoryID: "p1", Kind: "profile", Content: "用户叫小贤"}),
+		event.New(event.MemoryPut, "user", "", event.MemoryPayload{MemoryID: "j1", Kind: "project", Content: "sous 的 Hub 部署在 agent.wxian.cc"}),
+		event.New(event.MemoryPut, "user", "", event.MemoryPayload{MemoryID: "x1", Kind: "note", Content: "周末去爬山"}),
+	)
+	say(t, log, main, "Hub 部署在哪里？")
+	waitMessages(t, log, main, 2)
+	sys := p.requests[0].System
+	if !strings.Contains(sys, "[p1] (profile) 用户叫小贤") || !strings.Contains(sys, "[j1] (project)") {
+		t.Fatalf("missing memories:\n%s", sys)
+	}
+	if strings.Contains(sys, "爬山") {
+		t.Fatalf("unrelated memory included:\n%s", sys)
+	}
+}

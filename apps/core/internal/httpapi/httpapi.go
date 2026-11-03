@@ -47,6 +47,7 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth) *Server {
 	protect("GET /api/v1/threads/{id}/messages", s.listMessages)
 	protect("POST /api/v1/threads/{id}/messages", s.postMessage)
 	protect("GET /api/v1/usage", s.usage)
+	s.memoryRoutes(protect)
 	protect("GET /ws", s.ws)
 	s.mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")

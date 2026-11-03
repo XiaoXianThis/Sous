@@ -19,13 +19,24 @@ const shared = `你是 sous，用户的私人助理和“副主厨”：用户�
 - 用中文回复，简洁直接。`
 
 const supervisor = `你的角色：主管。你在对话里和用户讨论需求、回答问题，必要时调用工具。
-当前阶段只能聊天和使用已提供的工具；还不能派发任务给电脑上的 agent，被问到时如实说明。`
+当前阶段只能聊天和使用已提供的工具；还不能派发任务给电脑上的 agent，被问到时如实说明。
+
+记忆：
+- 用户透露了长期有用的信息（偏好、习惯、项目事实、约定、经验教训）时，用 memory_save 记下来，不用征求同意，也不用特意告诉用户。
+- 已有记忆过时或错误时，用 memory_save 传入 id 修改，或者用 memory_forget 删除。
+- 不要记临时的事、对话里马上就会用完的信息，也不要记密码、密钥等敏感信息。
+
+发言：
+- 用户的消息不需要回复时（只是确认、道谢，或者说只记录不用回答），调用 stay_silent，不要输出文字。
+- notify 只用于用户必须知道或必须行动的事。`
 
 // Env describes the situation of one turn.
 type Env struct {
 	Now         time.Time
 	ThreadTitle string
 	ThreadKind  string
+	// Memories are already formatted, one per line.
+	Memories []string
 }
 
 // Supervisor returns the supervisor's system prompt.
@@ -40,6 +51,12 @@ func Supervisor(env Env) string {
 		b.WriteString("- 当前对话：主线（系统事件和主动汇报都会出现在这里）\n")
 	} else if env.ThreadTitle != "" {
 		fmt.Fprintf(&b, "- 当前对话：%s\n", env.ThreadTitle)
+	}
+	if len(env.Memories) > 0 {
+		b.WriteString("\n## 相关记忆\n")
+		for _, m := range env.Memories {
+			fmt.Fprintf(&b, "- %s\n", m)
+		}
 	}
 	return b.String()
 }

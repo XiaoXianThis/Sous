@@ -1,7 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { chat, newThread, openThread, send, ui } from '../lib/app.svelte'
+  import { chat, newThread, notificationState, openThread, send, ui } from '../lib/app.svelte'
   import { isAnswering } from '../lib/reduce'
+  import Memories from './Memories.svelte'
   import MessageView from './Message.svelte'
 
   let { onLogout }: { onLogout: () => void } = $props()
@@ -13,6 +14,12 @@
   let scroller: HTMLElement | undefined = $state()
   let input: HTMLTextAreaElement | undefined = $state()
   let stick = true
+  let showMemories = $state(false)
+  let notify = $state(notificationState())
+
+  async function enableNotifications() {
+    notify = await Notification.requestPermission()
+  }
 
   const thread = $derived(chat.threads.find((t) => t.id === ui.current))
   const messages = $derived(chat.messages[ui.current] ?? [])
@@ -81,6 +88,8 @@
   const statusText = { connecting: '连接中', online: '在线', offline: '离线，正在重连' }
 </script>
 
+{#if showMemories}<Memories onClose={() => (showMemories = false)} />{/if}
+
 <div class="layout" class:drawer>
   <aside>
     <header class="side-head">
@@ -103,6 +112,18 @@
         </button>
       {/each}
     </nav>
+    <div class="side-links">
+      <button class="side-link" onclick={() => { drawer = false; showMemories = true }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3zM9.5 21h5"/></svg>
+        记忆
+      </button>
+      {#if notify === 'default'}
+        <button class="side-link" onclick={enableNotifications}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></svg>
+          开启通知
+        </button>
+      {/if}
+    </div>
     <footer class="side-foot">
       <span class="status {ui.status}">{statusText[ui.status]}</span>
       <button class="link" onclick={onLogout}>退出</button>
@@ -178,6 +199,12 @@
   .thread.active { background: var(--panel); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }
   .thread .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warm); flex: none; }
+  .side-links { padding: 4px 8px; display: grid; gap: 2px; border-top: 1px solid var(--line); }
+  .side-link {
+    display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted);
+    padding: 8px 12px; border-radius: 10px; text-align: left; font-size: 14px;
+  }
+  .side-link:hover { background: var(--line); color: var(--text); }
   .side-foot {
     display: flex; justify-content: space-between; align-items: center;
     padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); font-size: 13px; color: var(--muted);

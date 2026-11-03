@@ -30,11 +30,31 @@ func project(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 			role = "assistant"
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, event_seq, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, ev.Seq, ev.TS); err != nil {
+			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE id = ?`, ev.TS, ev.ThreadID)
+		return err
+
+	case event.MemoryPut:
+		var p event.MemoryPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO memories(id, kind, content, source_event, created_at, updated_at) VALUES (?,?,?,?,?,?)
+			 ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, content = excluded.content,
+			   source_event = excluded.source_event, updated_at = excluded.updated_at`,
+			p.MemoryID, p.Kind, p.Content, ev.Seq, ev.TS, ev.TS)
+		return err
+
+	case event.MemoryDeleted:
+		var p event.MemoryPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE id = ?`, p.MemoryID)
 		return err
 
 	case event.UsageRecorded:

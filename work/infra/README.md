@@ -10,3 +10,11 @@ Infrastructure across apps: local environment orchestration, deployment configs,
 - Document common commands and their working directory below.
 
 ## Commands
+
+Deploying the Hub is described in `docs/guides/deploy-hub.md`.
+
+| path | purpose |
+|---|---|
+| `deploy/hub/sous-hub.service` | systemd unit for the Hub |
+| `deploy/hub/sous-hub-backup.service`, `.timer` | daily database snapshot via `sous-hub admin backup`, keeps 14 days |
+| `deploy/hub/caddyfile` | TLS reverse proxy for agent.wxian.cc |

@@ -58,3 +58,21 @@ describe('applyEvent', () => {
     expect(s.messages.t1.map((m) => m.id)).toEqual(['u1', 'u2'])
   })
 })
+
+describe('kinds and memories', () => {
+  it('keeps the kind of notices and silent turns', () => {
+    const s = emptyState()
+    applyEvent(s, ev(1, 'message.user', { message_id: 'u1', content: '谢谢' }))
+    applyEvent(s, ev(2, 'message.assistant', { message_id: 'a1', content: '用户只是道谢', kind: 'silent', reply_to: 1 }))
+    applyEvent(s, ev(3, 'message.assistant', { message_id: 'n1', content: '构建失败', kind: 'notice' }))
+    expect(s.messages.t1.map((m) => m.kind)).toEqual([undefined, 'silent', 'notice'])
+    expect(isAnswering(s, 't1')).toBe(false)
+  })
+
+  it('bumps memoryRev on memory events', () => {
+    const s = emptyState()
+    applyEvent(s, ev(1, 'memory.put', { memory_id: 'm', kind: 'note', content: 'x' }))
+    applyEvent(s, ev(2, 'memory.deleted', { memory_id: 'm' }))
+    expect(s.memoryRev).toBe(2)
+  })
+})

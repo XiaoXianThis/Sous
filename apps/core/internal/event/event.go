@@ -21,6 +21,8 @@ const (
 	MessageAssistant      Type = "message.assistant"
 	MessageAssistantDelta Type = "message.assistant.delta"
 	UsageRecorded         Type = "usage.recorded"
+	MemoryPut             Type = "memory.put"
+	MemoryDeleted         Type = "memory.deleted"
 )
 
 // Ephemeral reports whether events of this type are published but never stored.
@@ -83,6 +85,21 @@ type MessagePayload struct {
 	Error     bool   `json:"error,omitempty"`
 	// ReplyTo is the seq of the newest user message an assistant reply answers.
 	ReplyTo int64 `json:"reply_to,omitempty"`
+	// Kind is empty for a normal message, "notice" for a proactive
+	// notification, or "silent" for a turn that chose not to speak.
+	Kind string `json:"kind,omitempty"`
+}
+
+// Message kinds.
+const (
+	KindNotice = "notice"
+	KindSilent = "silent"
+)
+
+type MemoryPayload struct {
+	MemoryID string `json:"memory_id"`
+	Kind     string `json:"kind,omitempty"` // profile / project / lesson / note
+	Content  string `json:"content,omitempty"`
 }
 
 type DeltaPayload struct {

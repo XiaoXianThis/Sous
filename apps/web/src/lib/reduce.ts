@@ -7,10 +7,12 @@ export interface ChatState {
   messages: Record<string, Message[]>
   /** Highest stored seq applied; the event stream resumes from here. */
   lastSeq: number
+  /** Bumped whenever a memory changes, so open memory views reload. */
+  memoryRev: number
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0 }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0 }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -86,12 +88,17 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         content: p.content,
         error: p.error || undefined,
         reply_to: p.reply_to || undefined,
+        kind: p.kind || undefined,
         seq: ev.seq,
         created_at: ev.ts,
       })
       touch(state, ev.thread_id!, ev.ts)
       break
     }
+    case 'memory.put':
+    case 'memory.deleted':
+      state.memoryRev++
+      break
     case 'message.assistant.delta': {
       const msgs = list(state, ev.thread_id!)
       let m = msgs.find((x) => x.id === p.message_id)

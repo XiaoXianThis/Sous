@@ -64,7 +64,11 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		Log:      h.Log,
 		Provider: providers[provName],
 		Model:    model,
-		Tools:    tool.NewRegistry(tool.CurrentTime{}),
+		Tools: tool.NewRegistry(
+			tool.CurrentTime{},
+			tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
+			tool.Notify{Log: h.Log},
+		),
 	})
 	h.Effects = effects.NewRunner(st, h.Log.EffectsEnqueued(), 2*time.Second)
 	h.HTTP = httpapi.New(cfg, h.Log, h.Auth)

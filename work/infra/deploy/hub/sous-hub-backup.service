@@ -1,0 +1,11 @@
+# Writes a consistent snapshot of the Hub database and keeps 14 days of them.
+# Install next to sous-hub-backup.timer in /etc/systemd/system/.
+[Unit]
+Description=Back up the sous Hub database
+
+[Service]
+Type=oneshot
+User=sous
+Group=sous
+ExecStart=/bin/sh -c '/opt/sous/sous-hub -config /opt/sous/hub.yaml admin backup "/var/backups/sous/hub-$(date +%%Y%%m%%d-%%H%%M%%S).db"'
+ExecStartPost=/usr/bin/find /var/backups/sous -name 'hub-*.db' -mtime +14 -delete

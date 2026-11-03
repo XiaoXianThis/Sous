@@ -96,6 +96,7 @@ type Message struct {
 	Content   string `json:"content"`
 	Error     bool   `json:"error,omitempty"`
 	ReplyTo   int64  `json:"reply_to,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 	Seq       int64  `json:"seq"`
 	CreatedAt int64  `json:"created_at"`
 }
@@ -107,7 +108,7 @@ func (s *Store) Messages(ctx context.Context, threadID string, before int64, lim
 		before = 1 << 62
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, event_seq, created_at FROM (
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at FROM (
 		   SELECT * FROM messages WHERE thread_id = ? AND event_seq < ? ORDER BY event_seq DESC LIMIT ?
 		 ) ORDER BY event_seq`, threadID, before, limit)
 	if err != nil {
@@ -117,7 +118,7 @@ func (s *Store) Messages(ctx context.Context, threadID string, before int64, lim
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Seq, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Kind, &m.Seq, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
