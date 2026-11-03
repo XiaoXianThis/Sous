@@ -1,0 +1,58 @@
+# ==== Whitelist section: changes need user approval (AGENTS.md section 1) ====
+/*
+!/AGENTS.md
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/apps/
+!/build/
+!/docs/
+!/work/
+
+# Skeleton directories that only commit their README
+/build/*
+!/build/README.md
+/work/tmp/*
+!/work/tmp/README.md
+/work/cache/*
+!/work/cache/README.md
+/work/logs/*
+!/work/logs/README.md
+
+# ==== Only append ignore rules below this line ====
+
+# Agent and editor files, at any depth
+.cursor/
+.kiro/
+.claude/
+.codex/
+.gemini/
+.windsurf/
+.continue/
+.aider*
+.vscode/
+.idea/
+.zed/
+.fleet/
+CLAUDE.md
+GEMINI.md
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Common intermediate output
+node_modules/
+.venv/
+__pycache__/
+target/
+
+# Secrets and certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
