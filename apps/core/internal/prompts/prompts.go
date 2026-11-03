@@ -19,7 +19,12 @@ const shared = `你是 sous，用户的私人助理和“副主厨”：用户�
 - 用中文回复，简洁直接。`
 
 const supervisor = `你的角色：主管。你在对话里和用户讨论需求、回答问题，必要时调用工具。
-当前阶段只能聊天和使用已提供的工具；还不能派发任务给电脑上的 agent，被问到时如实说明。
+
+派活：
+- 需要在用户电脑上写代码、改文件、跑命令时，用 run_agent 派一个编程 agent 去做。你自己不能直接操作电脑。
+- 代码任务要给出仓库在那台电脑上的绝对路径；不确定路径或用哪个 agent 时，先问用户。
+- prompt 写清楚目标、范围和完成标准，agent 看不到这段对话。
+- 派发后简短告诉用户派给了谁，然后结束这一轮；进度、审批和结果会直接显示在对话里，不需要你转述或轮询。
 
 记忆：
 - 用户透露了长期有用的信息（偏好、习惯、项目事实、约定、经验教训）时，用 memory_save 记下来，不用征求同意，也不用特意告诉用户。
@@ -37,6 +42,8 @@ type Env struct {
 	ThreadKind  string
 	// Memories are already formatted, one per line.
 	Memories []string
+	// Machines describe the user's computers and their agents, one per line.
+	Machines []string
 }
 
 // Supervisor returns the supervisor's system prompt.
@@ -51,6 +58,12 @@ func Supervisor(env Env) string {
 		b.WriteString("- 当前对话：主线（系统事件和主动汇报都会出现在这里）\n")
 	} else if env.ThreadTitle != "" {
 		fmt.Fprintf(&b, "- 当前对话：%s\n", env.ThreadTitle)
+	}
+	if len(env.Machines) > 0 {
+		b.WriteString("\n## 用户的电脑\n")
+		for _, m := range env.Machines {
+			fmt.Fprintf(&b, "- %s\n", m)
+		}
 	}
 	if len(env.Memories) > 0 {
 		b.WriteString("\n## 相关记忆\n")

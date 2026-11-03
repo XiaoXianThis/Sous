@@ -2,8 +2,13 @@
   import { tick } from 'svelte'
   import { chat, newThread, notificationState, openThread, send, ui } from '../lib/app.svelte'
   import { isAnswering } from '../lib/reduce'
+  import { api } from '../lib/api'
+  import type { RunView } from '../lib/runs'
+  import type { Message, Node } from '../lib/types'
+  import Machines from './Machines.svelte'
   import Memories from './Memories.svelte'
   import MessageView from './Message.svelte'
+  import RunCard from './RunCard.svelte'
 
   let { onLogout }: { onLogout: () => void } = $props()
 
@@ -15,6 +20,27 @@
   let input: HTMLTextAreaElement | undefined = $state()
   let stick = true
   let showMemories = $state(false)
+  let showMachines = $state(false)
+  let nodes = $state<Node[]>([])
+
+  // Machine names for run cards; reloaded when a machine changes.
+  $effect(() => {
+    void chat.nodesRev
+    api.nodes().then((r) => (nodes = r.nodes)).catch(() => {})
+  })
+  const nodeName = (id: string) => nodes.find((n) => n.id === id)?.name ?? '未知机器'
+
+  type Item = { kind: 'message'; seq: number; message: Message } | { kind: 'run'; seq: number; run: RunView }
+  const timeline = $derived.by((): Item[] => {
+    const items: Item[] = messages.map((m) => ({ kind: 'message', seq: m.seq, message: m }))
+    for (const r of Object.values(chat.runs)) {
+      if (r.run.thread_id === ui.current) items.push({ kind: 'run', seq: r.seq || r.run.created_at, run: r })
+    }
+    return items.sort((a, b) => a.seq - b.seq)
+  })
+  const pendingApprovals = $derived(
+    Object.values(chat.runs).reduce((n, r) => n + r.approvals.filter((a) => a.status === 'pending').length, 0),
+  )
   let notify = $state(notificationState())
 
   async function enableNotifications() {
@@ -24,7 +50,10 @@
   const thread = $derived(chat.threads.find((t) => t.id === ui.current))
   const messages = $derived(chat.messages[ui.current] ?? [])
   const answering = $derived(isAnswering(chat, ui.current))
-  const lastLength = $derived(messages.length ? messages[messages.length - 1].content.length : 0)
+  const lastLength = $derived(
+    (messages.length ? messages[messages.length - 1].content.length : 0) +
+      Object.values(chat.runs).reduce((n, r) => n + r.tools.length + r.approvals.length + (r.run.status.length), 0),
+  )
 
   // Follow new content while the reader is at the bottom.
   $effect(() => {
@@ -89,6 +118,7 @@
 </script>
 
 {#if showMemories}<Memories onClose={() => (showMemories = false)} />{/if}
+{#if showMachines}<Machines onClose={() => (showMachines = false)} />{/if}
 
 <div class="layout" class:drawer>
   <aside>
@@ -117,6 +147,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3zM9.5 21h5"/></svg>
         记忆
       </button>
+      <button class="side-link" onclick={() => { drawer = false; showMachines = true }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+        机器
+      </button>
       {#if notify === 'default'}
         <button class="side-link" onclick={enableNotifications}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></svg>
@@ -137,12 +171,13 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <h2>{thread?.title ?? ''}</h2>
+      {#if pendingApprovals > 0}<span class="pending" title="等你审批的操作">待审批 {pendingApprovals}</span>{/if}
       <span class="status-dot {ui.status}" title={statusText[ui.status]}></span>
     </header>
 
     <div class="messages" bind:this={scroller} onscroll={onScroll}>
       <div class="inner">
-        {#if messages.length === 0}
+        {#if timeline.length === 0}
           <div class="empty">
             {#if thread?.kind === 'main'}
               <p class="big">有什么要交给我的？</p>
@@ -152,8 +187,12 @@
             {/if}
           </div>
         {/if}
-        {#each messages as m (m.id)}
-          <MessageView message={m} />
+        {#each timeline as item (item.kind === 'message' ? item.message.id : item.run.run.id)}
+          {#if item.kind === 'message'}
+            <MessageView message={item.message} />
+          {:else}
+            <RunCard view={item.run} {nodeName} />
+          {/if}
         {/each}
         {#if answering && !messages.some((m) => m.streaming)}
           <div class="typing" aria-label="正在思考"><span></span><span></span><span></span></div>
@@ -224,6 +263,7 @@
   .top h2 { margin: 0; font-size: 16px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .menu { display: none; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pending { font-size: 12px; font-weight: 600; color: var(--warm); border: 1px solid var(--warm); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 
   .messages { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
   .inner { max-width: 760px; margin: 0 auto; padding: 20px 16px 8px; display: grid; gap: 14px; }

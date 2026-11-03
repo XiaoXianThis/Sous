@@ -23,11 +23,27 @@ const (
 	UsageRecorded         Type = "usage.recorded"
 	MemoryPut             Type = "memory.put"
 	MemoryDeleted         Type = "memory.deleted"
+
+	NodePaired    Type = "node.paired"
+	NodeUpdated   Type = "node.updated" // renamed
+	NodeRevoked   Type = "node.revoked"
+	NodeOnline    Type = "node.online"
+	NodeOffline   Type = "node.offline"
+	NodeInventory Type = "node.inventory"
+
+	RunQueued  Type = "run.queued"
+	RunStarted Type = "run.started"
+	RunUpdate  Type = "run.update" // tool calls, plans, status changes
+	RunOutput  Type = "run.output" // ephemeral text from the agent; also kept in the run log
+	RunEnded   Type = "run.ended"
+
+	ApprovalRequested Type = "approval.requested"
+	ApprovalDecided   Type = "approval.decided"
 )
 
 // Ephemeral reports whether events of this type are published but never stored.
 func (t Type) Ephemeral() bool {
-	return t == MessageAssistantDelta
+	return t == MessageAssistantDelta || t == RunOutput
 }
 
 // Actors.

@@ -16,6 +16,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/httpapi"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/supervisor"
@@ -29,6 +30,7 @@ type Hub struct {
 	Auth       *auth.Auth
 	Supervisor *supervisor.Supervisor
 	Effects    *effects.Runner
+	Nodes      *nodehub.Hub
 	HTTP       *httpapi.Server
 }
 
@@ -59,6 +61,10 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		}
 		providers[pc.Name] = provider.WithRetry(p, 3, 2*time.Second)
 	}
+	if h.Nodes, err = nodehub.New(h.Log, cfg.DataDir); err != nil {
+		st.Close()
+		return nil, err
+	}
 	provName, model := cfg.Model(config.RoleSupervisor)
 	h.Supervisor = supervisor.New(supervisor.Options{
 		Log:      h.Log,
@@ -68,10 +74,12 @@ func Open(cfg *config.Hub) (*Hub, error) {
 			tool.CurrentTime{},
 			tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
 			tool.Notify{Log: h.Log},
+			nodehub.RunAgentTool{Hub: h.Nodes},
 		),
+		Environment: h.Nodes.Environment,
 	})
 	h.Effects = effects.NewRunner(st, h.Log.EffectsEnqueued(), 2*time.Second)
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth)
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes)
 	return h, nil
 }
 

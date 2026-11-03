@@ -1,6 +1,7 @@
 // Application state, shared by the components.
 import { api } from './api'
 import { applyEvent, emptyState, mergeHistory, sortThreads } from './reduce'
+import { runFromHistory } from './runs'
 import { EventStream, type StreamStatus } from './stream'
 import type { HubEvent } from './types'
 
@@ -45,8 +46,12 @@ export function stopSession() {
 export async function openThread(id: string) {
   ui.current = id
   if (ui.loaded[id]) return
-  const page = await api.messages(id)
+  const [page, { runs }] = await Promise.all([api.messages(id), api.runs(id)])
   mergeHistory(chat, id, page.messages)
+  const details = await Promise.all(runs.filter((r) => !chat.runs[r.id]).map((r) => api.run(r.id)))
+  for (const d of details) {
+    if (!chat.runs[d.run.id]) chat.runs[d.run.id] = runFromHistory(d.run, d.events, d.approvals)
+  }
   // Start the stream after what the page already covers.
   if (chat.lastSeq === 0) chat.lastSeq = page.last_seq
   ui.loaded[id] = true
@@ -67,10 +72,13 @@ export async function send(content: string) {
 
 /** Shows a system notification for a notice while the page is in the background. */
 function maybeNotify(ev: HubEvent) {
-  if (ev.type !== 'message.assistant' || ev.payload?.kind !== 'notice') return
+  let body = ''
+  if (ev.type === 'message.assistant' && ev.payload?.kind === 'notice') body = ev.payload.content
+  else if (ev.type === 'approval.requested') body = `需要你审批：${ev.payload.title}`
+  if (!body) return
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
   if (document.visibilityState === 'visible') return
-  const n = new Notification('sous', { body: ev.payload.content, tag: ev.payload.message_id, icon: '/icon.svg' })
+  const n = new Notification('sous', { body, tag: ev.id, icon: '/icon.svg' })
   n.onclick = () => {
     window.focus()
     if (ev.thread_id) openThread(ev.thread_id)

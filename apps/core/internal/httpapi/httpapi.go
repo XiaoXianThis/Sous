@@ -34,7 +34,11 @@ type Server struct {
 	mux  *http.ServeMux
 }
 
-func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth) *Server {
+// Routes lets other packages add endpoints. protect wraps a handler so it
+// requires a logged-in user and, for writes, the CSRF token.
+type Routes func(mux *http.ServeMux, protect func(pattern string, h http.HandlerFunc))
+
+func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Server {
 	s := &Server{cfg: cfg, log: log, auth: a, mux: http.NewServeMux()}
 	a.Routes(s.mux)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +52,9 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth) *Server {
 	protect("POST /api/v1/threads/{id}/messages", s.postMessage)
 	protect("GET /api/v1/usage", s.usage)
 	s.memoryRoutes(protect)
+	for _, r := range extra {
+		r(s.mux, protect)
+	}
 	protect("GET /ws", s.ws)
 	s.mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")

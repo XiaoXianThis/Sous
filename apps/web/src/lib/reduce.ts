@@ -1,5 +1,6 @@
 // Pure state transitions for the chat, driven by Hub events. Kept free of
 // Svelte so it can be unit tested.
+import { applyRunEvent, type RunView } from './runs'
 import type { HubEvent, Message, Thread } from './types'
 
 export interface ChatState {
@@ -9,10 +10,13 @@ export interface ChatState {
   lastSeq: number
   /** Bumped whenever a memory changes, so open memory views reload. */
   memoryRev: number
+  /** Bumped whenever a machine changes, so the machine list reloads. */
+  nodesRev: number
+  runs: Record<string, RunView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0 }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, runs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -64,6 +68,11 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     state.lastSeq = ev.seq
   }
   const p = ev.payload ?? {}
+  if (ev.type.startsWith('node.')) {
+    state.nodesRev++
+    return true
+  }
+  if (applyRunEvent(state.runs, ev)) return true
   switch (ev.type) {
     case 'thread.created': {
       if (!state.threads.some((t) => t.id === ev.thread_id)) {

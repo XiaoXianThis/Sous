@@ -33,6 +33,9 @@ type Options struct {
 	Model    string
 	Tools    *tool.Registry
 	Now      func() time.Time
+	// Environment adds lines about the world, such as the user's machines,
+	// to every turn's prompt.
+	Environment func(ctx context.Context) []string
 }
 
 type Supervisor struct {
@@ -131,6 +134,7 @@ func (s *Supervisor) turn(threadID string) {
 		System: prompts.Supervisor(prompts.Env{
 			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind,
 			Memories: s.recall(ctx, history),
+			Machines: s.environment(ctx),
 		}),
 		Messages: toProvider(history),
 		Tools:    append(s.opt.Tools.Specs(), silentSpec),
@@ -318,4 +322,11 @@ func (s *Supervisor) recall(ctx context.Context, history []store.Message) []stri
 		}
 	}
 	return out
+}
+
+func (s *Supervisor) environment(ctx context.Context) []string {
+	if s.opt.Environment == nil {
+		return nil
+	}
+	return s.opt.Environment(ctx)
 }

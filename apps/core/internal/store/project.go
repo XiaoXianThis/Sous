@@ -57,6 +57,11 @@ func project(ctx context.Context, tx *sql.Tx, ev event.Event) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE id = ?`, p.MemoryID)
 		return err
 
+	case event.NodePaired, event.NodeUpdated, event.NodeRevoked, event.NodeOnline, event.NodeOffline, event.NodeInventory,
+		event.RunQueued, event.RunStarted, event.RunUpdate, event.RunEnded,
+		event.ApprovalRequested, event.ApprovalDecided:
+		return projectRun(ctx, tx, ev)
+
 	case event.UsageRecorded:
 		var p event.UsagePayload
 		if err := ev.Decode(&p); err != nil {

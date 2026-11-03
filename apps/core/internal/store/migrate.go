@@ -102,6 +102,66 @@ CREATE TABLE memories (
 );
 CREATE INDEX memories_kind ON memories(kind, updated_at);
 `,
+	// 3: machines (nodes), agent runs and the approvals they ask for.
+	`
+CREATE TABLE nodes (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  os         TEXT NOT NULL,
+  arch       TEXT NOT NULL,
+  hostname   TEXT NOT NULL DEFAULT '',
+  version    TEXT NOT NULL DEFAULT '',
+  agents     TEXT NOT NULL DEFAULT '[]',
+  online     INTEGER NOT NULL DEFAULT 0,
+  last_seen  INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  revoked    INTEGER NOT NULL DEFAULT 0
+);
+
+-- Device tokens are secrets, not facts: they never enter the event log.
+CREATE TABLE node_tokens (
+  node_id    TEXT PRIMARY KEY REFERENCES nodes(id),
+  token_hash TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE runs (
+  id         TEXT PRIMARY KEY,
+  thread_id  TEXT NOT NULL DEFAULT '',
+  node_id    TEXT NOT NULL,
+  agent      TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  repo_path  TEXT NOT NULL DEFAULT '',
+  prompt     TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  workdir    TEXT NOT NULL DEFAULT '',
+  branch     TEXT NOT NULL DEFAULT '',
+  summary    TEXT NOT NULL DEFAULT '',
+  diffstat   TEXT NOT NULL DEFAULT '',
+  error      TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL DEFAULT 0,
+  ended_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX runs_node ON runs(node_id, status);
+CREATE INDEX runs_thread ON runs(thread_id, created_at);
+
+CREATE TABLE approvals (
+  id          TEXT PRIMARY KEY,
+  run_id      TEXT NOT NULL REFERENCES runs(id),
+  thread_id   TEXT NOT NULL DEFAULT '',
+  title       TEXT NOT NULL,
+  tool_kind   TEXT NOT NULL DEFAULT '',
+  detail      TEXT NOT NULL DEFAULT '',
+  options     TEXT NOT NULL DEFAULT '[]',
+  status      TEXT NOT NULL,
+  option_id   TEXT NOT NULL DEFAULT '',
+  decided_by  TEXT NOT NULL DEFAULT '',
+  note        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  decided_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX approvals_status ON approvals(status, created_at);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
