@@ -10,3 +10,9 @@ Lessons learned by agents: pitfalls and proven approaches. Skim this before a la
 - Delete entries that are no longer true. Past 50 entries, move coherent groups into `rules/` or `skills/` (with user approval).
 
 ## Entries
+
+- 2026-11-03 Symptom: a coding agent (claude, cursor, codex) reports "not logged in" or hangs in `authenticate` when probed from an agent's shell. Cause: the agents keep their logins in the macOS keychain, which the sandboxed shell cannot read. Fix: probe real agents outside the sandbox; the real daemon runs as the user and is not affected.
+- 2026-11-03 Symptom: DeepSeek answers HTTP 503 "Service is too busy" on every call. Cause: the model name is gone (`deepseek-chat` was retired), not load. Fix: list models with `GET https://api.deepseek.com/models` and use one that exists (`deepseek-v4-pro`, `deepseek-flash`).
+- 2026-11-03 Symptom: the PWA keeps showing an old build, and `navigator.serviceWorker.register` fails, in the built-in browser pane. Cause: that embedded browser cannot fetch from a service worker. Fix: verify PWA install, offline and update behaviour on a real phone or desktop browser; in the pane, unregister the worker to see a new build.
+- 2026-11-03 Symptom: in Svelte 5, an item pushed onto a list created with `state.x[k] ??= []` never renders. Cause: assigning to a `$state` object stores a reactive proxy, but `??=` returns the raw array. Fix: assign, then read the property back (see `list()` in `apps/web/src/lib/reduce.ts`). Tests must run in a DOM environment to catch this (`environment: 'happy-dom'`); under plain Node, Svelte compiles for the server and `$state`/`$effect` are inert.
+

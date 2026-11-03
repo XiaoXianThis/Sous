@@ -14,3 +14,4 @@ How-to guides for people: setting up a development environment, using, deploying
 | guide | for |
 |---|---|
 | [deploy-hub.md](deploy-hub.md) | 把 Hub 部署到 Linux 服务器，配置 HTTPS、Passkey 和备份 |
+| [connect-machine.md](connect-machine.md) | 在电脑上安装 sous 客户端、配对、注册成系统服务 |

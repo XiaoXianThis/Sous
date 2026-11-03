@@ -114,3 +114,16 @@ describe('runs', () => {
     expect(s.nodesRev).toBe(2)
   })
 })
+
+describe('run status line', () => {
+  it('clears once the agent reports progress', () => {
+    const s = emptyState()
+    const run = (seq: number, type: string, payload: any) => ({ ...ev(seq, type, payload), run_id: 'r1' })
+    applyEvent(s, run(1, 'run.queued', { node_id: 'n', agent: 'x', kind: 'general', prompt: 'p' }))
+    applyEvent(s, run(2, 'run.started', { workdir: '/w' }))
+    applyEvent(s, run(3, 'run.update', { kind: 'status', text: '正在启动' }))
+    expect(s.runs.r1.statusLine).toBe('正在启动')
+    applyEvent(s, run(4, 'run.update', { kind: 'tool', tool_call_id: 't', title: 'Read', status: 'pending' }))
+    expect(s.runs.r1.statusLine).toBe('')
+  })
+})

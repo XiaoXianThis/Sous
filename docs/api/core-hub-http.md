@@ -28,15 +28,19 @@
 | GET/PATCH | `/tasks/{id}` | 读取、修改（标题、优先级、权限模式、指定机器或 agent） |
 | POST | `/tasks/{id}/dispatch` | 派发 `{"node_id"?, "agent"?}` |
 | POST | `/tasks/{id}/cancel` | 取消 |
-| GET | `/runs/{id}` | Run 详情 |
-| GET | `/runs/{id}/log?offset=` | 原始输出日志 |
-| POST | `/runs/{id}/message` | 中途追加指令 |
-| POST | `/runs/{id}/cancel` | 终止 |
-| GET | `/approvals?status=pending` | 审批队列 |
-| POST | `/approvals/{id}/decide` | `{"decision": "approve"\|"reject", "note"?, "patch"?}` |
-| GET | `/nodes` | 机器列表 |
-| POST | `/nodes/pairing-code` | 生成配对码 |
-| PATCH/DELETE | `/nodes/{id}` | 改名、调整并发上限、吊销 |
+| GET | `/runs?thread_id=&node_id=&status=a,b&limit=` | 列出 Run（按创建时间从旧到新） |
+| POST | `/runs` | 派发 `{thread_id?, node_id?, agent, prompt, repo_path?}`；不填 `node_id` 时选第一台在线、装了该 agent 且没有显示未登录的机器。没有合适机器时返回 409 |
+| GET | `/runs/{id}` | `{run, events, approvals}`：Run、它存储下来的全部事件、它的审批 |
+| GET | `/runs/{id}/log` | 纯文本运行日志（agent 输出、工具调用、计划） |
+| GET | `/runs/{id}/diff` | 纯文本 diff（相对基线提交） |
+| POST | `/runs/{id}/message` | 追加指令 `{text}`，只能发给正在运行的 Run |
+| POST | `/runs/{id}/cancel` | 取消：排队中的直接结束；运行中的通知机器停下；机器离线时直接标记为已取消 |
+| GET | `/approvals?status=pending&run_id=` | 审批列表 |
+| POST | `/approvals/{id}/decide` | `{option_id, note?}`；`option_id` 必须是该审批提供的选项之一，为空表示取消。已处理或已过期时返回 409 |
+| GET | `/nodes` | 机器列表（`online` 是实时状态）；`agents` 是机器上报的 AgentInfo 数组 |
+| POST | `/nodes/pairing-code` | 生成配对码 `{code, expires_at}` |
+| PATCH | `/nodes/{id}` | 改名 `{name}` |
+| DELETE | `/nodes/{id}` | 删除机器：作废令牌并断开连接 |
 | GET/POST | `/projects` | 列出、创建项目 |
 | PATCH/DELETE | `/projects/{id}` | 修改项目；`nodes: [{node_id, path, priority}]` |
 | GET | `/memories?q=&kind=&limit=` | 有 `q` 时按相关度搜索，否则按更新时间列出（可按 `kind` 过滤）；返回 `{memories, kinds}` |
@@ -49,9 +53,13 @@
 | GET | `/push/vapid-public-key` | |
 | GET | `/updates` | 各平台最新版本信息（来自 GitHub Releases 缓存） |
 
-另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。
+另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。机器用的 `POST /api/v1/node/pair` 和 `GET /node` 见 `core-hub-node.md`。
+
+带「M3」「M4」标记、或者上表里列了但 `internal/` 里还没有实现的接口（任务、项目、定时任务、设置、推送订阅、更新），以后实现时再定稿。
 
 **消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, kind?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。`kind` 为空表示普通消息，`notice` 表示主管主动发出的提醒（总在主线），`silent` 表示主管判断这条消息不需要回复（`content` 是原因）。
+
+**Run 和审批**：`/ws` 会推送 `run.queued`、`run.started`、`run.update`、`run.ended`、`approval.requested`、`approval.decided`，以及临时事件 `run.output`（seq 为 0，payload `{kind: "text"|"thought", text}`，不补发；完整文字在 `/runs/{id}/log` 里）。机器变化时推送 `node.*` 事件。
 
 **记忆**：`{id, kind: "profile"|"project"|"lesson"|"note", content, created_at, updated_at}`。记忆变化时，`/ws` 推送 `memory.put` / `memory.deleted` 事件。
 

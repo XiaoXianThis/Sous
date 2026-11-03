@@ -57,7 +57,10 @@
   {#if view.tools.length}
     <ul class="tools">
       {#each view.tools.slice(-8) as t (t.id)}
-        <li class={t.status}><span class="ico">{toolIcon[t.status] ?? '·'}</span>{t.title}</li>
+        {@const done = t.status === 'completed' || t.status === 'failed'}
+        <li class={done || isActive(run) ? t.status : 'stopped'}>
+          <span class="ico">{done || isActive(run) ? (toolIcon[t.status] ?? '·') : '–'}</span>{t.title}
+        </li>
       {/each}
       {#if view.tools.length > 8}<li class="more">还有 {view.tools.length - 8} 个更早的步骤</li>{/if}
     </ul>

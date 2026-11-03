@@ -87,6 +87,8 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
 }
 
 function applyUpdate(v: RunView, p: any) {
+  // A status line ("starting the agent") is stale once the agent reports anything.
+  if (p.kind !== 'status' && p.kind !== 'thought') v.statusLine = ''
   switch (p.kind) {
     case 'text':
       v.output += p.text ?? ''

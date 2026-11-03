@@ -232,17 +232,22 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 5. agent 在前台执行的命令超过一定时间（比如 5 秒），尽量转到后台，让 agent 能及时收到追加的指令（参考 SA-13；取决于各家 agent 是否支持，「待验证」）。
 6. 临时性故障（模型服务或网络返回 408、429、5xx，连接被拒绝、被重置或超时）自动重试 3 次，间隔逐渐拉长；其他失败直接汇报，等主管或用户处理（参考 SA-14）。
 
-**五个 agent 的启动方式**（全部「待验证」，开工时逐一实测三个平台）：
+**五个 agent 的实测结果**（2026-11-03，macOS；Windows 和 Linux 尚未实测）：
 
-| agent | ACP 启动方式（预期） | 退路 |
-|---|---|---|
-| Claude Code | `claude-code-acp` 适配器 | `claude -p --output-format stream-json` |
-| Codex | `codex-acp` 适配器 | `codex exec --json` |
-| Kiro | Kiro CLI 的 ACP 模式 | PTY |
-| Cursor | `cursor-agent acp` | `cursor-agent -p --output-format stream-json` |
-| OpenCode | `opencode acp` | PTY |
+| agent | 启动方式（`internal/agents`） | 握手 | 登录检测 | 备注 |
+|---|---|---|---|---|
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.100.0` | ✅ session/new 返回 modes：`default`（每步询问）、`acceptEdits`、`plan`、`auto`、`bypassPermissions` | `claude auth status` 的 JSON `loggedIn` | 命令行版要单独登录，桌面 App 的登录不通用 |
+| Codex | `npx -y @agentclientprotocol/codex-acp@2.5.0` | ✅ | `codex login status`（"Logged in" / "Not logged in"） | |
+| Cursor | `cursor-agent acp` | ✅ 需要先调用 `authenticate`（methodId `cursor_login`） | `cursor-agent status` | 本机 `status` 报已登录但 `authenticate` 卡住，疑似登录过期；客户端对 authenticate 设了 30 秒超时 |
+| OpenCode | `opencode acp` | ✅ 返回 `configOptions`（可选模型） | 无法预先判断 | 免费模型有额度限制 |
+| Kiro | `kiro-cli acp`（未验证） | — | — | 本机只装了 Kiro IDE，没有 Kiro CLI |
 
-Go 版 ACP 客户端：先评估社区 SDK 的成熟度，不行就自己实现（协议本身是 stdio 上的 JSON-RPC，规模不大）。
+- 实测必须在沙盒外进行：agent 的登录凭据在 macOS 钥匙串里，受限的沙盒环境读不到，会误报“未登录”。真实的 daemon 以用户身份运行，没有这个问题。
+- 五个 agent 都支持 ACP，所以第一期**没有实现** jsonstream / PTY / shell 退路；`Worker` 的位置由 `internal/acp` + `internal/node/run.go` 承担。需要时再加。
+- Go 版 ACP 客户端是自己实现的（`internal/acp`，stdio 上按行分隔的 JSON-RPC 2.0），不声明 fs 和 terminal 能力，agent 用自己的工具在 worktree 里干活。
+- 测试用的假 agent 在 `internal/acp/acptest`：在测试二进制里运行，覆盖写文件、认证、未登录、慢任务、崩溃几种行为。
+- **第一期的审批是直通的**：agent 发起的每个权限请求都原样交给用户在界面上选择（M3 才加操作分类、自动审批和底线规则）。
+- **设备令牌目前存在 `~/.sous/node.json`（权限 0600）**，还没有放进系统钥匙串。
 
 ## 8. 权限分类
 

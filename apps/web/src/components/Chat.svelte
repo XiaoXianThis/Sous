@@ -88,6 +88,7 @@
       await send(text)
       draft = ''
       stick = true
+      await tick() // let the textarea empty before measuring it
       resize()
     } catch (e) {
       sendError = (e as Error).message

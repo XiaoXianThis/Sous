@@ -3,7 +3,11 @@ package node_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -321,5 +325,102 @@ func TestInventoryReportsAgents(t *testing.T) {
 	lines := strings.Join(e.hub.Environment(context.Background()), "\n")
 	if !strings.Contains(lines, "测试机") || !strings.Contains(lines, "在线") || !strings.Contains(lines, "fake") {
 		t.Fatalf("environment: %s", lines)
+	}
+}
+
+func TestHTTPEndpoints(t *testing.T) {
+	e := newEnv(t)
+	defer e.startDaemon("write")()
+	get := func(path string, hdr map[string]string) int {
+		req, _ := http.NewRequest("GET", e.srv.URL+path, nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := get("/api/v1/nodes", nil); code != 401 {
+		t.Fatalf("nodes without login: %d", code)
+	}
+	if code := get("/node", nil); code != 401 {
+		t.Fatalf("/node without token: %d", code)
+	}
+	if code := get("/node", map[string]string{"Authorization": "Bearer nope"}); code != 401 {
+		t.Fatalf("/node with a bad token: %d", code)
+	}
+	resp, _ := http.Post(e.srv.URL+"/api/v1/node/pair", "application/json", strings.NewReader(`{"code":"123456"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("pair with a bad code: %d", resp.StatusCode)
+	}
+
+	// Logged in, the REST API creates and reads runs.
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	c.Post(e.srv.URL+"/api/v1/auth/dev-login", "", nil)
+	u, _ := url.Parse(e.srv.URL)
+	csrf := ""
+	for _, ck := range jar.Cookies(u) {
+		if ck.Name == "sous_csrf" {
+			csrf = ck.Value
+		}
+	}
+	do := func(method, path, body string, out any) int {
+		req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if out != nil {
+			json.NewDecoder(resp.Body).Decode(out)
+		}
+		return resp.StatusCode
+	}
+	var run store.Run
+	if code := do("POST", "/api/v1/runs", `{"agent":"fake","prompt":"x","repo_path":"`+gitRepo(t)+`"}`, &run); code != 201 {
+		t.Fatalf("create run: %d", code)
+	}
+	if code := do("POST", "/api/v1/runs", `{"agent":"missing","prompt":"x"}`, nil); code != 409 {
+		t.Fatalf("run for an agent no machine has: %d", code)
+	}
+	a := e.pendingApproval(run.ID)
+	var list struct{ Approvals []store.Approval }
+	do("GET", "/api/v1/approvals?status=pending", "", &list)
+	if len(list.Approvals) != 1 || list.Approvals[0].ID != a.ID {
+		t.Fatalf("pending approvals: %+v", list)
+	}
+	if code := do("POST", "/api/v1/approvals/"+a.ID+"/decide", `{"option_id":"bogus"}`, nil); code != 409 {
+		t.Fatalf("unknown option: %d", code)
+	}
+	if code := do("POST", "/api/v1/approvals/"+a.ID+"/decide", `{"option_id":"allow"}`, nil); code != 200 {
+		t.Fatalf("decide: %d", code)
+	}
+	e.ended(run.ID)
+	var detail struct {
+		Run    store.Run
+		Events []event.Event
+	}
+	do("GET", "/api/v1/runs/"+run.ID, "", &detail)
+	if detail.Run.Status != event.RunStatusSucceeded || len(detail.Events) < 4 {
+		t.Fatalf("run detail: %+v", detail)
+	}
+	req, _ := http.NewRequest("GET", e.srv.URL+"/api/v1/runs/"+run.ID+"/diff", nil)
+	dresp, _ := c.Do(req)
+	diff, _ := io.ReadAll(dresp.Body)
+	dresp.Body.Close()
+	if !strings.Contains(string(diff), "+hi") {
+		t.Fatalf("diff endpoint: %s", diff)
+	}
+	var nodes struct{ Nodes []store.Node }
+	do("GET", "/api/v1/nodes", "", &nodes)
+	if len(nodes.Nodes) != 1 || !nodes.Nodes[0].Online {
+		t.Fatalf("nodes: %+v", nodes)
 	}
 }

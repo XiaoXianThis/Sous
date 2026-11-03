@@ -33,6 +33,7 @@ wok check              check the layout
 - [接口契约](api/README.md)
 - [架构](architecture/README.md)
 - [部署 Hub](guides/deploy-hub.md)
+- [接入一台电脑](guides/connect-machine.md)
 
 当前进行中的设计见 `work/specs/sous-mvp/`。
 

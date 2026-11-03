@@ -26,8 +26,7 @@
   {#if !text.trim()}
     <p class="empty">（空）</p>
   {:else}
-    <pre>{#each lines as line}<span class={cls(line)}>{line}</span>
-{/each}</pre>
+    <pre>{#each lines as line}<span class={cls(line)}>{line}</span>{/each}</pre>
   {/if}
 </div>
 
