@@ -6,7 +6,7 @@
 
 ## 配对
 
-1. 用户在 PWA 的“机器”面板生成配对码：`POST /api/v1/nodes/pairing-code`（需要登录），返回 `{code, expires_at}`。配对码是 6 位数字，10 分钟内有效，只能用一次，只存在 Hub 内存里。
+1. 用户在 PWA 的“机器”面板生成配对码：`POST /api/v1/nodes/pairing-code`（需要登录），返回 `{code, expires_at}`。配对码是 6 位数字，10 分钟内有效，只能用一次，只存在 Hub 内存里。连续 5 次填错配对码，Hub 作废当时所有有效的配对码（防止猜中六位数），要重新生成。
 2. 在电脑上执行 `sous pair <hub-url> <code> [--name 名字] [--role server] [--workspace 目录,目录]`（角色和工作空间只写进本机的 node.json），它会调用 `POST /api/v1/node/pair`（不需要登录）：
 
    ```json
@@ -31,7 +31,7 @@
 | N→H | `hello` | `{version, os, arch, hostname, last_acked_seq}` | — |
 | H→N | `welcome` | `{node_id, resume_runs: [run_id]}` | — |
 | N→H | `inventory` | `{agents: [AgentInfo], concurrency, role?: "dev"\|"server", workspaces?: [绝对路径], wok?: 版本}` | ✅ |
-| N→H | `node.repos` | `{workspaces, repos: [{path, remote?, branch?, dirty?, wokspace?}]}`：工作空间里找到的全部 git 仓库（往下最多两层，不进仓库、隐藏目录、符号链接和依赖目录）。连上后、工作空间变了、新建或 clone 项目后、每 10 分钟扫描一次，结果没变就不发。`remote` 是 origin（没有就取第一个 remote）配置的地址，不经过 insteadOf 改写 | ✅ |
+| N→H | `node.repos` | `{workspaces, repos: [{path, remote?, branch?, dirty?, wokspace?, git?: {head, upstream, ahead, behind, changes, untracked, fetched_at}}]}`：工作空间里找到的全部 git 仓库（往下最多两层，不进仓库、隐藏目录、符号链接和依赖目录）。连上后、工作空间变了、新建或 clone 项目后、每 10 分钟扫描一次，结果没变就不发。`git` 来自 `git status --porcelain=v2 --branch`（不联网），`fetched_at` 是 `FETCH_HEAD` 的修改时间。daemon 每 10 分钟在后台对有 remote 的仓库 `git fetch`（只更新远端跟踪分支，不动工作区；node.json 的 `auto_fetch: false` 关掉），之后重新扫描。`remote` 是 origin（没有就取第一个 remote）配置的地址，不经过 insteadOf 改写 | ✅ |
 | H→N | `run.start` | `{run_id, agent, kind: "code"\|"general"\|"ops", repo_path?, prompt, permission_mode: "default"\|"auto"\|"open", recovery_note?, task_id?, purpose?: "work"\|"rebase"\|"deliver"\|"clone"\|"create", branch?, base_branch?, title?, force?, options?: {选项 id: 值}, persona?, setup?: {name, remote?, layout?, owner?, private?}}` | — |
 | H→N | `run.message` | `{run_id, text, message_id?}`：追加指令，在 agent 当前这一轮结束后交给它；Run 暂停时立刻让它带着这条指令继续。Node 按 `message_id` 去掉重复 | — |
 | H→N | `run.pause` | `{run_id, reason?}`：向 agent 发 `session/cancel` 停下当前这一轮，取消它未答复的权限请求，Run 留在原地等待 | — |
@@ -59,13 +59,14 @@
 ## 远程管理
 
 - Hub 发 `node.request`，等 `node.response`。请求和应答不进发件箱：断线时 Hub 让等待中的调用返回 `offline`。旧版 daemon 没有 `admin` 能力，Hub 直接返回 `unsupported`。
-- `op`：`repos.scan`、`node.set_workspaces {workspaces}`（目录必须存在；返回扫描结果）、`node.set_role {role}`（只能 dev → server）、`gh.pr_state {url}`（只接受 GitHub PR 地址，用 `gh pr view` 读 `{state, merged_at}`）、`agents.detect`、`agents.probe {agent}`、`agents.install {agent, upgrade?, cols?, rows?}`、`agents.login`、`agents.logout`、`agents.set_defaults {agent, options}`、`agents.set_env {agent, name, value}`、`job.input {job_id, data}`、`job.resize {job_id, cols, rows}`、`job.cancel {job_id}`、`job.tail {job_id}`、`config.read {agent, file}`、`config.write {agent, file, content, base_sha256}`。错误码：`disabled`、`conflict`、`invalid`、`not_found`、`busy`、`failed`。
+- `op`：`repos.scan`、`node.set_workspaces {workspaces}`（目录必须存在；返回扫描结果）、`node.set_role {role}`（只能 dev → server）、`gh.pr_state {url}`（只接受 GitHub PR 地址，用 `gh pr view` 读 `{state, merged_at}`）、`agents.detect`、`agents.probe {agent}`、`agents.install {agent, upgrade?, cols?, rows?}`、`agents.login`、`agents.logout`、`agents.set_defaults {agent, options}`、`agents.set_env {agent, name, value}`、`job.input {job_id, data}`、`job.resize {job_id, cols, rows}`、`job.cancel {job_id}`、`job.tail {job_id}`、`config.read {agent, file}`、`config.write {agent, file, content, base_sha256}`、`project.ls {root, rel}`、`project.read {root, rel}`、`project.write {root, rel, content, base_sha256}`（浏览和编辑项目文件：`root` 必须在这台机器的工作空间里、本身是 git 仓库（有 `.git`），`rel` 不能超出 `root`（符号链接也不行）也不能进 `.git`，文件不超过 1 MB）、`shell.open {root, owner, cols?, rows?}` → `JobStarted`（`kind: shell`）、`shell.list {root, owner}` → `[{job_id, root, command, started_at, running, exit_code?}]`、`repo.sync {root}`、`repo.wip {root}` → `{outcome, message, branch?, commit?, git?}`（目录规则同 `project.*`；命令写死在 Node 上：fetch + 只快进，或者用临时索引建提交再推到 `sous/wip/`；访问远端时不弹凭据提示；之后重新扫描）。错误码：`disabled`、`conflict`、`invalid`、`not_found`、`busy`、`failed`。
 - 请求里只有 agent 名和文件 id：要运行的命令和能读写的文件都写死在 `internal/agents`，Node 不执行请求里带来的命令，也不碰列表以外的路径。node.json 的 `remote_admin: false` 让 Node 拒绝所有请求，这个开关只能在机器本地改。
 - 安装、升级、登录、退出登录作为作业在伪终端里运行（macOS / Linux 用 pty，Windows 用 ConPTY），工作目录是用户主目录，环境里加上 agent 的 `agent_env` 和 `TERM=xterm-256color`。同一个 agent 同时只有一个作业，整台机器最多 3 个；超时：安装和升级 15 分钟，登录 10 分钟，退出 2 分钟。作业结束后 Node 重新检测并上报 `inventory`。结束的作业保留 30 分钟，可以 `job.tail`。
+- 终端（`shell.open`）：在项目目录（规则同 `project.*`）里用伪终端启动本机的 shell：macOS / Linux 是 `$SHELL -l`（没有时 zsh、bash、sh），Windows 是 pwsh、powershell、cmd 里第一个找得到的。环境是 daemon 的环境加 `SOUS_SHELL=1`。它也是作业，输入、改大小、结束、读尾部都用 `job.*`；最多同时 8 个，与安装作业分开计数，开着超过 24 小时自动结束。`owner` 是开它的登录会话的不透明 id（Hub 从会话 Cookie 推导，不是令牌）：`shell.list` 只列这个 owner 的，`job.*` 的 `owner` 和终端的不一致时按“不存在”回答（安装等作业没有 owner，不检查）。终端里的命令是用户自己敲的，不经过权限策略。node.json 的 `remote_shell: false` 关闭终端（只能本地改，远程编辑 node.json 改不了它）。
 - 会话选项：Node 每次打开 agent 的会话（Run 或 `agents.probe`），都记下它在 `session/new` 里报告的 `configOptions`（只记 `model`、`thought_level`、`model_config` 等，不记 `mode`），存在 `~/.sous/agent-options.json`，随 `inventory` 上报。只报告旧版 `models` 字段的 agent，当成一个 id 为 `_model` 的选项，用 `session/set_model` 切换。
 - node.json 的 `agent_options`（`{agent: {选项 id: 值}}`）在每个新会话里、切换权限模式之前，用 `session/set_config_option` 逐个设置，模型最先；值已经不在可选列表里就跳过，并发一条 `status` 提醒。`agent_env`（`{agent: {变量: 值}}`）加进 agent 的进程环境，`inventory` 只报告变量名。
 - 有些 agent 的会话选项决定它会不会先请求权限（Kiro 的 `autopilot`）。这类选项由 sous 按 Run 的权限模式自己设置（`internal/agents` 的 `AskOptions` / `OpenOptions`），优先于用户的默认值，不出现在 `options` 里，也不能设为默认值；设置失败时 Run 直接失败，不在 agent 不询问的状态下执行。
-- 改 node.json（直接编辑，或者 `set_defaults` / `set_env`）后立即生效：启动命令、环境、选项和底线规则用于之后的 Run，并发数要重启 daemon。直接编辑时 `hub_url`、`node_id`、`token`、`remote_admin` 保持磁盘上的值，显示成 `***` 的值保持原值，有未知字段或底线规则写错时不保存。
+- 改 node.json（直接编辑，或者 `set_defaults` / `set_env`）后立即生效：启动命令、环境、选项和底线规则用于之后的 Run，并发数要重启 daemon。直接编辑时 `hub_url`、`node_id`、`token`、`remote_admin`、`remote_shell` 保持磁盘上的值，显示成 `***` 的值保持原值，有未知字段或底线规则写错时不保存。安全相关的设置远程只能收紧：服务器的 `role` 不变，`policy.floor_disabled` 和 `policy.floor` 保持磁盘上的值，`policy.extra_floor` 只能增加不能删除；放宽要在机器本地改。
 
 ## 可靠性
 
@@ -81,7 +82,7 @@
 
 ## Run 的执行（Node 侧）
 
-1. 准备工作目录：代码 Run 在 `~/.sous/worktrees/<仓库名>/<短 id>` 新建 worktree，短 id 取自 `task_id`（没有时取 `run_id`），所以同一个任务的所有 Run 共用一个 worktree 和分支。分支由 `branch` 指定；第一次时由 Node 起名 `sous/<标题 slug>-<短 id>`，基线是仓库当前的 `HEAD`，基线提交和基线分支记在仓库的 git config（`branch.<分支>.sousbase` / `sousbaseref`）里。一般 Run 用 `~/.sous/scratch/<短 id>`。然后上报 `run.started`（带 `base_branch`）。
+1. 准备工作目录：代码 Run 在 `~/.sous/worktrees/<仓库名>/<短 id>` 新建 worktree，短 id 取自 `task_id`（没有时取 `run_id`），所以同一个任务的所有 Run 共用一个 worktree 和分支。分支由 `branch` 指定；第一次时由 Node 起名 `sous/<标题 slug>-<短 id>`，基线是远端的最新代码：先 `git fetch --prune origin`（30 秒超时，不弹凭据提示），再从 `origin/<base_branch>` 开分支（`base_branch` 为空时依次试 `origin/HEAD` 指向的分支、当前分支、`main`、`master`），不跟踪上游，不动用户的 checkout；本地有没推送的提交时在 Run 里说明它们不在任务里。仓库没有 `origin`、fetch 失败或远端没有这些分支时，退回仓库当前的 `HEAD`（fetch 失败时在 Run 里说明）。基线提交和基线分支记在仓库的 git config（`branch.<分支>.sousbase` / `sousbaseref`）里，diff 和 PR 以它为准。一般 Run 用 `~/.sous/scratch/<短 id>`。然后上报 `run.started`（带 `base_branch`）。
 2. 启动 agent 的 ACP 服务（见 `internal/agents`），依次调用 `initialize` 和 `session/new`；agent 要求认证时，先调用 `authenticate` 再重试。按 node.json 的 `agent_options` 设置会话选项（见“远程管理”）。如果 agent 提供“每步询问”的模式（`default`、`ask`、`manual`），就切换过去。
 3. 用 `session/prompt` 发送任务。agent 的 `session/update` 转成 `run.update` / `run.output`。`session/request_permission` 先经本地策略（`internal/policy`）分类，再按 `permission_mode` 查表：放行或拒绝时直接答复 agent，并发一条 `run.update`（`kind: permission`）记录；需要审批时发 `approval.request`（`review` 为 `user`，或自动审批模式下的 `ai`），等决定回来再答复 agent。底线规则在任何模式下都拒绝，配置在 `node.json` 的 `policy`（`floor_disabled`、`floor`、`extra_floor`）。
 4. 这一轮结束后，如果期间收到过 `run.message`，就把这些追加指令作为下一轮发给 agent；否则执行 `git add -A`，计算相对基线的 diff，发送 `run.diff`，最后发送 `run.ended`。

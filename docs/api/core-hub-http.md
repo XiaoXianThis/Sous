@@ -10,6 +10,9 @@
 - 认证：Passkey 登录后下发 HttpOnly 会话 Cookie；会改动数据的请求要带 `X-CSRF-Token` 头。
 - 数据格式：JSON；时间用 Unix 毫秒；ID 用 ULID 字符串。
 - 错误格式：`{"error": {"code": "not_found", "message": "..."}}`。
+- 近期登录：少数危险操作（打开终端、已登录时再加一个 Passkey）要求会话在 15 分钟内用 Passkey 验证过，否则返回 401 `reauth`。页面重新走一遍 `/auth/passkey/login/*`（开发模式下是 `/auth/dev-login`）后重试：已登录时再次验证只刷新当前会话的验证时间，会话和属于它的终端不变。
+- Passkey 要求用户验证（`userVerification: required`：指纹、面容或 PIN），只碰一下不算。
+- 安全响应头：每个回答都带 `Content-Security-Policy`（只允许本站的脚本、连接和 Worker，禁止内联脚本和被嵌入 iframe）、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`public_url` 是 https 时加 HSTS。请求体最大 4 MB。
 
 ## REST
 
@@ -20,10 +23,10 @@
 | POST | `/auth/logout` | 退出 |
 | POST | `/auth/dev-login` | 仅当 `dev: true` 且请求直接来自本机回环地址时可用，否则 404 |
 | GET | `/me` | `{logged_in, has_passkey, dev_login}`，不需要登录 |
-| GET/POST | `/threads` | 列出、创建线程 |
+| GET/POST | `/threads` | 列出、创建线程。`GET /threads` 只列一般线程（主线和普通对话）；`GET /threads?project_id=<id>` 列这个项目的项目对话。`POST /threads {"title", "project_id"?}` 带 `project_id` 时建项目对话（`kind: project`，项目不存在返回 404）。线程对象带 `project_id`（只在项目对话上有） |
 | GET/PATCH | `/threads/{id}` | 读取、改名或归档 |
 | GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
-| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?}}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么 |
+| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?}}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么。项目对话里主管的作用域限定在这个项目：环境只列这个项目和它的任务，`task_create` 不填 `project` 时归到这个项目，动别的项目或别的项目的任务会被拒绝 |
 | GET | `/tasks?status=a,b&project_id=&thread_id=&parent_id=` | 列出任务（优先级高的在前，同级按创建时间） |
 | POST | `/tasks` | 创建 `{title, detail?, kind?, project_id?, persona_id?, priority?, agent_pref?, node_pref?, permission_mode?, parent_id?, depends_on?, thread_id?, dispatch?}`，返回 201。`kind` 是 `code`、`general` 或 `ops`，缺省时有项目（不是 `misc`）就是 `code`；没有项目的任务归到内置项目 `misc`（杂项）；`ops` 必须指定项目。用户创建且不派发的进 `inbox` |
 | GET | `/tasks/{id}` | `{task, runs, subtasks}` |
@@ -48,12 +51,13 @@
 | DELETE | `/nodes/{id}` | 删除机器：作废令牌并断开连接 |
 | GET/POST | `/projects` | 列出、创建项目 `{name, repo_url?, default_agent?, default_mode?, default_persona?, notes?, layout?, nodes?: [{node_id, path, source?}], deploy?: {node_id, path, command, health?, auto_on_merge?}}`；`nodes` 的顺序就是路由优先级（服务端按顺序重写 `priority`）。重名或仓库（`remote_key`）已登记返回 409。部署目标必须是服务器 |
 | PATCH/DELETE | `/projects/{id}` | 只改出现的字段（`deploy: null` 去掉部署目标）；还有未关闭任务的项目不能删除（409），内置的 `misc` 不能删除 |
+| POST | `/projects/{id}/archive`、`/projects/{id}/activate` | 归档项目或重新激活，返回项目。归档的项目 `archived_at > 0`，不出现在工作台上，主管平时也不管它；内置的 `misc` 和还有排队、执行中、等审批任务的项目不能归档（409）。在已归档的项目里建任务会让它自动激活。`/ws` 推送 `project.archived` `{project_id, archived}` |
 | POST | `/projects/new` | 新建项目 `{name, node_id?, layout?: "wokspace"\|"plain", owner?, private?, thread_id?}`：登记项目，并在一台开发机（不填就选第一台在线、设置了工作空间、wokspace 时还要装了 wok 的）的第一个工作空间里创建仓库。返回 201 `{project, run}`；完成后项目自动多一个位置，结果以汇报发到 `thread_id`（缺省主线）。`name` 必须是 kebab-case |
 | POST | `/projects/{id}/clone` | `{node_id?, thread_id?}`：把项目 clone 到一台开发机的第一个工作空间，返回 201 `{run}` |
 | GET | `/repos` | 机器在工作空间里找到的仓库：`{repos: [{node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at, project_id}]}`，`project_id` 为空表示还没登记 |
 | GET/POST | `/personas` | 岗位（见 decisions/0013）：列出 `{personas}`；创建 `{name, glyph?, color?, agent?, options?: {选项 id: 值}, brief?, default_mode?, kinds?: ["code"\|"general"\|"ops"]}`，返回 201 |
 | PATCH/DELETE | `/personas/{id}` | 修改（整体替换）/ 删除；还有未关闭任务用它时 409 |
-| GET | `/overview` | 工作台总览一次需要的数据：`{projects, nodes, personas, tasks, runs, approvals, discovered}`。`tasks` 是未关闭的任务加上 24 小时内完成的，`runs` 是排队和执行中的 Run，`approvals` 是待审批的，`discovered` 是还没登记的仓库 |
+| GET | `/overview` | 工作台总览一次需要的数据：`{projects, nodes, personas, tasks, runs, approvals, discovered}`。`tasks` 是未关闭的任务加上 24 小时内完成的，`runs` 是排队和执行中的 Run，`approvals` 是待审批的，`discovered` 是还没登记的仓库。`projects` 包含已归档的项目（`archived_at > 0`），由前端分开显示。项目的每个位置（`nodes[]`）带 `git?: {head, upstream, ahead, behind, changes, untracked, fetched_at}`：机器上次扫描时 checkout 相对上游的状态 |
 | PUT | `/nodes/{id}/role` | `{role: "dev"\|"server"}`：只能把开发机改成服务器；服务器改回开发机只能在那台机器的 node.json 里改（403 `disabled`） |
 | PUT | `/nodes/{id}/workspaces` | `{workspaces: ["~/Code"]}`：替换机器的工作空间（绝对路径或 `~/` 开头，目录必须存在），立即扫描，返回 `{workspaces, repos}` |
 | POST | `/nodes/{id}/scan` | 立即扫描工作空间，返回 `{workspaces, repos}` |
@@ -65,7 +69,7 @@
 | POST | `/schedules/{id}/run` | 立刻触发一次（不影响下次的时间） |
 | GET | `/findings?run_id=&limit=` | 巡检发现的问题，新的在前 |
 | GET | `/usage?days=&tz=` | 最近 N 天（默认 30，按 `tz` 的自然日算）的 token 用量：`{days, since, usage, daily}`。`usage` 按 provider、model、role 汇总；`daily` 是 `[{day: "YYYY-MM-DD", role, calls, input_tokens, output_tokens, cached_tokens}]` |
-| GET/PATCH | `/settings` | `{default_mode, default_agent, notify: {kind: bool}, quiet: {enabled, start, end, tz}, roles, push_devices}`；`roles` 只读，不返回任何密钥。PATCH 只改出现的字段 |
+| GET/PATCH | `/settings` | `{default_mode, default_agent, notify: {kind: bool}, quiet: {enabled, start, end, tz}, roles, push_devices}`；`roles` 只读（每个角色当前的“供应商/模型 · 思考强度”，在 `/models` 里改），不返回任何密钥。PATCH 只改出现的字段 |
 | POST/DELETE | `/push/subscriptions` | 浏览器的 `PushSubscription.toJSON()`（`{endpoint, keys: {p256dh, auth}}`）；删除时 `{endpoint}` |
 | GET | `/push/vapid-public-key` | `{key}`：base64url 的 VAPID 公钥（`applicationServerKey`） |
 | POST | `/push/test` | 给所有已订阅的设备发一条测试通知，返回 `{devices, sent, errors}` |
@@ -78,13 +82,26 @@
 | PUT | `/nodes/{id}/agents/{agent}/defaults` | `{options: {<选项 id>: <值>}}`：这台机器上这个 agent 每个新会话的默认选项；空对象表示全部跟随 agent |
 | PUT | `/nodes/{id}/agents/{agent}/env` | `{name, value}`：设置 API Key 环境变量（只能是 `key_env` 里的名字），`value` 为空表示清除 |
 | GET | `/nodes/{id}/jobs/{job}` | `{job_id, kind, agent, command, offset, data, running, exit_code?}`：作业最后 64 KB 的终端输出（`offset` 是 `data` 开头的字节位置） |
-| POST | `/nodes/{id}/jobs/{job}/input` / `resize` / `cancel` | `{data}` 写入终端；`{cols, rows}` 改终端大小；结束作业 |
+| POST | `/nodes/{id}/jobs/{job}/input` / `resize` / `cancel` | `{data}` 写入终端；`{cols, rows}` 改终端大小；结束作业。终端（`kind: shell`）只有打开它的登录会话能用，别的会话一律 404 |
+| GET | `/models` | `{providers: [{id, name, kind, base_url, api_key_env, models, key_set, env_set, default_url, created_at, updated_at}], roles: {角色: {provider_id, model, effort?, inherited}}, role_order, kinds, efforts}`。角色是 `supervisor`、`reviewer`、`approver`、`inspector`；没有单独选的角色 `inherited: true`，内容是主管的。从不返回 API Key，只有 `key_set`（Hub 上存了）和 `env_set`（`api_key_env` 指的环境变量有值） |
+| POST / PATCH | `/models/providers`、`/models/providers/{id}` | 添加、修改供应商 `{name, kind, base_url?, api_key?, api_key_env?, clear_key?, models?}`（PATCH 只改出现的字段；`api_key` 留空不改，`clear_key: true` 删掉存的 Key）。`base_url` 必须是 https（本机 `http://localhost` 除外），不填用这个协议的官方地址。需要近期登录（401 `reauth`）：地址决定 Key 发到哪里。返回同 `GET /models` |
+| DELETE | `/models/providers/{id}` | 删除供应商和它的 Key；还有角色在用时 409 `in_use`。需要近期登录 |
+| POST | `/models/providers/{id}/discover` | 问供应商有哪些模型（OpenAI 兼容 `GET /models`，Anthropic `GET /v1/models`），返回 `{models}`，不保存 |
+| POST | `/models/test` | `{provider_id, model, effort?}`：发一句短消息试试，返回 `{ok, reply?, error?, ms}` |
+| PUT | `/models/roles` | `{角色: {provider_id, model, effort?} 或 null}`：只改出现的角色；`null` 或空 `model` 让它跟主管一样（主管不能清空）。下一次调用模型就生效，不用重启。返回同 `GET /models`。改动后 `/ws` 推送 `models.changed`（`{what}`，不含密钥） |
+| POST | `/projects/{id}/locations/{node}/sync` | 把项目在那台机器上的 checkout 和上游对齐：先 fetch，能快进就快进；有未提交的改动（`dirty`）、和上游分叉（`diverged`）、没有跟踪上游（`no_upstream`）时什么都不改。返回 `{outcome, message, git}`，`outcome` 还有 `up_to_date`、`fast_forwarded`。记一条 `project.repo_op` 事件 |
+| POST | `/projects/{id}/locations/{node}/wip` | 把那台机器上未提交（含新文件，遵守 .gitignore）和未推送的改动做成一个提交，推到 origin 的 `sous/wip/<机器>-<时间>`；本地的文件、暂存区和分支都不变。返回 `{outcome: pushed|nothing, message, branch?, commit?}`。记一条 `project.repo_op` 事件 |
+| GET | `/projects/{id}/shells` | `{shells: [{node_id, job_id, root, command, started_at, running, exit_code?}]}`：当前登录会话在这个项目各台在线机器上开的终端 |
+| POST | `/projects/{id}/shells` | `{node_id, cols?, rows?}`：在这个项目在那台机器上的目录里开一个终端，返回 `{node_id, job_id, command, root}`。需要近期登录（401 `reauth`）；项目在那台机器上没有目录 400；node.json 关闭了终端（`remote_shell: false`）或远程管理 403 `disabled`；一台机器最多 8 个 409 `busy`。之后用 `/nodes/{id}/jobs/{job}` 那几个接口读写。打开时记一条 `agent.job.started`（`kind: shell`，带 `path`、`project_id`），终端的输入输出不保存 |
 | GET | `/nodes/{id}/files/{agent}/{file}` | `{agent, file, path, format: "json"\|"jsonc"\|"toml"\|"text", exists, content, sha256}`。文件只能是 `AgentInfo.configs` 里的；`agent` 为 `sous`、`file` 为 `node` 时是机器的 node.json，设备令牌和 API Key 显示成 `***` |
 | PUT | `/nodes/{id}/files/{agent}/{file}` | `{content, base_sha256}`：`base_sha256` 是读到的 `sha256`（文件不存在时为空），不一致返回 409 `conflict`；格式不对 400。写入前把原文件存为 `<文件>.sous-bak`，返回新内容和 `backup` |
+| GET | `/projects/{id}/tree?path=&node=` | 项目目录里一层文件：`{node_id, result: {rel, entries: [{name, dir, size}]}}`（文件夹在前，不含 `.git`）。`node` 省略时用项目第一台在线的机器；都不在线 409 `offline` |
+| GET | `/projects/{id}/file?path=&node=` | `{node_id, result: {rel, size, binary, content, sha256}}`；超过 1 MB 或二进制的文件不返回内容 |
+| PUT | `/projects/{id}/file?node=` | `{path, content, base_sha256}`：`base_sha256` 是读到的 `sha256`（新文件为空），不一致返回 409 `conflict`；返回新文件内容 |
 
 **远程管理 agent**（上面 `/nodes/{id}/agents/*`、`/jobs/*`、`/files/*` 这几组）：Hub 转成 `node.request` 发给机器，等它回答（一般 20 秒超时）。机器离线 409 `offline`，sous 版本太旧 409 `unsupported`，机器的 node.json 关闭了远程管理 403 `disabled`，超时 504 `timeout`。`GET /nodes` 的每台机器多一个实时字段 `admin`：`on`、`off`、`unsupported`，离线时没有。`AgentInfo` 多了这些字段：`install? upgrade? login? logout?`（sous 会运行的命令，没有就不能做）、`missing?`（缺少的命令，如 `npx`）、`key_env?`、`env_set?`（已设置的变量名，不含值）、`options?`（agent 上次报告的会话选项 `[{id, name, description?, category?: "model"|"thought_level"|"model_config"|…, current, values: [{value, name, description?, group?}]}]`）、`options_at?`、`defaults?`、`configs?: [{id, path, format}]`、`launch_override?`、`job?`（正在进行的作业）。`/ws` 推送 `agent.job.started`（`{node_id, job_id, kind, agent, command}`）、临时事件 `agent.job.output`（`{node_id, job_id, offset, data}`，seq 为 0）、`agent.job.ended`（`{node_id, job_id, kind, agent, exit_code, error?}`）、`node.config_changed`（`{node_id, agent, what: "defaults"|"env:<名字>"|"file:<id>"}`，不含内容）。
 
-**机器代用接口**：已配对的机器用设备令牌（`Authorization: Bearer`）调用 `/api/v1/device/` 下的这几个接口，给 `sous chat` 用（见 `core-daemon-ipc.md`）：`GET/POST /device/threads`、`GET/POST /device/threads/{id}/messages`、`GET /device/ws`、`GET /device/approvals`、`POST /device/approvals/{id}/decide`。行为与同名接口相同，不需要 CSRF。设置、机器、任务等其他接口仍然只能用 Passkey 登录后访问。
+**机器代用接口**：已配对的机器用设备令牌（`Authorization: Bearer`）调用 `/api/v1/device/` 下的这几个接口，给 `sous chat` 用（见 `core-daemon-ipc.md`）：`GET/POST /device/threads`、`GET/POST /device/threads/{id}/messages`、`GET /device/ws`、`GET /device/approvals`、`POST /device/approvals/{id}/decide`。行为与同名接口相同，不需要 CSRF。设置、机器、任务等其他接口仍然只能用 Passkey 登录后访问。`/device/ws` 只推送对话相关的事件：`thread.*`、`message.*`、`approval.*`、`trigger.*`、`run.queued`、`run.started`、`run.ended`；终端和安装作业的输出、配置变化、文件、记忆等都不发给设备令牌。
 
 另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。机器用的 `POST /api/v1/node/pair` 和 `GET /node` 见 `core-hub-node.md`。
 
@@ -98,7 +115,7 @@
 
 **定时、巡检和恢复相关的事件**：`schedule.put`、`schedule.deleted`；`trigger.fired`（payload `{kind: "cron"|"followup", key, schedule_id?, message_id, title, content}`，同时作为 `kind: trigger` 的消息出现在它的线程里）；`inspector.finding`（`{finding_id, rule: "repeat"|"stalled"|"long"|"tokens", severity, action: "notify"|"pause"|"stop"|"none", reason, done}`）；`run.paused`（`{reason}`）、`run.resumed`；`run.message`（`{message_id, text}`，追加指令）、`run.message.delivered`（`{message_ids}`，已经送进 agent 的会话）；`run.archived`；`node.update_requested`、`node.update_result`（`{node_id, version, error?}`）。Run 多了 `paused, pause_reason, archived, recovery_note, last_event`；`recovery_note` 非空表示它是中断后自动重新开始的。
 
-**M5 的其他字段和事件**：机器多了 `role: "dev"|"server"`、`workspaces`、`wok`（wok 的版本，空表示没装）；项目多了 `remote_key`（规范化的仓库地址，项目的身份）、`default_persona`、`notes`、`layout: "wokspace"|""`、`deploy`，`nodes[].source` 是 `scan`（在工作空间里自动找到）或 `manual`；消息多了 `context`。`/ws` 多推送 `persona.put`、`persona.deleted`、`node.repos`、`node.role`。
+**M5 的其他字段和事件**：机器多了 `role: "dev"|"server"`、`workspaces`、`wok`（wok 的版本，空表示没装）；项目多了 `remote_key`（规范化的仓库地址，项目的身份）、`default_persona`、`notes`、`layout: "wokspace"|""`、`deploy`、`archived_at`（归档时间，0 表示激活）、`touched_at`（项目或它的任务最后一次改动的时间，工作台卡片右下角的“上次修改”），`nodes[].source` 是 `scan`（在工作空间里自动找到）或 `manual`；消息多了 `context`。`/ws` 多推送 `persona.put`、`persona.deleted`、`node.repos`、`node.role`。
 
 **推送**：通知点开后打开 PWA 的哈希路由：`/#approvals`、`/#task=<id>`、`/#thread=<id>`。M5 起工作台自己的路由是 `/#/`、`/#/projects`、`/#/project=<id>`、`/#/task=<id>`、`/#/inbox`，旧的三种链接仍然有效。
 

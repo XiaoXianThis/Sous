@@ -27,3 +27,5 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0012](0012-remote-agent-admin.md) | 从页面远程管理机器上的 agent，只跑内置的命令和文件 | Accepted |
 | [0013](0013-personas.md) | 人员就是岗位档案，不是有记忆的拟人员工 | Accepted |
 | [0014](0014-server-role-and-ops-tasks.md) | 服务器作为机器接入，部署和维护走运维任务 | Accepted |
+| [0015](0015-project-shells-and-hardening.md) | 页面上的项目终端，以及配套的安全收紧 | Accepted |
+| [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted |

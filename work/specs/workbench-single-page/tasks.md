@@ -21,7 +21,7 @@
 - [x] `lib/status.ts`：`TaskState`、`taskStates`、`taskState()`、`taskStateDetail()`，覆盖 design §4 映射表的每一行
 - [x] `lib/workbench.ts`：`projectCards(overview, inboxTasks)`、Run 到项目的归属、位置列表、排序；配单元测试
 - [x] `lib/live.ts`：`Activity`、`applyLive`、`tail`、`oneLine`、`parseLogTail`、上限和合并规则；配单元测试
-- [x] `lib/masonry.ts`：`columnCount`、`distribute`、`estimateHeight`；配单元测试
+- [x] ~~`lib/masonry.ts`~~ 已移除：卡片改为等高网格
 - [x] `lib/reduce.ts`：`runsRev`，生命周期事件自增，`run.output` 不自增；配测试
 - [x] `lib/route.ts`：保留现有 hash 形式，补任务 / 项目 / inbox 的测试
 - [x] `wok test web` 通过

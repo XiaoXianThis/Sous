@@ -56,6 +56,8 @@ Windows PowerShell 用同样的 `scp` 命令，只是路径分隔符写成 `\`�
    chmod 755 /opt/sous/sous-hub
    ```
 
+模型也可以不写在 `hub.yaml` 里：启动后在网页的 **设置 → 模型** 添加供应商、填 API Key、给主管选模型，随时可以切换，不用重启。`hub.yaml` 里的 `providers` 和 `roles` 只在第一次启动（数据库里还没有供应商）时导入一次。
+
 ## 5. 启动
 
 ```sh
@@ -73,6 +75,8 @@ systemctl reload caddy
 ```
 
 域名的 DNS 需要指向这台服务器。Caddy 会自动申请证书。
+
+不用反向代理时，在 `hub.yaml` 里设 `tls_cert` 和 `tls_key`（PEM 文件），让 Hub 自己提供 HTTPS，`listen` 改成 `0.0.0.0:443` 之类。`listen` 不是回环地址又没有配 TLS 时 Hub 拒绝启动，避免设备令牌和会话在网络上明文传输；如果中间这一段已经用别的方式加密（比如同一台机器上的容器网络），可以写 `insecure_listen: true` 放行。
 
 ## 7. 注册第一个 Passkey
 
