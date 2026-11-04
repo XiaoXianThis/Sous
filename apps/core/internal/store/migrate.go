@@ -240,6 +240,108 @@ CREATE TABLE push_subscriptions (
   created_at INTEGER NOT NULL
 );
 `,
+	// 5: schedules and trigger state, inspector findings, paused and
+	// archived runs, follow-up messages to runs, recovery notes.
+	`
+CREATE TABLE schedules (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  cron       TEXT NOT NULL,
+  tz         TEXT NOT NULL DEFAULT '',
+  prompt     TEXT NOT NULL,
+  thread_id  TEXT NOT NULL DEFAULT '',
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  last_run   INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- When each trigger key last fired, so nothing is followed up twice.
+CREATE TABLE trigger_state (
+  key        TEXT PRIMARY KEY,
+  last_fired INTEGER NOT NULL
+);
+
+CREATE TABLE findings (
+  id         TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL DEFAULT '',
+  task_id    TEXT NOT NULL DEFAULT '',
+  rule       TEXT NOT NULL,
+  severity   TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  done       INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX findings_run ON findings(run_id, rule);
+
+CREATE TABLE run_messages (
+  id         TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  delivered  INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX run_messages_run ON run_messages(run_id, created_at);
+
+ALTER TABLE runs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN pause_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN recovery_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN last_event INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX usage_ts ON usage(ts);
+`,
+	// 6: M5 workbench: personas, repositories found in workspaces, machine
+	// roles, project layout and deploy target, message context.
+	`
+CREATE TABLE personas (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  glyph        TEXT NOT NULL DEFAULT '',
+  color        TEXT NOT NULL DEFAULT '',
+  agent        TEXT NOT NULL DEFAULT '',
+  options      TEXT NOT NULL DEFAULT '{}',
+  brief        TEXT NOT NULL DEFAULT '',
+  default_mode TEXT NOT NULL DEFAULT '',
+  kinds        TEXT NOT NULL DEFAULT '[]',
+  builtin      INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE repo_scans (
+  node_id    TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  remote     TEXT NOT NULL DEFAULT '',
+  remote_key TEXT NOT NULL DEFAULT '',
+  branch     TEXT NOT NULL DEFAULT '',
+  dirty      INTEGER NOT NULL DEFAULT 0,
+  wokspace   INTEGER NOT NULL DEFAULT 0,
+  seen_at    INTEGER NOT NULL,
+  PRIMARY KEY (node_id, path)
+);
+CREATE INDEX repo_scans_key ON repo_scans(remote_key);
+
+ALTER TABLE projects ADD COLUMN remote_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN default_persona TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN layout TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN deploy TEXT NOT NULL DEFAULT '';
+ALTER TABLE project_nodes ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+
+ALTER TABLE tasks ADD COLUMN persona_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE nodes ADD COLUMN role TEXT NOT NULL DEFAULT 'dev';
+ALTER TABLE nodes ADD COLUMN workspaces TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE nodes ADD COLUMN wok TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE runs ADD COLUMN options TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN persona TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN setup TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE messages ADD COLUMN context TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

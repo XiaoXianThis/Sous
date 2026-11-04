@@ -1,5 +1,6 @@
 // Pure state transitions for the chat, driven by Hub events. Kept free of
 // Svelte so it can be unit tested.
+import { applyJobEvent, type JobView } from './jobs'
 import { applyRunEvent, type RunView } from './runs'
 import type { HubEvent, Message, Thread } from './types'
 
@@ -16,14 +17,25 @@ export interface ChatState {
   tasksRev: number
   /** Bumped whenever something that belongs in the inbox may have changed. */
   inboxRev: number
+  /** Bumped whenever a schedule changes or fires. */
+  schedulesRev: number
   runs: Record<string, RunView>
+  /** Installs and logins on machines, by job id. */
+  jobs: Record<string, JobView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, runs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runs: {}, jobs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
+
+/** Messages to show: a silent end of a turn that already spoke in steps
+ * says nothing new, so it is left out. */
+export function visibleMessages(msgs: Message[]): Message[] {
+  const spoke = new Set(msgs.filter((m) => m.kind === 'step').map((m) => m.reply_to))
+  return msgs.filter((m) => !(m.kind === 'silent' && !m.content && spoke.has(m.reply_to)))
+}
 
 export function sortThreads(threads: Thread[]): Thread[] {
   return threads.sort((a, b) => {
@@ -72,6 +84,10 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     state.lastSeq = ev.seq
   }
   const p = ev.payload ?? {}
+  if (applyJobEvent(state.jobs, ev)) {
+    if (ev.type === 'agent.job.ended') state.nodesRev++
+    return true
+  }
   if (ev.type.startsWith('node.')) {
     state.nodesRev++
     state.tasksRev++ // queued tasks may start
@@ -82,8 +98,18 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     if (ev.type === 'task.status' || ev.type === 'task.updated') state.inboxRev++
     return true
   }
-  // A run that ends expires its pending approvals without an approval event.
-  if (ev.type.startsWith('approval.') || ev.type === 'run.ended') state.inboxRev++
+  if (ev.type.startsWith('schedule.')) {
+    state.schedulesRev++
+    return true
+  }
+  // A run that ends (or pauses) expires its pending approvals without an approval event.
+  if (ev.type.startsWith('approval.') || ev.type === 'run.ended' || ev.type === 'run.paused' || ev.type === 'run.resumed') {
+    state.inboxRev++
+  }
+  if (ev.type === 'inspector.finding') {
+    state.inboxRev++
+    return true
+  }
   if (ev.type === 'run.ended' || ev.type === 'run.queued') state.tasksRev++
   if (applyRunEvent(state.runs, ev)) return true
   switch (ev.type) {
@@ -117,6 +143,21 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
       touch(state, ev.thread_id!, ev.ts)
       break
     }
+    case 'trigger.fired': {
+      // Input nobody typed: a schedule or a follow-up, stored as a user message.
+      upsertMessage(state, {
+        id: p.message_id,
+        thread_id: ev.thread_id!,
+        role: 'user',
+        content: p.content,
+        kind: 'trigger',
+        seq: ev.seq,
+        created_at: ev.ts,
+      })
+      touch(state, ev.thread_id!, ev.ts)
+      if (p.schedule_id) state.schedulesRev++
+      break
+    }
     case 'memory.put':
     case 'memory.deleted':
       state.memoryRev++
@@ -145,14 +186,16 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
   return true
 }
 
-/** True while the supervisor is answering in this thread. */
+/** True while the supervisor is answering in this thread. A step (what it
+ * said before calling tools) does not end the answer; the turn's last
+ * message does. */
 export function isAnswering(state: ChatState, threadId: string): boolean {
   const msgs = state.messages[threadId] ?? []
   if (msgs.some((m) => m.streaming)) return true
   let answered = 0
   let newest = 0
   for (const m of msgs) {
-    if (m.role === 'assistant' && (m.reply_to ?? 0) > answered) answered = m.reply_to!
+    if (m.role === 'assistant' && m.kind !== 'step' && (m.reply_to ?? 0) > answered) answered = m.reply_to!
     if (m.role === 'user' && m.seq !== DRAFT_SEQ) newest = m.seq
   }
   return newest > answered

@@ -45,7 +45,7 @@ const (
 
 // Ephemeral reports whether events of this type are published but never stored.
 func (t Type) Ephemeral() bool {
-	return t == MessageAssistantDelta || t == RunOutput
+	return t == MessageAssistantDelta || t == RunOutput || t == AgentJobOutput
 }
 
 // Actors.
@@ -108,12 +108,21 @@ type MessagePayload struct {
 	// Kind is empty for a normal message, "notice" for a proactive
 	// notification, or "silent" for a turn that chose not to speak.
 	Kind string `json:"kind,omitempty"`
+	// Notify asks for a push notification for a report.
+	Notify bool `json:"notify,omitempty"`
+	// Context is what the user was looking at on the workbench (M5).
+	Context *MessageContext `json:"context,omitempty"`
 }
 
 // Message kinds.
 const (
 	KindNotice = "notice"
 	KindSilent = "silent"
+	// KindStep is what the supervisor said before calling tools, stored
+	// before the tools run so the conversation keeps the real order: words,
+	// then what the tools did (tasks, runs, reports), then the next words.
+	// It does not answer the user message; the turn's last message does.
+	KindStep = "step"
 )
 
 type MemoryPayload struct {

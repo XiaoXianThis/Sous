@@ -4,7 +4,7 @@
   import { startSession, stopSession } from './lib/app.svelte'
   import type { Me } from './lib/types'
   import Login from './components/Login.svelte'
-  import Chat from './components/Chat.svelte'
+  import Shell from './components/Shell.svelte'
 
   let me = $state<Me | null>(null)
   let error = $state('')
@@ -42,7 +42,7 @@
 {:else if !me.logged_in}
   <Login {me} onLoggedIn={refresh} />
 {:else}
-  <Chat onLogout={logout} />
+  <Shell onLogout={logout} />
 {/if}
 
 <style>

@@ -16,3 +16,5 @@ Requirements, designs, and tasks: documents about work in progress.
 | spec | apps | status |
 |---|---|---|
 | [sous-mvp](sous-mvp/) | core, web | 设计评审中 |
+| [agent-admin](agent-admin/) | core, web | 已实现，部分 agent 待实测 |
+| [m5-workbench](m5-workbench/) | core, web | 已实现并验收（含真实模型），Linux 真机待验收 |

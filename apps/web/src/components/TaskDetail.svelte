@@ -2,14 +2,18 @@
   import { api } from '../lib/api'
   import { chat } from '../lib/app.svelte'
   import { agentChoices, isOpen, modeText, statusText } from '../lib/tasks'
-  import type { Node, Project, Run, Task } from '../lib/types'
+  import type { Node, Persona, Project, Run, Task } from '../lib/types'
   import Sheet from './Sheet.svelte'
 
-  let { id, onClose, onOpenTask, onOpenThread }: {
+  let { id, onClose, onOpenTask, onOpenThread, projectId: presetProject = '', compact = false }: {
     id: string // 'new' for a new task
     onClose: () => void
     onOpenTask: (id: string) => void
     onOpenThread: (id: string) => void
+    /** A new task's project. */
+    projectId?: string
+    /** Embedded in the task page: no run list (the page shows the runs). */
+    compact?: boolean
   } = $props()
 
   let task = $state<Task | null>(null)
@@ -17,6 +21,7 @@
   let subtasks = $state<Task[]>([])
   let projects = $state<Project[]>([])
   let nodes = $state<Node[]>([])
+  let personas = $state<Persona[]>([])
   let error = $state('')
   let missing = $state(false)
   let busy = $state(false)
@@ -29,6 +34,8 @@
   let agent = $state('')
   let node = $state('')
   let mode = $state('')
+  let persona = $state('')
+  let kind = $state<Task['kind'] | ''>('')
   let dirty = $state(false)
 
   const isNew = $derived(id === 'new')
@@ -36,9 +43,11 @@
 
   async function load() {
     try {
-      const [p, n] = await Promise.all([api.projects(), api.nodes()])
+      const [p, n, ps] = await Promise.all([api.projects(), api.nodes(), api.personas()])
       projects = p.projects
       nodes = n.nodes
+      personas = ps.personas
+      if (isNew && !dirty && presetProject && !projectId && presetProject !== 'misc') projectId = presetProject
       if (!isNew) {
         const d = await api.task(id)
         task = d.task
@@ -56,11 +65,13 @@
   function fill(t: Task) {
     title = t.title
     detail = t.detail
-    projectId = t.project_id
+    projectId = t.project_id === 'misc' ? '' : t.project_id
     priority = t.priority
     agent = t.agent_pref
     node = t.node_pref
     mode = t.permission_mode
+    persona = t.persona_id
+    kind = t.kind
   }
 
   $effect(() => {
@@ -82,6 +93,9 @@
     }
   }
 
+  // The "misc" project stands for "no repository".
+  const pid = () => projectId || (projects.some((p) => p.id === 'misc') ? 'misc' : '')
+
   async function save(dispatch = false) {
     if (!title.trim()) {
       error = '标题不能为空'
@@ -90,16 +104,17 @@
     await act(async () => {
       if (isNew) {
         const t = await api.createTask({
-          title, detail, project_id: projectId, priority, agent_pref: agent, node_pref: node,
-          permission_mode: mode as Task['permission_mode'], kind: projectId ? 'code' : 'general', dispatch,
+          title, detail, project_id: pid(), priority, agent_pref: agent, node_pref: node,
+          permission_mode: mode as Task['permission_mode'], persona_id: persona, dispatch,
+          kind: kind || (projectId && projectId !== 'misc' ? 'code' : 'general'),
         })
         dirty = false
         onOpenTask(t.id)
         return
       }
       await api.patchTask(id, {
-        title, detail, project_id: projectId, priority, agent_pref: agent, node_pref: node,
-        permission_mode: mode as Task['permission_mode'],
+        title, detail, project_id: pid(), priority, agent_pref: agent, node_pref: node,
+        permission_mode: mode as Task['permission_mode'], persona_id: persona,
       })
       dirty = false
       if (dispatch) await api.dispatchTask(id)
@@ -141,10 +156,26 @@
     <div class="grid">
       <label>项目
         <select bind:value={projectId} disabled={!isNew && !!task && task.status !== 'inbox' && task.status !== 'planned'}>
-          <option value="">无（一般任务）</option>
-          {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
+          <option value="">杂项（一般任务）</option>
+          {#each projects.filter((p) => p.id !== 'misc') as p}<option value={p.id}>{p.name}</option>{/each}
         </select>
       </label>
+      <label>岗位
+        <select bind:value={persona}>
+          <option value="">按项目默认</option>
+          {#each personas as p}<option value={p.id}>{p.glyph} {p.name}</option>{/each}
+        </select>
+      </label>
+      {#if isNew}
+        <label>类型
+          <select bind:value={kind}>
+            <option value="">自动</option>
+            <option value="code">代码任务</option>
+            <option value="general">一般任务</option>
+            <option value="ops">运维任务（服务器）</option>
+          </select>
+        </label>
+      {/if}
       <label>优先级<input type="number" bind:value={priority} min="-10" max="10" /></label>
       <label>agent
         <select bind:value={agent}>
@@ -204,6 +235,7 @@
         </ul>
       </section>
     {/if}
+    {#if !compact}
     <section>
       <h3>执行记录</h3>
       {#if runs.length === 0}<p class="muted">还没有执行过。</p>{/if}
@@ -222,6 +254,7 @@
       </ul>
       {#if task.branch}<p class="muted">分支：{task.branch}{task.base_branch ? ` → ${task.base_branch}` : ''}</p>{/if}
     </section>
+    {/if}
   {/if}
   {/if}
 </Sheet>

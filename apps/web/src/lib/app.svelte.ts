@@ -2,24 +2,63 @@
 import { api } from './api'
 import { applyEvent, emptyState, mergeHistory, sortThreads } from './reduce'
 import { runFromHistory } from './runs'
-import { parseHash } from './tasks'
+import { home, parseRoute, routeHash, type Route } from './route'
 import { EventStream, type StreamStatus } from './stream'
-import type { HubEvent } from './types'
+import type { HubEvent, MessageContext, Overview } from './types'
 
 export const chat = $state(emptyState())
 
 export const ui = $state({
   status: 'connecting' as StreamStatus,
   current: '' as string,
-  /** The main pane: a conversation or the task board. */
-  view: 'chat' as 'chat' | 'tasks',
-  /** The task open in the detail sheet: an id, 'new', or ''. */
-  task: '' as string,
-  /** Scroll the inbox into view (after opening an approval link). */
-  focusInbox: 0,
   loaded: {} as Record<string, boolean>,
   error: '' as string,
+  /** M5: what the workbench shows. */
+  route: { ...home } as Route,
+  /** The chat panel is open (desktop) or the chat tab is shown (phone). */
+  chatOpen: true,
+  /** The settings tab open in the full-screen settings, or ''. */
+  settings: '' as string,
+  /** Phone: which bottom tab is shown. */
+  tab: 'chat' as 'chat' | 'work' | 'inbox',
+  /** The workbench context sent with the next message; cleared by the user. */
+  dropContext: false,
 })
+
+/** Everything the workbench draws; reloaded when tasks, machines or approvals change. */
+export const wb = $state({ data: null as Overview | null, error: '' })
+
+let overviewLoading: Promise<void> | null = null
+export function loadOverview(): Promise<void> {
+  overviewLoading ??= api
+    .overview()
+    .then((d) => {
+      wb.data = d
+      wb.error = ''
+    })
+    .catch((e) => {
+      wb.error = (e as Error).message
+    })
+    .finally(() => (overviewLoading = null))
+  return overviewLoading
+}
+
+/** Shows a page of the workbench and records it in the URL. */
+export function go(r: Route) {
+  ui.route = { ...r }
+  ui.tab = 'work'
+  ui.dropContext = false
+  const h = routeHash(r)
+  if (location.hash !== h) history.pushState(null, '', h)
+}
+
+/** The project or task the user is looking at, sent with a message. */
+export function currentContext(): MessageContext | undefined {
+  if (ui.dropContext) return undefined
+  if (ui.route.view === 'task' && ui.route.id) return { task_id: ui.route.id }
+  if (ui.route.view === 'project' && ui.route.id) return { project_id: ui.route.id }
+  return undefined
+}
 
 let stream: EventStream | null = null
 
@@ -52,7 +91,6 @@ export function stopSession() {
 
 export async function openThread(id: string) {
   ui.current = id
-  ui.view = 'chat'
   if (ui.loaded[id]) return
   const [page, { runs }] = await Promise.all([api.messages(id), api.runs(id)])
   mergeHistory(chat, id, page.messages)
@@ -75,7 +113,7 @@ export async function newThread() {
 }
 
 export async function send(content: string) {
-  await api.send(ui.current, content)
+  await api.send(ui.current, content, currentContext())
 }
 
 /** Shows a system notification for a notice while the page is in the background. */
@@ -93,15 +131,18 @@ function maybeNotify(ev: HubEvent) {
   }
 }
 
-/** Follows a link from a push notification: #approvals, #task=<id>, #thread=<id>. */
+/** Follows the URL hash: workbench routes and links from push notifications. */
 export async function followHash(hash: string) {
-  const r = parseHash(hash)
-  if (r.thread && chat.threads.some((t) => t.id === r.thread)) await openThread(r.thread)
-  if (r.task) ui.task = r.task
-  if (r.approvals) {
-    const main = chat.threads.find((t) => t.kind === 'main')
-    if (main) await openThread(main.id)
-    ui.focusInbox++
+  const r = parseRoute(hash)
+  if (r.thread && chat.threads.some((t) => t.id === r.thread)) {
+    await openThread(r.thread)
+    ui.chatOpen = true
+    ui.tab = 'chat'
+    history.replaceState(null, '', routeHash(ui.route))
+    return
   }
-  if (r.thread || r.task || r.approvals) history.replaceState(null, '', location.pathname)
+  ui.route = { view: r.view, id: r.id }
+  if (r.view !== 'overview') ui.tab = r.view === 'inbox' ? 'inbox' : 'work'
+  // Old push links (#approvals, #task=) become workbench routes.
+  if (!hash.startsWith('#/') && hash !== '') history.replaceState(null, '', routeHash(ui.route))
 }

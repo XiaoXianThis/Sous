@@ -30,6 +30,14 @@ const (
 	TApprovalDecide  = "approval.decide"
 
 	TWorkspaceRemove = "workspace.remove"
+
+	// M4
+	TRunPause     = "run.pause"     // stop the agent's current turn and wait
+	TRunResume    = "run.resume"    // continue a paused run
+	TRunDelivered = "run.delivered" // follow-up messages reached the agent's session
+	TNodeUpdate   = "node.update"   // download a release and restart
+	// TNodeUpdateResult reports how an update went, before the restart.
+	TNodeUpdateResult = "node.update_result"
 )
 
 // Frame is one message. Frames from the node that must not be lost carry a
@@ -61,6 +69,10 @@ type Hello struct {
 	Hostname string `json:"hostname"`
 	// LastAckedSeq lets the Hub know which frames the node will resend.
 	LastAckedSeq int64 `json:"last_acked_seq"`
+	// Caps lists optional features the node supports (CapAdmin).
+	Caps []string `json:"caps,omitempty"`
+	// Admin is false when node.json turned remote administration off.
+	Admin bool `json:"admin,omitempty"`
 }
 
 type Welcome struct {
@@ -80,11 +92,39 @@ type AgentInfo struct {
 	// LoggedIn is nil when the node cannot tell.
 	LoggedIn *bool  `json:"logged_in,omitempty"`
 	Note     string `json:"note,omitempty"`
+
+	// Remote administration (nodes with CapAdmin).
+	// Install, Upgrade, Login and Logout are the commands sous would run;
+	// empty when there is none on this system.
+	Install string `json:"install,omitempty"`
+	Upgrade string `json:"upgrade,omitempty"`
+	Login   string `json:"login,omitempty"`
+	Logout  string `json:"logout,omitempty"`
+	// Missing lists commands the agent needs that are not on PATH (npx).
+	Missing []string `json:"missing,omitempty"`
+	// KeyEnv are the environment variables that can hold an API key;
+	// EnvSet the ones set in node.json (names only).
+	KeyEnv []string `json:"key_env,omitempty"`
+	EnvSet []string `json:"env_set,omitempty"`
+	// Options are the session settings the agent reported the last time a
+	// session opened; Defaults what node.json sets them to.
+	Options    []ConfigOption    `json:"options,omitempty"`
+	OptionsAt  int64             `json:"options_at,omitempty"` // ms
+	Defaults   map[string]string `json:"defaults,omitempty"`
+	Configs    []AgentConfigFile `json:"configs,omitempty"`
+	LaunchOver bool              `json:"launch_override,omitempty"` // node.json overrides how it starts
+	// Job is the install or login running for the agent now, if any.
+	Job *JobStarted `json:"job,omitempty"`
 }
 
 type Inventory struct {
 	Agents      []AgentInfo `json:"agents"`
 	Concurrency int         `json:"concurrency"`
+	// M5: the machine's role (node.json), its workspaces, and the version
+	// of wok on PATH (empty: not installed).
+	Role       string   `json:"role,omitempty"`
+	Workspaces []string `json:"workspaces,omitempty"`
+	Wok        string   `json:"wok,omitempty"`
 }
 
 type Ack struct {
@@ -115,6 +155,12 @@ type RunStart struct {
 	BaseBranch string `json:"base_branch,omitempty"`
 	Title      string `json:"title,omitempty"` // the task title: branch name, commit and PR title
 	Force      bool   `json:"force,omitempty"` // deliver after a rebase: push --force-with-lease
+	// M5: Options are session config options the task's persona sets (they
+	// win over node.json's defaults, never over what sous forces); Persona
+	// names it, for status lines. Setup is for clone and create runs.
+	Options map[string]string `json:"options,omitempty"`
+	Persona string            `json:"persona,omitempty"`
+	Setup   *Setup            `json:"setup,omitempty"`
 }
 
 // Run purposes.
@@ -127,6 +173,38 @@ const (
 type RunMessage struct {
 	RunID string `json:"run_id"`
 	Text  string `json:"text"`
+	// MessageID lets the node drop a message it already has and report
+	// which ones the agent read (run.delivered).
+	MessageID string `json:"message_id,omitempty"`
+}
+
+// RunPause asks the node to stop the agent's current turn and hold the run
+// until run.resume, a run.message (which resumes with that text) or run.cancel.
+type RunPause struct {
+	RunID  string `json:"run_id"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type RunResume struct {
+	RunID string `json:"run_id"`
+	Text  string `json:"text,omitempty"` // empty: "continue"
+}
+
+// RunDelivered reports follow-up messages that are now in the agent's session.
+type RunDelivered struct {
+	RunID      string   `json:"run_id"`
+	MessageIDs []string `json:"message_ids"`
+}
+
+type NodeUpdateResult struct {
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// NodeUpdate asks the node to install a release from GitHub and restart.
+type NodeUpdate struct {
+	Version string `json:"version"` // a tag such as v0.2.0; empty: the latest
+	Repo    string `json:"repo"`    // owner/name on GitHub
 }
 
 type RunCancel struct {

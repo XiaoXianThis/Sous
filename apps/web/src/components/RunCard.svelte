@@ -4,14 +4,14 @@
   import ApprovalCard from './ApprovalCard.svelte'
   import TextViewer from './TextViewer.svelte'
 
-  let { view, nodeName }: { view: RunView; nodeName: (id: string) => string } = $props()
+  let { view, nodeName, full = false }: { view: RunView; nodeName: (id: string) => string; full?: boolean } = $props()
 
   const run = $derived(view.run)
   const pending = $derived(view.approvals.filter((a) => a.status === 'pending'))
   const statusText: Record<string, string> = {
     queued: '排队中', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
   }
-  const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付' }
+  const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付', clone: 'clone', create: '新建项目' }
   const toolIcon: Record<string, string> = { completed: '✓', failed: '✕', in_progress: '…', pending: '·' }
   let busy = $state('')
   let error = $state('')
@@ -41,13 +41,16 @@
 
 <section class="run {run.status}" data-testid="run-card">
   <header>
-    <span class="badge">{statusText[run.status] ?? run.status}</span>
+    <span class="badge">{run.paused && isActive(run) ? '已暂停' : (statusText[run.status] ?? run.status)}</span>
+    {#if run.recovery_note}<span class="purpose" title={run.recovery_note}>中断后重新开始</span>{/if}
     {#if purposeText[run.purpose]}<span class="purpose">{purposeText[run.purpose]}</span>{/if}
-    <strong>{run.purpose === 'deliver' ? 'sous' : run.agent}</strong>
+    <strong>{run.persona && (run.purpose === 'work' || run.purpose === 'rebase') ? `${run.persona} · ` : ''}{run.purpose === 'deliver' ? 'sous' : run.agent}</strong>
     <span class="where">@ {nodeName(run.node_id)}{#if run.branch} · {run.branch}{/if}</span>
   </header>
   {#if run.purpose === 'deliver'}
     <p class="prompt">push 分支并创建 PR{run.title ? `：${run.title}` : ''}</p>
+  {:else if run.purpose === 'clone' || run.purpose === 'create'}
+    <p class="prompt">{run.title}</p>
   {:else}
     <p class="prompt" title={run.prompt}>{run.prompt}</p>
   {/if}
@@ -60,16 +63,18 @@
   {/if}
   {#if view.tools.length}
     <ul class="tools">
-      {#each view.tools.slice(-8) as t (t.id)}
+      {#each full ? view.tools : view.tools.slice(-8) as t (t.id)}
         {@const done = t.status === 'completed' || t.status === 'failed'}
         <li class={done || isActive(run) ? t.status : 'stopped'}>
           <span class="ico">{done || isActive(run) ? (toolIcon[t.status] ?? '·') : '–'}</span>{t.title}
         </li>
       {/each}
-      {#if view.tools.length > 8}<li class="more">还有 {view.tools.length - 8} 个更早的步骤</li>{/if}
+      {#if !full && view.tools.length > 8}<li class="more">还有 {view.tools.length - 8} 个更早的步骤</li>{/if}
     </ul>
   {/if}
-  {#if view.statusLine && isActive(run)}<p class="status-line">{view.statusLine}</p>{/if}
+  {#if run.paused && isActive(run)}
+    <p class="paused" role="status">已暂停{run.pause_reason ? `：${run.pause_reason}` : ''}</p>
+  {:else if view.statusLine && isActive(run)}<p class="status-line">{view.statusLine}</p>{/if}
 
   {#each pending as a (a.id)}
     <ApprovalCard approval={a} />
@@ -88,6 +93,11 @@
   {/if}
 
   <footer>
+    {#if isActive(run) && run.paused}
+      <button class="link strong" disabled={!!busy} onclick={() => act('resume', () => api.resumeRun(run.id))}>继续</button>
+    {:else if run.status === 'running' && run.purpose !== 'deliver'}
+      <button class="link" disabled={!!busy} onclick={() => act('pause', () => api.pauseRun(run.id))}>暂停</button>
+    {/if}
     {#if isActive(run)}
       <button class="link" disabled={!!busy} onclick={() => act('cancel', () => api.cancelRun(run.id))}>取消</button>
     {/if}
@@ -124,6 +134,8 @@
   .ico { display: inline-block; width: 1.2em; }
   .more { font-style: italic; }
   .status-line { margin: 0; font-size: 13px; color: var(--muted); }
+  .paused { margin: 0; font-size: 13px; color: var(--warm); }
+  .link.strong { color: var(--accent); font-weight: 600; }
   .purpose { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
   .meta a { color: var(--accent); }
   .output {

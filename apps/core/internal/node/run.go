@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,12 +26,20 @@ const (
 	// cancelGrace is how long an agent gets to stop after session/cancel
 	// before its process is killed.
 	cancelGrace = 10 * time.Second
+	// startAttempts bounds how often a transient failure to start an agent
+	// is retried (design §7.6).
+	startAttempts = 3
 )
 
+// startBackoff is the wait before the second and third start attempt.
+var startBackoff = []time.Duration{2 * time.Second, 5 * time.Second}
+
 // Modes that make an agent ask before every change, and modes that let it
-// do everything, by the ids agents use for them.
+// do everything, by the ids agents use for them. "ask" is not among them:
+// Cursor uses it for a read-only Q&A mode. Agents whose names differ set
+// AskMode / OpenMode in their spec.
 var (
-	askModes  = []string{"default", "ask", "manual"}
+	askModes  = []string{"default", "manual"}
 	openModes = []string{"bypassPermissions", "yolo", "full-access", "auto"}
 )
 
@@ -41,20 +50,40 @@ type run struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu         sync.Mutex
-	client     *acp.Client
-	sessionID  string
-	isStarted  bool
-	stopReason string // set by stop()
-	followUps  []string
-	approvals  map[string]chan string
-	turnText   strings.Builder
-	workdir    string
+	mu          sync.Mutex
+	client      *acp.Client
+	sessionID   string
+	canLoad     bool // the agent can resume the session after a restart
+	isStarted   bool
+	inTurn      bool
+	stopReason  string // set by stop()
+	shutdown    bool   // the daemon is stopping: keep the run to resume it
+	followUps   []string
+	followIDs   []string        // message ids of followUps that have one
+	seen        map[string]bool // message ids received, so a resend is dropped
+	delivered   []string        // message ids that reached the agent's session
+	paused      bool
+	pauseReason string
+	pauseCut    bool          // a pause cancelled the current turn
+	wake        chan struct{} // a paused run has something to do
+	approvals   map[string]chan string
+	notes       map[string]string // why the user or the approver refused, by approval id
+	// refused lists what was refused during the current turn. Some agents
+	// (OpenCode) end the turn as "cancelled" when a permission is refused;
+	// the run then tells the agent and lets it continue (maxRefusalTurns).
+	refused      []string
+	refusalTurns int
+	turnText    strings.Builder
+	workdir     string
+	loading     bool // replaying a loaded session: its updates are old news
+	// resumed is set for a run restored after a restart of the daemon.
+	resumed *savedRun
 }
 
 func newRun(d *Daemon, s proto.RunStart) *run {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &run{d: d, spec: s, ctx: ctx, cancel: cancel, approvals: map[string]chan string{}}
+	return &run{d: d, spec: s, ctx: ctx, cancel: cancel, approvals: map[string]chan string{}, notes: map[string]string{}, seen: map[string]bool{},
+		wake: make(chan struct{}, 1)}
 }
 
 func (r *run) started() bool {
@@ -67,13 +96,26 @@ func (r *run) status(text string) {
 	r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{RunID: r.spec.RunID, Kind: proto.UpdateStatus, Text: text}))
 }
 
+// end reports the run's end, unless the daemon is stopping: then the run
+// stays saved, and the next daemon resumes it or reports it interrupted.
 func (r *run) end(status, stopReason, summary, diffstat string, err error) {
+	if r.isShutdown() {
+		slog.Info("daemon: run left for the next start", "run", r.spec.RunID)
+		return
+	}
 	e := proto.RunEnded{RunID: r.spec.RunID, Status: status, StopReason: stopReason, Summary: summary, DiffStat: diffstat}
 	if err != nil {
 		e.Error = err.Error()
 	}
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
+	r.d.forget(r.spec.RunID)
 	slog.Info("daemon: run ended", "run", r.spec.RunID, "status", status, "err", err)
+}
+
+func (r *run) isShutdown() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.shutdown
 }
 
 // execute runs the agent until its turn ends, then reports the diff.
@@ -90,7 +132,11 @@ func (r *run) execute() {
 		r.deliver()
 		return
 	}
-	spec, ok := agents.Find(r.d.specs, r.spec.Agent)
+	if r.spec.Purpose == proto.PurposeClone || r.spec.Purpose == proto.PurposeCreate {
+		r.setup()
+		return
+	}
+	spec, ok := r.d.findSpec(r.spec.Agent)
 	if !ok {
 		r.end("failed", "", "", "", fmt.Errorf("这台机器不认识 agent %q", r.spec.Agent))
 		return
@@ -101,9 +147,18 @@ func (r *run) execute() {
 		r.end("failed", "", "", "", fmt.Errorf("准备工作目录失败：%w", err))
 		return
 	}
-	r.markStarted(ws)
+	if r.resumed == nil {
+		r.markStarted(ws)
+	} else {
+		r.mu.Lock()
+		r.isStarted, r.workdir = true, ws.Dir
+		r.mu.Unlock()
+	}
 
 	status, stop, err := r.drive(spec, ws)
+	if r.isShutdown() {
+		return // the agent was killed with the daemon; nothing to report yet
+	}
 
 	// Report what changed even when the turn failed part way.
 	diff, stat, derr := workspace.Diff(context.Background(), ws)
@@ -122,8 +177,16 @@ func (r *run) prepare() (workspace.Prepared, error) {
 	if key == "" {
 		key = r.spec.RunID
 	}
+	if r.spec.Kind == proto.KindOps {
+		if r.spec.RepoPath == "" {
+			return workspace.Prepared{}, errors.New("运维任务需要项目在这台机器上的目录")
+		}
+		return workspace.PrepareInPlace(r.spec.RepoPath)
+	}
 	if r.spec.RepoPath != "" {
-		r.status("正在准备独立的 git worktree")
+		if r.resumed == nil {
+			r.status("正在准备独立的 git worktree")
+		}
 		return workspace.PrepareTask(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title))
 	}
 	return workspace.PrepareGeneral(r.d.root, key)
@@ -133,64 +196,294 @@ func (r *run) markStarted(ws workspace.Prepared) {
 	r.mu.Lock()
 	r.isStarted = true
 	r.workdir = ws.Dir
+	r.spec.Branch = ws.Branch // a resumed run finds the same worktree
 	r.mu.Unlock()
+	r.save()
 	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch, BaseBranch: ws.BaseBranch}))
 }
 
-// drive starts the agent, opens a session and sends the prompt, then any
-// follow-up messages that arrived meanwhile.
-func (r *run) drive(spec agents.Spec, ws workspace.Prepared) (status, stop string, err error) {
+// open starts the agent and opens (or, after a restart, loads) its session.
+// Transient failures are retried a few times.
+func (r *run) open(spec agents.Spec, ws workspace.Prepared) (*acp.Client, acp.Session, error) {
+	var lastErr error
+	for attempt := 1; attempt <= startAttempts; attempt++ {
+		client, session, err := r.openOnce(spec, ws)
+		if err == nil {
+			return client, session, nil
+		}
+		lastErr = err
+		if r.ctx.Err() != nil || errors.Is(err, acp.ErrNotLoggedIn) || !transient(err) || attempt == startAttempts {
+			break
+		}
+		wait := startBackoff[attempt-1]
+		r.status(fmt.Sprintf("启动 %s 遇到临时故障，%d 秒后重试（第 %d 次）：%s", spec.Title, int(wait.Seconds()), attempt, truncate(err.Error(), 200)))
+		select {
+		case <-r.ctx.Done():
+			return nil, acp.Session{}, err
+		case <-time.After(wait):
+		}
+	}
+	return nil, acp.Session{}, lastErr
+}
+
+func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, acp.Session, error) {
 	cmd, err := spec.Command(ws.Dir)
 	if err != nil {
-		return "failed", "", fmt.Errorf("找不到 %s 的启动命令 %q：%w", spec.Title, spec.Launch[0], err)
+		return nil, acp.Session{}, fmt.Errorf("找不到 %s 的启动命令 %q：%w", spec.Title, spec.Launch[0], err)
 	}
 	r.status("正在启动 " + spec.Title)
 	client, err := acp.Start(r.ctx, cmd, acp.Callbacks{OnUpdate: r.onUpdate, OnPermission: r.onPermission})
 	if err != nil {
-		return r.failure(fmt.Errorf("启动 %s 失败：%w", spec.Title, err))
+		return nil, acp.Session{}, fmt.Errorf("启动 %s 失败：%w", spec.Title, err)
 	}
-	defer client.Close()
+	if sv := r.resumed; sv != nil && sv.SessionID != "" && client.Init.LoadSession() {
+		r.mu.Lock()
+		r.loading = true
+		r.mu.Unlock()
+		session, err := client.LoadSession(r.ctx, sv.SessionID, ws.Dir)
+		r.mu.Lock()
+		r.loading = false
+		r.mu.Unlock()
+		if err == nil {
+			r.status("sous 重启过，已恢复 " + spec.Title + " 之前的会话，继续执行")
+			return client, session, nil
+		}
+		client.Close()
+		return nil, acp.Session{}, fmt.Errorf("恢复 %s 的会话失败：%w", spec.Title, err)
+	}
 	session, err := client.NewSession(r.ctx, ws.Dir)
 	if err != nil {
+		client.Close()
 		if errors.Is(err, acp.ErrNotLoggedIn) {
-			return "failed", "", fmt.Errorf("%s 还没有登录，请先在这台电脑上登录：%w", spec.Title, err)
+			return nil, acp.Session{}, fmt.Errorf("%s 还没有登录，请先在这台电脑上登录：%w", spec.Title, err)
+		}
+		return nil, acp.Session{}, err
+	}
+	return client, session, nil
+}
+
+// transientRE matches failures worth another try: network trouble and
+// overloaded services (HTTP 408, 429, 5xx).
+var transientRE = regexp.MustCompile(`(?i)ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|connection (reset|refused)|timed? ?out|timeout|\b(408|429|50[0-9])\b|too many requests|overloaded|service unavailable|bad gateway|temporarily`)
+
+func transient(err error) bool { return err != nil && transientRE.MatchString(err.Error()) }
+
+// drive starts the agent, opens a session and sends the prompt, then any
+// follow-up messages that arrived meanwhile. A paused run waits between
+// turns until it is resumed.
+func (r *run) drive(spec agents.Spec, ws workspace.Prepared) (status, stop string, err error) {
+	client, session, err := r.open(spec, ws)
+	if err != nil {
+		if r.resumed != nil && r.ctx.Err() == nil {
+			// The session could not be resumed: the Hub starts the task
+			// again with a recovery note.
+			return "interrupted", "", fmt.Errorf("sous 重启后没能恢复 agent 的会话：%w", err)
 		}
 		return r.failure(err)
 	}
+	defer client.Close()
 	r.mu.Lock()
-	r.client, r.sessionID = client, session.ID
+	r.client, r.sessionID, r.canLoad = client, session.ID, client.Init.LoadSession()
 	r.mu.Unlock()
-	if mode := pickMode(session, r.spec.PermissionMode); mode != "" && mode != session.CurrentMode {
+	r.save()
+	if len(session.Options) > 0 {
+		forced := spec.AskOptions
+		if r.spec.PermissionMode == proto.ModeOpen {
+			forced = spec.OpenOptions
+		}
+		opts, err := r.d.admin.applyDefaults(r.ctx, client, session, spec, forced, r.spec.Options, r.status)
+		if err != nil {
+			return r.failure(err)
+		}
+		session.Options = opts
+		r.d.admin.remember(spec, session.Options)
+	}
+	if mode := pickMode(session, r.spec.PermissionMode, spec); mode != "" && mode != session.CurrentMode {
 		if err := client.SetMode(r.ctx, session.ID, mode); err != nil {
 			slog.Warn("daemon: set mode failed", "run", r.spec.RunID, "mode", mode, "err", err)
 		}
 	}
 
-	prompt := r.firstPrompt(ws)
+	var prompt string
+	var promptIDs []string
+	if r.resumed != nil {
+		prompt = "（sous 在这台电脑上重启过，你上一轮的执行被打断了。先看一下工作目录和 git 状态，确认做到了哪一步，再接着完成任务；不要重复已经完成的对外操作，比如 push。）"
+		if more, ids := r.takeFollowUps(); len(more) > 0 {
+			prompt += "\n\n" + strings.Join(more, "\n\n")
+			promptIDs = ids
+		}
+	} else {
+		prompt = r.firstPrompt(ws)
+	}
 	for {
+		text, ids, ok := r.waitIfPaused()
+		if !ok {
+			return "cancelled", "cancelled", errors.New(r.stopReasonText())
+		}
+		if text != "" {
+			if prompt != "" {
+				text = prompt + "\n\n" + text
+				ids = append(promptIDs, ids...)
+			}
+			prompt, promptIDs = text, ids
+		}
+		if prompt == "" {
+			if more, ids := r.takeFollowUps(); len(more) > 0 {
+				prompt, promptIDs = strings.Join(more, "\n\n"), ids
+			}
+		}
+		if prompt == "" {
+			prompt = "用户让你继续。请接着之前的工作做下去；如果刚才是在重复同一个操作，换一个办法。"
+		}
 		r.mu.Lock()
 		r.turnText.Reset()
+		r.inTurn = true
+		r.pauseCut = false
+		r.refused = nil
 		r.mu.Unlock()
+		r.markDelivered(promptIDs)
 		stop, err = client.Prompt(r.ctx, session.ID, prompt)
+		r.mu.Lock()
+		r.inTurn = false
+		paused := r.paused || r.pauseCut
+		r.pauseCut = false
+		refused, stopped := r.refused, r.stopReason != ""
+		r.mu.Unlock()
 		if err != nil {
 			return r.failure(err)
 		}
-		if stop == "cancelled" {
+		prompt, promptIDs = "", nil
+		if stop == "cancelled" && r.ctx.Err() == nil && paused {
+			continue // wait for the resume at the top of the loop
+		}
+		if stop == "cancelled" && (stopped || r.ctx.Err() != nil) {
 			return "cancelled", stop, errors.New(r.stopReasonText())
 		}
-		r.mu.Lock()
-		more := r.followUps
-		r.followUps = nil
-		r.mu.Unlock()
+		if stop == "cancelled" {
+			// Nobody stopped the run: the agent gave up its turn, usually
+			// because an operation was refused. Tell it and let it go on
+			// another way, a few times; then report a failure, not a
+			// cancellation, so the task is reported instead of shelved.
+			if len(refused) == 0 || r.refusalTurns >= maxRefusalTurns {
+				why := "agent 自己结束了这一轮"
+				if len(refused) > 0 {
+					why = "agent 的操作多次被拒绝后停了下来：" + strings.Join(refused, "；")
+				}
+				return "failed", stop, errors.New(why)
+			}
+			r.refusalTurns++
+			prompt = refusalPrompt(refused)
+			if more, ids := r.takeFollowUps(); len(more) > 0 {
+				prompt += "\n\n" + strings.Join(more, "\n\n")
+				promptIDs = ids
+			}
+			r.status("操作被拒绝，让 agent 换个办法继续")
+			continue
+		}
+		more, ids2 := r.takeFollowUps()
 		if len(more) == 0 {
+			if r.isPaused() {
+				continue
+			}
 			break
 		}
-		prompt = strings.Join(more, "\n\n")
+		prompt, promptIDs = strings.Join(more, "\n\n"), ids2
 	}
 	if stop == "end_turn" {
 		return "succeeded", stop, nil
 	}
 	return "failed", stop, fmt.Errorf("agent 停止：%s", stop)
+}
+
+// waitIfPaused blocks while the run is paused. Once it is resumed it
+// returns the follow-ups that arrived meanwhile (maybe none); it returns
+// false when the run is stopped instead.
+func (r *run) waitIfPaused() (string, []string, bool) {
+	announced := false
+	for {
+		r.mu.Lock()
+		paused, reason := r.paused, r.pauseReason
+		r.mu.Unlock()
+		if !paused {
+			if !announced {
+				return "", nil, true
+			}
+			more, ids := r.takeFollowUps()
+			r.status("继续执行")
+			return strings.Join(more, "\n\n"), ids, true
+		}
+		if !announced {
+			announced = true
+			r.status("已暂停：" + firstNonEmpty(reason, "等你处理") + "。发一条消息或点“继续”就会接着做。")
+		}
+		select {
+		case <-r.ctx.Done():
+			return "", nil, false
+		case <-r.wake:
+		}
+	}
+}
+
+func (r *run) isPaused() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.paused
+}
+
+// pause stops the agent's current turn and holds the run.
+func (r *run) pause(reason string) {
+	r.mu.Lock()
+	if r.paused {
+		r.mu.Unlock()
+		return
+	}
+	r.paused, r.pauseReason = true, reason
+	client, sid, inTurn := r.client, r.sessionID, r.inTurn
+	r.pauseCut = inTurn
+	r.mu.Unlock()
+	r.save()
+	r.cancelApprovals()
+	if client != nil && sid != "" && inTurn {
+		client.Cancel(sid)
+	}
+	slog.Info("daemon: run paused", "run", r.spec.RunID, "reason", reason)
+}
+
+// resume continues a paused run.
+func (r *run) resume() {
+	r.mu.Lock()
+	r.paused, r.pauseReason = false, ""
+	r.mu.Unlock()
+	r.save()
+	r.signal()
+}
+
+func (r *run) signal() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *run) takeFollowUps() ([]string, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	more, ids := r.followUps, r.followIDs
+	r.followUps, r.followIDs = nil, nil
+	return more, ids
+}
+
+// markDelivered tells the Hub which follow-ups are going into the agent's
+// session now, so after a restart only the others are sent again (SA-16).
+func (r *run) markDelivered(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.delivered = append(r.delivered, ids...)
+	r.mu.Unlock()
+	r.save()
+	r.d.ob.reliable(proto.New(proto.TRunDelivered, proto.RunDelivered{RunID: r.spec.RunID, MessageIDs: ids}))
 }
 
 // failure classifies an error from the agent: a stop the user asked for is
@@ -208,16 +501,25 @@ func (r *run) firstPrompt(ws workspace.Prepared) string {
 		b.WriteString(r.spec.RecoveryNote + "\n\n")
 	}
 	b.WriteString(r.spec.Prompt)
+	if r.spec.Kind == proto.KindOps {
+		fmt.Fprintf(&b, "\n\n（说明：你直接在这台服务器上项目的目录 %s 里工作，没有 worktree，也不会创建 PR。改文件、删除、启停服务都要用户批准；按部署脚本执行，不要临时修改服务器上的文件。）", ws.Dir)
+	}
 	if ws.Branch != "" {
 		fmt.Fprintf(&b, "\n\n（说明：你在 sous 为这个任务新建的 git worktree 里工作，分支是 %s。可以提交，但不要 push，也不要切换分支；完成后简要说明改了什么。）", ws.Branch)
 	}
 	return b.String()
 }
 
-func pickMode(s acp.Session, permission string) string {
+func pickMode(s acp.Session, permission string, spec agents.Spec) string {
 	want := askModes
+	if spec.AskMode != "" {
+		want = []string{spec.AskMode}
+	}
 	if permission == proto.ModeOpen {
 		want = openModes
+		if spec.OpenMode != "" {
+			want = []string{spec.OpenMode}
+		}
 	}
 	for _, id := range want {
 		for _, m := range s.Modes {
@@ -230,6 +532,12 @@ func pickMode(s acp.Session, permission string) string {
 }
 
 func (r *run) onUpdate(_ string, u acp.Update) {
+	r.mu.Lock()
+	loading := r.loading
+	r.mu.Unlock()
+	if loading {
+		return // the replay of a loaded session: already reported before the restart
+	}
 	id := r.spec.RunID
 	switch u.Kind {
 	case "agent_message_chunk":
@@ -257,30 +565,68 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 // Hub, where the user or the approver agent answers.
 func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.Decision {
 	r.mu.Lock()
-	workdir := r.workdir
+	workdir, paused := r.workdir, r.paused
 	r.mu.Unlock()
+	if paused {
+		return acp.Decision{} // the turn is being cancelled
+	}
 	paths := make([]string, len(req.ToolCall.Locations))
 	for i, l := range req.ToolCall.Locations {
 		paths[i] = l.Path
 	}
-	cat, why := r.d.policy.Classify(policy.Request{
+	cat, why := r.d.pol().Classify(policy.Request{
 		ToolKind: req.ToolCall.Kind, Title: req.ToolCall.Title, RawInput: req.ToolCall.RawInput, Paths: paths, Workdir: workdir,
 	})
 	title := req.ToolCall.Title
 	if title == "" {
 		title = "agent 请求执行一个操作"
 	}
-	switch policy.Decide(r.spec.PermissionMode, cat) {
+	review := "user"
+	switch policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) {
 	case policy.Allow:
 		r.recordPolicy(title, cat, "allow")
 		return acp.Decision{OptionID: pickOption(req.Options, "allow_once", "allow_always")}
 	case policy.Deny:
 		r.recordPolicy(title+"（"+why+"）", cat, "deny")
+		r.noteRefusal(title, "sous 的安全规则禁止："+why)
 		return acp.Decision{OptionID: pickOption(req.Options, "reject_once", "reject_always")}
 	case policy.AskAI:
-		return acp.Decision{OptionID: r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, "ai", toOptions(req.Options))}
+		review = "ai"
 	}
-	return acp.Decision{OptionID: r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, "user", toOptions(req.Options))}
+	opt, note := r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, review, toOptions(req.Options))
+	if kind := optionKind(req.Options, opt); kind == "reject_once" || kind == "reject_always" {
+		r.noteRefusal(title, note)
+	}
+	return acp.Decision{OptionID: opt}
+}
+
+// maxRefusalTurns is how many times a run continues after the agent ended
+// its turn because an operation was refused.
+const maxRefusalTurns = 3
+
+func (r *run) noteRefusal(title, note string) {
+	s := "「" + truncate(title, 120) + "」"
+	if note = strings.TrimSpace(note); note != "" {
+		s += "（理由：" + truncate(note, 200) + "）"
+	}
+	r.mu.Lock()
+	r.refused = append(r.refused, s)
+	r.mu.Unlock()
+}
+
+func refusalPrompt(refused []string) string {
+	return "你刚才请求的这些操作被拒绝了：" + strings.Join(refused, "；") + "。\n\n" +
+		"不要再尝试同样的操作，换一种不需要它们的办法继续完成任务。如果没有它们确实做不下去，说明缺什么，然后结束这一轮。"
+}
+
+// optionKind returns the kind of the option with the given id.
+func optionKind(opts []acp.PermissionOption, id string) string {
+	for _, o := range opts {
+		if o.OptionID == id {
+			return o.Kind
+		}
+	}
+	return ""
 }
 
 func permissionDetail(why string, raw json.RawMessage) string {
@@ -320,8 +666,9 @@ func (r *run) recordPolicy(title string, cat policy.Category, decision string) {
 }
 
 // ask sends an approval request to the Hub and waits for the answer: the
-// chosen option id, or "" when the run stops first.
-func (r *run) ask(title, toolKind, detail string, cat policy.Category, review string, opts []proto.Option) string {
+// chosen option id and the decider's note, or "" when the run stops or
+// pauses first.
+func (r *run) ask(title, toolKind, detail string, cat policy.Category, review string, opts []proto.Option) (string, string) {
 	approvalID := ids.New()
 	ch := make(chan string, 1)
 	r.mu.Lock()
@@ -330,6 +677,7 @@ func (r *run) ask(title, toolKind, detail string, cat policy.Category, review st
 	defer func() {
 		r.mu.Lock()
 		delete(r.approvals, approvalID)
+		delete(r.notes, approvalID)
 		r.mu.Unlock()
 	}()
 	r.d.ob.reliable(proto.New(proto.TApprovalRequest, proto.ApprovalRequest{
@@ -338,15 +686,21 @@ func (r *run) ask(title, toolKind, detail string, cat policy.Category, review st
 	}))
 	select {
 	case opt := <-ch:
-		return opt
+		r.mu.Lock()
+		note := r.notes[approvalID]
+		r.mu.Unlock()
+		return opt, note
 	case <-r.ctx.Done():
-		return ""
+		return "", ""
 	}
 }
 
-func (r *run) decide(approvalID, optionID string) {
+func (r *run) decide(approvalID, optionID, note string) {
 	r.mu.Lock()
 	ch := r.approvals[approvalID]
+	if ch != nil && note != "" {
+		r.notes[approvalID] = note
+	}
 	r.mu.Unlock()
 	if ch != nil {
 		select {
@@ -356,11 +710,44 @@ func (r *run) decide(approvalID, optionID string) {
 	}
 }
 
-// followUp queues an instruction for after the agent's current turn.
-func (r *run) followUp(text string) {
+// cancelApprovals answers every open approval with "cancelled".
+func (r *run) cancelApprovals() {
 	r.mu.Lock()
-	r.followUps = append(r.followUps, text)
+	chans := make([]chan string, 0, len(r.approvals))
+	for _, ch := range r.approvals {
+		chans = append(chans, ch)
+	}
 	r.mu.Unlock()
+	for _, ch := range chans {
+		select {
+		case ch <- "":
+		default:
+		}
+	}
+}
+
+// followUp queues an instruction for after the agent's current turn. A
+// message the run already has (resent after a reconnect) is dropped. A
+// message to a paused run resumes it.
+func (r *run) followUp(text, messageID string) {
+	r.mu.Lock()
+	if messageID != "" {
+		if r.seen[messageID] {
+			r.mu.Unlock()
+			return
+		}
+		r.seen[messageID] = true
+		r.followIDs = append(r.followIDs, messageID)
+	}
+	r.followUps = append(r.followUps, text)
+	wasPaused := r.paused
+	r.paused, r.pauseReason = false, ""
+	r.mu.Unlock()
+	if wasPaused {
+		r.save()
+		r.signal()
+		return
+	}
 	r.status("收到追加指令，会在当前这一步结束后交给 agent")
 }
 
@@ -370,9 +757,9 @@ func (r *run) stop(reason string) {
 	if r.stopReason == "" {
 		r.stopReason = reason
 	}
-	client, sid := r.client, r.sessionID
+	client, sid, inTurn := r.client, r.sessionID, r.inTurn
 	r.mu.Unlock()
-	if client != nil && sid != "" {
+	if client != nil && sid != "" && inTurn {
 		client.Cancel(sid)
 		go func() {
 			select {
@@ -386,12 +773,14 @@ func (r *run) stop(reason string) {
 	r.cancel()
 }
 
-// kill stops the run without waiting for the agent to wind down.
-func (r *run) kill(reason string) {
+// kill stops the run without waiting for the agent to wind down. With
+// keep, the run is left saved for the next daemon (a shutdown).
+func (r *run) kill(reason string, keep bool) {
 	r.mu.Lock()
 	if r.stopReason == "" {
 		r.stopReason = reason
 	}
+	r.shutdown = keep
 	r.mu.Unlock()
 	r.cancel()
 }
@@ -451,4 +840,13 @@ func truncate(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

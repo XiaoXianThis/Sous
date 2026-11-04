@@ -148,6 +148,13 @@ type CreateRun struct {
 	BaseBranch     string
 	Title          string
 	Force          bool
+	RecoveryNote   string // a run that picks up after an interrupted one
+
+	// M5
+	Kind    string            // empty: code with a RepoPath, else general; "ops" runs in place
+	Options map[string]string // the persona's session options
+	Persona string            // the persona's name
+	Setup   *proto.Setup      // clone and create runs
 }
 
 // Create queues a run and dispatches it if its machine is connected.
@@ -155,10 +162,14 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 	r.Agent = strings.TrimSpace(r.Agent)
 	r.Prompt = strings.TrimSpace(r.Prompt)
 	r.RepoPath = strings.TrimSpace(r.RepoPath)
-	if r.Purpose == proto.PurposeDeliver {
-		r.Agent = "sous" // the node itself pushes and opens the pull request
+	setup := r.Purpose == proto.PurposeClone || r.Purpose == proto.PurposeCreate
+	if r.Purpose == proto.PurposeDeliver || setup {
+		r.Agent = "sous" // the node itself pushes, clones or creates
 	}
-	if r.Agent == "" || (r.Prompt == "" && r.Purpose != proto.PurposeDeliver) {
+	if setup && r.Setup == nil {
+		return store.Run{}, errors.New("a setup run needs what to set up")
+	}
+	if r.Agent == "" || (r.Prompt == "" && r.Purpose != proto.PurposeDeliver && !setup) {
 		return store.Run{}, errors.New("agent and prompt are required")
 	}
 	if r.PermissionMode == "" {
@@ -177,9 +188,13 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 	if r.RepoPath != "" {
 		kind = event.RunKindCode
 	}
+	if r.Kind == event.RunKindOps {
+		kind = event.RunKindOps
+	}
 	ev := event.New(event.RunQueued, event.ActorSupervisor, r.ThreadID, event.RunQueuedPayload{
 		NodeID: r.NodeID, Agent: r.Agent, Kind: kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.PermissionMode,
-		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
+		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force, RecoveryNote: r.RecoveryNote,
+		Options: r.Options, Persona: r.Persona, Setup: r.Setup,
 	})
 	ev.RunID = ids.New()
 	ev.TaskID = r.TaskID
@@ -253,8 +268,15 @@ func (h *Hub) Cancel(ctx context.Context, runID, reason string) error {
 	return fmt.Errorf("run is already %s", r.Status)
 }
 
-// Message forwards a follow-up instruction to a running run.
+// Message forwards a follow-up instruction to a running run. It is stored
+// first, so a machine that is away gets it when it reconnects, and a run
+// that is retried after an interruption gets what its agent never read.
 func (h *Hub) Message(ctx context.Context, runID, text string) error {
+	return h.MessageAs(ctx, runID, text, event.ActorUser)
+}
+
+// MessageAs is Message on behalf of the user or the supervisor.
+func (h *Hub) MessageAs(ctx context.Context, runID, text, by string) error {
 	r, err := h.log.Store.Run(ctx, runID)
 	if err != nil {
 		return err
@@ -262,11 +284,96 @@ func (h *Hub) Message(ctx context.Context, runID, text string) error {
 	if r.Status != event.RunStatusRunning {
 		return fmt.Errorf("run is %s", r.Status)
 	}
-	c := h.conn(r.NodeID)
+	msgID := ids.New()
+	ev := event.New(event.RunMessage, by, r.ThreadID, event.RunMessagePayload{MessageID: msgID, Text: text})
+	ev.RunID, ev.TaskID = runID, r.TaskID
+	if _, err := h.log.Append(ctx, ev); err != nil {
+		return err
+	}
+	if r.Paused {
+		// A message to a paused run resumes it with that message.
+		h.appendResumed(ctx, r, text, by)
+	}
+	if c := h.conn(r.NodeID); c != nil {
+		c.send(proto.New(proto.TRunMessage, proto.RunMessage{RunID: runID, Text: text, MessageID: msgID}))
+	}
+	return nil
+}
+
+// Pause stops a run's current turn and holds it until it is resumed, sent a
+// message, or cancelled. The inspector pauses runs that loop.
+func (h *Hub) Pause(ctx context.Context, runID, reason, by string) error {
+	r, err := h.log.Store.Run(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if r.Status != event.RunStatusRunning {
+		return fmt.Errorf("run is %s", r.Status)
+	}
+	if r.Paused {
+		return nil
+	}
+	ev := event.New(event.RunPaused, by, r.ThreadID, event.RunPausePayload{Reason: reason})
+	ev.RunID, ev.TaskID = runID, r.TaskID
+	if _, err := h.log.Append(ctx, ev); err != nil {
+		return err
+	}
+	if c := h.conn(r.NodeID); c != nil {
+		c.send(proto.New(proto.TRunPause, proto.RunPause{RunID: runID, Reason: reason}))
+	}
+	return nil
+}
+
+// Resume continues a paused run, optionally with an instruction.
+func (h *Hub) Resume(ctx context.Context, runID, text, by string) error {
+	r, err := h.log.Store.Run(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if r.Status != event.RunStatusRunning || !r.Paused {
+		return errors.New("这个 Run 没有暂停")
+	}
+	if text != "" {
+		return h.MessageAs(ctx, runID, text, by)
+	}
+	if err := h.appendResumed(ctx, r, "", by); err != nil {
+		return err
+	}
+	if c := h.conn(r.NodeID); c != nil {
+		c.send(proto.New(proto.TRunResume, proto.RunResume{RunID: runID}))
+	}
+	return nil
+}
+
+func (h *Hub) appendResumed(ctx context.Context, r store.Run, text, by string) error {
+	ev := event.New(event.RunResumed, by, r.ThreadID, event.RunPausePayload{Text: text})
+	ev.RunID, ev.TaskID = r.ID, r.TaskID
+	_, err := h.log.Append(ctx, ev)
+	return err
+}
+
+// Undelivered returns the follow-up messages of a run its agent never read.
+func (h *Hub) Undelivered(ctx context.Context, runID string) []store.RunMessage {
+	ms, _ := h.log.Store.RunMessages(ctx, runID)
+	var out []store.RunMessage
+	for _, m := range ms {
+		if !m.Delivered {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// RequestUpdate asks a machine to install a release and restart.
+func (h *Hub) RequestUpdate(ctx context.Context, nodeID, version, repo string) error {
+	c := h.conn(nodeID)
 	if c == nil {
 		return errors.New("机器不在线")
 	}
-	c.send(proto.New(proto.TRunMessage, proto.RunMessage{RunID: runID, Text: text}))
+	if _, err := h.log.Append(ctx, event.New(event.NodeUpdateRequested, event.ActorUser, "", event.NodeUpdatePayload{NodeID: nodeID, Version: version})); err != nil {
+		return err
+	}
+	c.send(proto.New(proto.TNodeUpdate, proto.NodeUpdate{Version: version, Repo: repo}))
 	return nil
 }
 

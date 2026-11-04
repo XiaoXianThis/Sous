@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
+	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
@@ -28,6 +28,7 @@ func (e *Engine) Routes(mux *http.ServeMux, protect func(string, http.HandlerFun
 	protect("DELETE /api/v1/projects/{id}", e.deleteProject)
 
 	protect("GET /api/v1/inbox", e.inbox)
+	e.workbenchRoutes(protect)
 }
 
 func (e *Engine) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +61,7 @@ type taskBody struct {
 	Reason         string    `json:"reason"`
 	Dismissed      *bool     `json:"dismissed"`
 	Dispatch       bool      `json:"dispatch"`
+	PersonaID      *string   `json:"persona_id"`
 }
 
 func deref[T any](p *T) T {
@@ -80,6 +82,7 @@ func (e *Engine) createTask(w http.ResponseWriter, r *http.Request) {
 		ThreadID: b.ThreadID, ParentID: b.ParentID, Kind: b.Kind, Title: deref(b.Title), Detail: deref(b.Detail),
 		Priority: deref(b.Priority), ProjectID: deref(b.ProjectID), Agent: deref(b.AgentPref), Node: deref(b.NodePref),
 		Mode: deref(b.PermissionMode), DependsOn: deref(b.DependsOn), Dispatch: b.Dispatch, Actor: event.ActorUser,
+		Persona: deref(b.PersonaID),
 	})
 	if err != nil {
 		taskError(w, err)
@@ -109,7 +112,7 @@ func (e *Engine) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	f := event.TaskFields{Title: b.Title, Detail: b.Detail, Priority: b.Priority, ProjectID: b.ProjectID, AgentPref: b.AgentPref,
-		NodePref: b.NodePref, PermissionMode: b.PermissionMode, Dismissed: b.Dismissed}
+		NodePref: b.NodePref, PermissionMode: b.PermissionMode, Dismissed: b.Dismissed, PersonaID: b.PersonaID}
 	if b.DependsOn != nil {
 		f.DependsOn, f.SetDeps = *b.DependsOn, true
 	}
@@ -161,64 +164,44 @@ func (e *Engine) listProjects(w http.ResponseWriter, r *http.Request) {
 // putProject creates (POST) or replaces (PATCH) a project with its machines.
 func (e *Engine) putProject(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Name         string              `json:"name"`
-		RepoURL      string              `json:"repo_url"`
-		DefaultMode  string              `json:"default_mode"`
-		DefaultAgent string              `json:"default_agent"`
-		Nodes        []event.ProjectNode `json:"nodes"`
+		Name           *string              `json:"name"`
+		RepoURL        *string              `json:"repo_url"`
+		DefaultMode    *string              `json:"default_mode"`
+		DefaultAgent   *string              `json:"default_agent"`
+		DefaultPersona *string              `json:"default_persona"`
+		Notes          *string              `json:"notes"`
+		Layout         *string              `json:"layout"`
+		Nodes          *[]event.ProjectNode `json:"nodes"`
+		Deploy         *json.RawMessage     `json:"deploy"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	ctx := r.Context()
-	id := r.PathValue("id")
-	if id != "" {
-		if _, err := e.store().Project(ctx, id); err != nil {
-			taskError(w, err)
+	in := ProjectInput{ID: r.PathValue("id"), Name: b.Name, RepoURL: b.RepoURL, DefaultMode: b.DefaultMode, DefaultAgent: b.DefaultAgent,
+		DefaultPersona: b.DefaultPersona, Notes: b.Notes, Layout: b.Layout, Nodes: b.Nodes}
+	if r.Method == http.MethodPost {
+		if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
+			writeError(w, http.StatusBadRequest, "invalid", "项目需要名字")
 			return
 		}
-	} else {
-		id = ids.New()
 	}
-	b.Name = strings.TrimSpace(b.Name)
-	if b.Name == "" {
-		writeError(w, http.StatusBadRequest, "invalid", "项目需要名字")
+	if b.Deploy != nil {
+		var d *event.Deploy
+		if string(*b.Deploy) != "null" {
+			d = &event.Deploy{}
+			if err := json.Unmarshal(*b.Deploy, d); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+				return
+			}
+		}
+		in.Deploy = &d
+	}
+	p, err := e.PutProject(r.Context(), in, event.ActorUser)
+	if err != nil {
+		taskError(w, err)
 		return
 	}
-	if err := validMode(b.DefaultMode); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid", err.Error())
-		return
-	}
-	ps, _ := e.store().Projects(ctx)
-	for _, p := range ps {
-		if p.ID != id && strings.EqualFold(p.Name, b.Name) {
-			writeError(w, http.StatusConflict, "duplicate", "已经有同名的项目")
-			return
-		}
-	}
-	seen := map[string]bool{}
-	for i, n := range b.Nodes {
-		n.Path = strings.TrimSpace(n.Path)
-		if n.NodeID == "" || n.Path == "" || seen[n.NodeID] {
-			writeError(w, http.StatusBadRequest, "invalid", "每台机器只能登记一次，并且要填仓库路径")
-			return
-		}
-		if _, err := e.store().Node(ctx, n.NodeID); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid", "机器不存在")
-			return
-		}
-		seen[n.NodeID] = true
-		b.Nodes[i] = event.ProjectNode{NodeID: n.NodeID, Path: n.Path, Priority: i}
-	}
-	if _, err := e.Log.Append(ctx, event.New(event.ProjectPut, event.ActorUser, "", event.ProjectPayload{
-		ProjectID: id, Name: b.Name, RepoURL: strings.TrimSpace(b.RepoURL), DefaultMode: b.DefaultMode,
-		DefaultAgent: strings.TrimSpace(b.DefaultAgent), Nodes: b.Nodes,
-	})); err != nil {
-		internal(w, err)
-		return
-	}
-	p, _ := e.store().Project(ctx, id)
 	status := http.StatusOK
 	if r.Method == http.MethodPost {
 		status = http.StatusCreated
@@ -228,6 +211,10 @@ func (e *Engine) putProject(w http.ResponseWriter, r *http.Request) {
 
 func (e *Engine) deleteProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if id == projectkey.MiscID {
+		writeError(w, http.StatusConflict, "builtin", "内置的“杂项”项目不能删除")
+		return
+	}
 	if _, err := e.store().Project(r.Context(), id); err != nil {
 		taskError(w, err)
 		return
@@ -261,6 +248,12 @@ func (e *Engine) inbox(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		tasks = append(tasks, t)
+	}
+	running, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskRunning, event.TaskWaitingApproval}})
+	for _, t := range running {
+		if strings.HasPrefix(t.StatusReason, PausedPrefix) {
+			tasks = append(tasks, t)
+		}
 	}
 	done, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskDone}})
 	for _, t := range done {

@@ -27,6 +27,8 @@ wok build --all        build every app into build/
 wok check              check the layout
 ```
 
+Releases: push a tag such as `v0.1.0`; `.github/workflows/release.yml` publishes `sous` and `sous-hub` to GitHub Releases, and machines update from there.
+
 ## Documentation
 
 - [决策记录](decisions/README.md)
@@ -35,7 +37,7 @@ wok check              check the layout
 - [部署 Hub](guides/deploy-hub.md)
 - [接入一台电脑](guides/connect-machine.md)
 
-当前进行中的设计见 `work/specs/sous-mvp/`。
+当前进行中的设计见 `work/specs/sous-mvp/`（第一期）和 `work/specs/m5-workbench/`（工作台：项目、岗位、服务器）。使用逻辑见 [架构 · 工作台](architecture/workbench.md)。
 
 设计上主要参考 [DeepSeek Super-agent 原型](https://github.com/deepseek-ai/dsh-superagent-prototype)：概念对照和值得借鉴的思路见 `work/agent/rules/super-agent-reference.md`。
 

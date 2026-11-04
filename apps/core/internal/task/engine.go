@@ -21,6 +21,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
+	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/router"
@@ -32,6 +33,8 @@ const (
 	MaxWorkRuns = 3
 	// MaxRebases bounds automatic rebases of a conflicting pull request.
 	MaxRebases = 2
+	// MaxRecoveries bounds automatic restarts of interrupted runs per dispatch.
+	MaxRecoveries = 1
 	// sweepEvery retries queued tasks even when no event wakes the engine.
 	sweepEvery = time.Minute
 )
@@ -59,6 +62,9 @@ type Engine struct {
 	Reviewer Model // nil provider: every run passes review
 	Approver Model // nil provider: every AI approval goes to the user
 
+	// Beat, when set, is called on every loop iteration (for the watchdog).
+	Beat func()
+
 	mu   sync.Mutex // serializes dispatching, so a run slot is never given twice
 	kick chan struct{}
 }
@@ -72,17 +78,27 @@ func (e *Engine) store() *store.Store { return e.Log.Store }
 // Start listens for events that can unblock queued tasks or change a
 // task's approval state, and sweeps queued tasks until ctx ends.
 func (e *Engine) Start(ctx context.Context) {
+	if err := e.Seed(ctx); err != nil {
+		slog.Error("task: seed the misc project and built-in personas", "err", err)
+	}
+	go e.watchMerges(ctx)
 	approvals := make(chan event.Event, 256)
 	e.Log.Listen(func(ev event.Event) {
 		switch ev.Type {
 		case event.NodeOnline, event.NodeInventory, event.RunEnded, event.TaskCreated, event.ProjectPut:
 			e.Sweep()
+			if ev.Type == event.NodeOnline {
+				var p event.NodePayload
+				if ev.Decode(&p) == nil {
+					go e.cleanupNode(ctx, p.NodeID)
+				}
+			}
 		case event.TaskStatus:
 			var p event.TaskStatusPayload
 			if ev.Decode(&p) == nil && (p.To == event.TaskDone || p.To == event.TaskCancelled || p.To == event.TaskFailed) {
 				e.Sweep() // dependents may be free now
 			}
-		case event.ApprovalRequested, event.ApprovalDecided:
+		case event.ApprovalRequested, event.ApprovalDecided, event.RunPaused, event.RunResumed:
 			if ev.TaskID != "" {
 				select {
 				case approvals <- ev:
@@ -96,11 +112,18 @@ func (e *Engine) Start(ctx context.Context) {
 		defer t.Stop()
 		e.sweep(ctx)
 		for {
+			if e.Beat != nil {
+				e.Beat()
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case ev := <-approvals:
-				e.approvalChanged(ctx, ev.TaskID)
+				if ev.Type == event.RunPaused || ev.Type == event.RunResumed {
+					e.pauseChanged(ctx, ev)
+				} else {
+					e.approvalChanged(ctx, ev.TaskID)
+				}
 			case <-e.kick:
 				e.sweep(ctx)
 			case <-t.C:
@@ -150,11 +173,32 @@ func (e *Engine) approvalChanged(ctx context.Context, taskID string) {
 	}
 	switch {
 	case waiting && t.Status == event.TaskRunning:
-		e.transition(ctx, t, event.TaskWaitingApproval, "等你审批", "", event.ActorSystem)
+		e.transition(ctx, t, event.TaskWaitingApproval, "等你审批", "", event.ActorSystem, keepNext(t))
 	case !waiting && t.Status == event.TaskWaitingApproval:
-		e.transition(ctx, t, event.TaskRunning, "", "", event.ActorSystem)
+		e.transition(ctx, t, event.TaskRunning, "", "", event.ActorSystem, keepNext(t))
 	}
 }
+
+// pauseChanged notes on the task that its run is paused, or no longer.
+func (e *Engine) pauseChanged(ctx context.Context, ev event.Event) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, err := e.store().Task(ctx, ev.TaskID)
+	if err != nil || (t.Status != event.TaskRunning && t.Status != event.TaskWaitingApproval) {
+		return
+	}
+	if ev.Type == event.RunPaused {
+		var p event.RunPausePayload
+		ev.Decode(&p)
+		// Its open approvals expired with the pause.
+		e.transition(ctx, t, event.TaskRunning, PausedPrefix+firstNonEmpty(p.Reason, "已暂停"), "", event.ActorSystem, keepNext(t))
+	} else if strings.HasPrefix(t.StatusReason, PausedPrefix) {
+		e.transition(ctx, t, t.Status, "", "", event.ActorSystem, keepNext(t))
+	}
+}
+
+// PausedPrefix starts the status reason of a task whose run is paused.
+const PausedPrefix = "已暂停："
 
 // transition appends a task.status event unless nothing changes.
 func (e *Engine) transition(ctx context.Context, t store.Task, to, reason, prURL, actor string, opts ...func(*event.TaskStatusPayload)) error {
@@ -169,6 +213,12 @@ func (e *Engine) transition(ctx context.Context, t store.Task, to, reason, prURL
 	ev.TaskID = t.ID
 	_, err := e.Log.Append(ctx, ev)
 	return err
+}
+
+// keepNext keeps what the task's run is for (work, rebase, deliver) across
+// changes that do not start a new run, so the workbench can show the stage.
+func keepNext(t store.Task) func(*event.TaskStatusPayload) {
+	return func(p *event.TaskStatusPayload) { p.Next = t.Next }
 }
 
 func waiting(what, next string) func(*event.TaskStatusPayload) {
@@ -187,6 +237,7 @@ type Input struct {
 	Agent     string
 	Node      string
 	Mode      string // default / auto / open; empty: the project's or the global default
+	Persona   string // persona id; empty: the project's default persona, if any
 	DependsOn []string
 	Dispatch  bool // start right away (or queue)
 	Actor     string
@@ -200,12 +251,25 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	}
 	if in.Kind == "" {
 		in.Kind = event.TaskKindGeneral
-		if in.ProjectID != "" {
+		if in.ProjectID != "" && in.ProjectID != projectkey.MiscID {
 			in.Kind = event.TaskKindCode
 		}
 	}
-	if in.Kind != event.TaskKindCode && in.Kind != event.TaskKindGeneral {
-		return store.Task{}, fmt.Errorf("%w: kind 只能是 code 或 general", ErrInvalid)
+	if in.Kind != event.TaskKindCode && in.Kind != event.TaskKindGeneral && in.Kind != event.TaskKindOps {
+		return store.Task{}, fmt.Errorf("%w: kind 只能是 code、general 或 ops", ErrInvalid)
+	}
+	if in.Kind == event.TaskKindOps && (in.ProjectID == "" || in.ProjectID == projectkey.MiscID) {
+		return store.Task{}, fmt.Errorf("%w: 运维任务需要指定项目", ErrInvalid)
+	}
+	if in.ProjectID == "" {
+		if _, err := e.store().Project(ctx, projectkey.MiscID); err == nil {
+			in.ProjectID = projectkey.MiscID // every task belongs to a project
+		}
+	}
+	if in.Persona != "" {
+		if _, err := e.store().Persona(ctx, in.Persona); err != nil {
+			return store.Task{}, fmt.Errorf("%w: 岗位 %s 不存在", ErrInvalid, in.Persona)
+		}
 	}
 	if err := validMode(in.Mode); err != nil {
 		return store.Task{}, err
@@ -237,7 +301,7 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	}
 	ev := event.New(event.TaskCreated, in.Actor, in.ThreadID, event.TaskCreatedPayload{
 		ParentID: in.ParentID, Kind: in.Kind, Title: in.Title, Detail: strings.TrimSpace(in.Detail), Priority: in.Priority,
-		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, DependsOn: in.DependsOn, Status: status,
+		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, PersonaID: in.Persona, DependsOn: in.DependsOn, Status: status,
 	})
 	ev.TaskID = ids.New()
 	if _, err := e.Log.Append(ctx, ev); err != nil {
@@ -276,6 +340,11 @@ func (e *Engine) Update(ctx context.Context, id string, f event.TaskFields, acto
 	if f.ProjectID != nil && *f.ProjectID != "" {
 		if _, err := e.store().Project(ctx, *f.ProjectID); err != nil {
 			return store.Task{}, fmt.Errorf("%w: 项目 %s 不存在", ErrInvalid, *f.ProjectID)
+		}
+	}
+	if f.PersonaID != nil && *f.PersonaID != "" {
+		if _, err := e.store().Persona(ctx, *f.PersonaID); err != nil {
+			return store.Task{}, fmt.Errorf("%w: 岗位 %s 不存在", ErrInvalid, *f.PersonaID)
 		}
 	}
 	if f.SetDeps || len(f.DependsOn) > 0 {
@@ -503,8 +572,15 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 		}
 		proj = p
 	}
-	req := router.Request{Kind: t.Kind, ProjectNodes: proj.Nodes, NodePref: t.NodePref}
-	req.Agent = firstNonEmpty(t.AgentPref, proj.DefaultAgent, e.setting(ctx, SettingDefaultAgent))
+	req := router.Request{Kind: t.Kind, ProjectNodes: proj.Nodes, NodePref: t.NodePref, Role: "dev"}
+	persona := e.personaOf(ctx, t, proj)
+	req.Agent = firstNonEmpty(t.AgentPref, persona.Agent, proj.DefaultAgent, e.setting(ctx, SettingDefaultAgent))
+	if t.Kind == event.TaskKindOps {
+		req.Role = "server"
+		if d := proj.Deploy; d != nil && d.NodeID != "" && (t.NodePref == "" || t.NodePref == d.NodeID) {
+			req.NodePref, req.Path = d.NodeID, d.Path
+		}
+	}
 	last := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase)
 	if t.Kind == event.TaskKindCode && t.Branch != "" && last.NodeID != "" {
 		req.Sticky = last.NodeID
@@ -521,7 +597,7 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 	for _, n := range nodes {
 		rn = append(rn, router.Node{
 			ID: n.ID, Name: n.Name, Online: e.Nodes.Online(n.ID), Agents: parseAgents(n.Agents),
-			Running: e.Nodes.Busy(ctx, n.ID), Capacity: n.Concurrency,
+			Running: e.Nodes.Busy(ctx, n.ID), Capacity: n.Concurrency, Role: n.Role,
 		})
 	}
 	if purpose == event.PurposeDeliver {
@@ -539,7 +615,8 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 // startRun creates the run and marks the task running.
 func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c router.Choice) error {
 	proj, _ := e.store().Project(ctx, t.ProjectID)
-	mode := firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
+	persona := e.personaOf(ctx, t, proj)
+	mode := firstNonEmpty(t.PermissionMode, persona.DefaultMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
 	thread := t.OriginThreadID
 	if thread == "" {
 		thread, _ = e.store().MainThreadID(ctx)
@@ -547,6 +624,13 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 	cr := nodehub.CreateRun{
 		ThreadID: thread, NodeID: c.NodeID, Agent: c.Agent, RepoPath: c.Path, TaskID: t.ID, Purpose: purpose,
 		PermissionMode: mode, Branch: t.Branch, BaseBranch: t.BaseBranch, Title: t.Title,
+		Persona: persona.Name,
+	}
+	if purpose == event.PurposeWork || purpose == event.PurposeRebase {
+		cr.Options = persona.Options
+	}
+	if t.Kind == event.TaskKindOps {
+		cr.Kind = event.RunKindOps
 	}
 	reason := ""
 	switch purpose {
@@ -558,22 +642,44 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 		cr.Prompt = rebasePrompt(t)
 		reason = "PR 有冲突，正在 rebase"
 	default:
-		cr.Prompt = e.workPrompt(ctx, t, proj)
+		cr.Prompt = e.workPrompt(ctx, t, proj, persona, c.Path != "" && t.Kind != event.TaskKindOps)
+	}
+	if prev := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver); prev.Status == event.RunStatusInterrupted && purpose != event.PurposeDeliver {
+		cr.RecoveryNote = e.recoveryNote(ctx, prev)
+	} else if prev.Status == event.RunStatusInterrupted {
+		cr.RecoveryNote = "（交付在中断后重新开始）" // marks the run as a recovery
 	}
 	if _, err := e.Nodes.Create(ctx, cr); err != nil {
 		return err
 	}
-	return e.transition(ctx, t, event.TaskRunning, reason, "", event.ActorSystem)
+	// While running, next records what the run is for: the stage it is in.
+	return e.transition(ctx, t, event.TaskRunning, reason, "", event.ActorSystem, waiting("", purpose))
 }
 
-func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Project) string {
+func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Project, persona store.Persona, inRepo bool) string {
 	var b strings.Builder
+	if brief := strings.TrimSpace(persona.Brief); brief != "" {
+		fmt.Fprintf(&b, "【你的岗位：%s】%s\n\n", persona.Name, brief)
+	}
 	fmt.Fprintf(&b, "任务：%s\n", t.Title)
 	if t.Detail != "" {
 		b.WriteString("\n" + t.Detail + "\n")
 	}
-	if proj.Name != "" {
+	if proj.Name != "" && proj.ID != projectkey.MiscID {
 		fmt.Fprintf(&b, "\n项目：%s\n", proj.Name)
+		if notes := strings.TrimSpace(proj.Notes); notes != "" {
+			b.WriteString("项目说明：" + notes + "\n")
+		}
+	}
+	if inRepo {
+		// The agent starts inside the task's own worktree. Without this it
+		// goes looking for the project elsewhere (or for apps/<name>).
+		b.WriteString("\n工作目录：当前目录就是项目的代码根目录，是 sous 为这个任务建好的独立 git worktree，已经在任务分支上。" +
+			"直接在当前目录里读写文件，不要去别的路径找项目，不要切换分支，不要改动原仓库。\n" +
+			"不要 push，也不要创建 PR：提交即可（或留着未提交的改动），sous 会在验收通过后自己 push 并开 PR。\n")
+	}
+	if t.Kind == event.TaskKindOps {
+		b.WriteString(opsPrompt(proj))
 	}
 	if n := e.countRuns(ctx, t.ID, event.PurposeWork); n > 0 && t.ReviewNote != "" {
 		fmt.Fprintf(&b, "\n这是第 %d 次尝试。上一次的结果没有通过验收，原因：%s\n"+
@@ -634,4 +740,34 @@ var statusName = map[string]string{
 	event.TaskInbox: "待整理", event.TaskPlanned: "已计划", event.TaskQueued: "排队中", event.TaskRunning: "进行中",
 	event.TaskWaitingApproval: "等待审批", event.TaskBlocked: "受阻", event.TaskReview: "验收中",
 	event.TaskDone: "已完成", event.TaskFailed: "失败了", event.TaskCancelled: "已取消",
+}
+
+// personaOf is the persona that does a task: its own, else the project's
+// default. The zero Persona when there is none.
+func (e *Engine) personaOf(ctx context.Context, t store.Task, proj store.Project) store.Persona {
+	for _, id := range []string{t.PersonaID, proj.DefaultPersona} {
+		if id == "" {
+			continue
+		}
+		if p, err := e.store().Persona(ctx, id); err == nil {
+			return p
+		}
+	}
+	return store.Persona{}
+}
+
+// opsPrompt tells an operations run where it is and how to deploy.
+func opsPrompt(proj store.Project) string {
+	var b strings.Builder
+	b.WriteString("\n这是一个运维任务：你直接在服务器上项目的目录里操作，没有 worktree，也不会创建 PR。\n")
+	if d := proj.Deploy; d != nil && d.Command != "" {
+		fmt.Fprintf(&b, "部署方式：在 %s 里执行 `%s`。按这个脚本或命令执行，不要临时修改服务器上的文件；失败就停下来说明原因。\n", d.Path, d.Command)
+		if d.Health != "" {
+			fmt.Fprintf(&b, "完成后执行健康检查 `%s`，把结果写进总结。\n", d.Health)
+		}
+	} else {
+		b.WriteString("项目没有登记部署命令：先看仓库里的部署脚本或说明（README、AGENTS.md、work/infra/），按它执行；找不到就停下来说明。\n")
+	}
+	b.WriteString("重启服务、删除文件这类操作会请用户批准。\n")
+	return b.String()
 }

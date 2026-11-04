@@ -102,7 +102,11 @@ func (c *Conn) read(r io.Reader) {
 		case m.Method != "" && m.ID != nil:
 			go c.answer(m)
 		case m.Method != "":
-			go c.handler(context.Background(), m.Method, m.Params)
+			// Notifications are handled in order, on this goroutine: message
+			// chunks must not be reordered, and the updates an agent replays
+			// before answering session/load must be seen before the answer.
+			// Notification handlers must not block.
+			c.handler(context.Background(), m.Method, m.Params)
 		case m.ID != nil:
 			var id int64
 			if json.Unmarshal(*m.ID, &id) != nil {

@@ -29,13 +29,70 @@ type Config struct {
 	Agents map[string][]string `json:"agents,omitempty"`
 	// Policy holds the floor rules (design §8); they apply in every mode.
 	Policy policy.Config `json:"policy,omitempty"`
+	// AgentOptions are the session config options set on every new
+	// session of an agent: {"claude": {"model": "opus"}}.
+	AgentOptions map[string]map[string]string `json:"agent_options,omitempty"`
+	// AgentEnv is added to an agent's environment, such as an API key:
+	// {"claude": {"ANTHROPIC_API_KEY": "..."}}.
+	AgentEnv map[string]map[string]string `json:"agent_env,omitempty"`
+	// RemoteAdmin false refuses remote administration from the Hub
+	// (installing agents, logging in, editing config files). Only this
+	// file can turn it off or on again. Default on.
+	RemoteAdmin *bool `json:"remote_admin,omitempty"`
+	// Role is "dev" (default) or "server" (M5, docs/decisions/0014). The
+	// Hub may turn a dev machine into a server, never back: only this file
+	// can.
+	Role string `json:"role,omitempty"`
+	// Workspaces are the directories searched for git repositories; new
+	// projects are cloned or created in the first one. "~/" is expanded.
+	Workspaces []string `json:"workspaces,omitempty"`
 }
+
+// RoleName is the machine's role, dev unless set to server.
+func (c Config) RoleName() string {
+	if c.Role == "server" {
+		return "server"
+	}
+	return "dev"
+}
+
+// WorkspaceDirs returns the workspaces as absolute paths.
+func (c Config) WorkspaceDirs() []string {
+	out := []string{}
+	for _, w := range c.Workspaces {
+		if p := ExpandPath(w); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ExpandPath expands a leading "~" and makes the path absolute.
+func ExpandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, p[1:])
+		}
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+// AdminEnabled reports whether the Hub may administer this machine.
+func (c Config) AdminEnabled() bool { return c.RemoteAdmin == nil || *c.RemoteAdmin }
 
 // Root is ~/.sous, where the config, worktrees and scratch directories live.
 // SOUS_HOME overrides it.
 func Root() (string, error) {
 	if d := os.Getenv("SOUS_HOME"); d != "" {
-		return d, nil
+		// Agents insist on absolute working directories, which live here.
+		return filepath.Abs(d)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -26,6 +26,7 @@ const (
 	OutsideWorktree Category = "outside-worktree"
 	Delete          Category = "delete"
 	GitRemote       Category = "git-remote"
+	Service         Category = "service" // start, stop or restart a service (M5)
 	Irreversible    Category = "irreversible"
 	Floor           Category = "floor"
 )
@@ -33,7 +34,7 @@ const (
 // rank orders categories by risk, so a compound command takes its worst part.
 var rank = map[Category]int{
 	Read: 0, EditWorktree: 1, ExecSafe: 2, ExecOther: 3, Install: 4, OutsideWorktree: 5,
-	Delete: 6, GitRemote: 7, Irreversible: 8, Floor: 9,
+	Delete: 6, GitRemote: 7, Service: 8, Irreversible: 9, Floor: 10,
 }
 
 // Action is what the node does with a request.
@@ -71,6 +72,38 @@ func Decide(mode string, c Category) Action {
 		return AskAI
 	}
 	return AskUser
+}
+
+// Machine roles, as in proto.
+const (
+	RoleDev    = "dev"
+	RoleServer = "server"
+)
+
+// EffectiveMode is the mode a run really gets on a machine: servers never
+// run in the open mode (docs/decisions/0014).
+func EffectiveMode(role, mode string) string {
+	if role == RoleServer && mode == ModeOpen {
+		return ModeDefault
+	}
+	return mode
+}
+
+// DecideFor is Decide for a machine's role. On a server, edits, deletions,
+// service changes and irreversible actions always go to the user, never to
+// the AI approver, and the open mode is not available. Only node.json can
+// change a machine's role back to dev.
+func DecideFor(role, mode string, c Category) Action {
+	mode = EffectiveMode(role, mode)
+	if role == RoleServer {
+		switch c {
+		case Floor:
+			return Deny
+		case EditWorktree, Delete, Service, Irreversible:
+			return AskUser
+		}
+	}
+	return Decide(mode, c)
 }
 
 // DefaultFloor is the floor rules a node starts with: actions refused in
@@ -409,7 +442,33 @@ func classifyOne(cmd, workdir string) (Category, string) {
 			return Irreversible, cmd
 		}
 		return ExecOther, cmd
-	case "docker", "kubectl", "terraform", "helm":
+	case "systemctl", "service", "launchctl", "supervisorctl", "pm2", "rc-service", "sv":
+		if name == "systemctl" && (sub == "status" || sub == "is-active" || sub == "list-units" || sub == "show" || sub == "cat") ||
+			name == "pm2" && (sub == "list" || sub == "ls" || sub == "status" || sub == "logs") ||
+			name == "launchctl" && (sub == "list" || sub == "print") {
+			return Read, ""
+		}
+		return Service, cmd
+	case "docker", "podman":
+		if sub == "compose" && len(args) > 1 {
+			sub = args[1]
+		} else if name == "docker" && sub == "compose" {
+			return ExecOther, cmd
+		}
+		switch sub {
+		case "up", "down", "restart", "stop", "start", "kill", "rm", "run":
+			return Service, cmd
+		case "ps", "logs", "images", "inspect", "version", "info", "config":
+			return Read, ""
+		}
+		return ExecOther, cmd
+	case "docker-compose":
+		switch sub {
+		case "up", "down", "restart", "stop", "start", "kill", "rm", "run":
+			return Service, cmd
+		}
+		return ExecOther, cmd
+	case "kubectl", "terraform", "helm":
 		return ExecOther, cmd
 	}
 	if readOnly[name] {

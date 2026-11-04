@@ -24,3 +24,6 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0009](0009-deliver-by-pull-request.md) | 代码任务以 PR 交付，sous 永不合并主分支 | Accepted |
 | [0010](0010-policy-is-a-safety-net.md) | 权限策略是安全网，执行隔离放到第二期 | Accepted |
 | [0011](0011-supervisor-owns-tasks.md) | 第一期由主管自己维护任务，不单独设置 extractor | Accepted |
+| [0012](0012-remote-agent-admin.md) | 从页面远程管理机器上的 agent，只跑内置的命令和文件 | Accepted |
+| [0013](0013-personas.md) | 人员就是岗位档案，不是有记忆的拟人员工 | Accepted |
+| [0014](0014-server-role-and-ops-tasks.md) | 服务器作为机器接入，部署和维护走运维任务 | Accepted |

@@ -38,7 +38,8 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
           repo_path: p.repo_path ?? '', prompt: p.prompt, status: 'queued', workdir: '', branch: p.branch ?? '',
           summary: '', diffstat: '', error: '', created_at: ev.ts, started_at: 0, ended_at: 0,
           purpose: p.purpose || 'work', permission_mode: p.permission_mode || 'default', base_branch: p.base_branch ?? '',
-          pr_url: '', conflict: false, title: p.title ?? '',
+          pr_url: '', conflict: false, title: p.title ?? '', paused: false, pause_reason: '', recovery_note: p.recovery_note ?? '',
+          persona: p.persona ?? '', setup: p.setup,
         },
         seq: ev.seq, tools: [], plan: [], output: '', thinking: '', statusLine: '', approvals: [],
       }
@@ -59,8 +60,24 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
     case 'run.output':
       applyUpdate(v, p)
       break
+    case 'run.paused':
+      if (isActive(v.run)) {
+        v.run.paused = true
+        v.run.pause_reason = p.reason ?? ''
+        for (const a of v.approvals) if (a.status === 'pending') a.status = 'expired'
+      }
+      break
+    case 'run.resumed':
+      v.run.paused = false
+      v.run.pause_reason = ''
+      break
+    case 'run.message':
+    case 'run.message.delivered':
+    case 'run.archived':
+      break
     case 'run.ended':
       Object.assign(v.run, {
+        paused: false,
         status: p.status, summary: p.summary ?? '', diffstat: p.diffstat ?? '', error: p.error ?? '', ended_at: ev.ts,
         pr_url: p.pr_url ?? '', conflict: !!p.conflict,
       })

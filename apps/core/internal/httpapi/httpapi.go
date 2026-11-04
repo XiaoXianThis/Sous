@@ -146,7 +146,8 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content string `json:"content"`
+		Content string                `json:"content"`
+		Context *event.MessageContext `json:"context"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -163,7 +164,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msgID := ids.New()
 	evs, err := s.log.Append(r.Context(), event.New(event.MessageUser, event.ActorUser, id,
-		event.MessagePayload{MessageID: msgID, Content: content}))
+		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context}))
 	if err != nil {
 		internal(w, err)
 		return
@@ -176,12 +177,25 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	if days <= 0 {
 		days = 30
 	}
-	rows, err := s.log.Store.UsageSince(r.Context(), time.Now().AddDate(0, 0, -days))
+	loc := time.Local
+	if tz := r.URL.Query().Get("tz"); tz != "" {
+		if l, err := time.LoadLocation(tz); err == nil {
+			loc = l
+		}
+	}
+	now := time.Now().In(loc)
+	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1-days)
+	rows, err := s.log.Store.UsageSince(r.Context(), since)
 	if err != nil {
 		internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": days, "usage": rows})
+	daily, err := s.log.Store.UsageDaily(r.Context(), since, loc)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "since": since.UnixMilli(), "usage": rows, "daily": daily})
 }
 
 // static serves the built PWA with a fallback to index.html for client routes.
@@ -219,6 +233,19 @@ func (s *Server) static() http.Handler {
 		http.ServeFile(w, r, p)
 	})
 }
+
+// DeviceRoutes serves the conversation to paired machines, authenticated by
+// wrap (their device token): what `sous chat` needs and nothing more.
+func (s *Server) DeviceRoutes(wrap func(http.HandlerFunc) http.HandlerFunc) {
+	s.mux.HandleFunc("GET /api/v1/device/threads", wrap(s.listThreads))
+	s.mux.HandleFunc("POST /api/v1/device/threads", wrap(s.createThread))
+	s.mux.HandleFunc("GET /api/v1/device/threads/{id}/messages", wrap(s.listMessages))
+	s.mux.HandleFunc("POST /api/v1/device/threads/{id}/messages", wrap(s.postMessage))
+	s.mux.HandleFunc("GET /api/v1/device/ws", wrap(s.ws))
+}
+
+// Mux lets other packages add routes after New.
+func (s *Server) Mux() *http.ServeMux { return s.mux }
 
 // Shutdown hook for tests and main.
 func (s *Server) Handler() http.Handler { return s }

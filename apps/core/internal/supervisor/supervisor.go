@@ -36,6 +36,9 @@ type Options struct {
 	// Environment adds lines about the world, such as the user's machines,
 	// projects and the thread's open tasks, to every turn's prompt.
 	Environment func(ctx context.Context, threadID string) []string
+	// DescribeContext names what the user was looking at on the workbench
+	// when they wrote a message (M5), such as "项目 sous" or "任务「…」".
+	DescribeContext func(ctx context.Context, c event.MessageContext) string
 }
 
 type Supervisor struct {
@@ -62,7 +65,9 @@ func New(opt Options) *Supervisor {
 func (s *Supervisor) Start(ctx context.Context) {
 	s.ctx = ctx
 	s.opt.Log.Listen(func(ev event.Event) {
-		if ev.Type == event.MessageUser && ev.ThreadID != "" {
+		// A trigger is input nobody typed: a schedule came due, or the Hub
+		// wants something followed up. It is stored as a user message.
+		if (ev.Type == event.MessageUser || ev.Type == event.TriggerFired) && ev.ThreadID != "" {
 			s.signal(ev.ThreadID)
 		}
 	})
@@ -130,18 +135,24 @@ func (s *Supervisor) turn(threadID string) {
 	mainID, _ := st.MainThreadID(ctx)
 	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID})
 	req := provider.Request{
-		Model: s.opt.Model,
+		Model: s.opt.Model, SessionID: threadID,
 		System: prompts.Supervisor(prompts.Env{
 			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind,
 			Memories: s.recall(ctx, history),
 			Machines: s.environment(ctx, threadID),
 		}),
-		Messages: toProvider(history),
-		Tools:    append(s.opt.Tools.Specs(), silentSpec),
+		Messages: toProvider(history, func(c event.MessageContext) string {
+			if s.opt.DescribeContext == nil {
+				return ""
+			}
+			return s.opt.DescribeContext(ctx, c)
+		}),
+		Tools: append(s.opt.Tools.Specs(), silentSpec),
 	}
 	messageID := ids.New()
 	reply := func(text string, err error) { s.reply(threadID, messageID, upTo, "", text, err) }
-	var texts []string
+	var texts []string // said since the last stored step
+	spoke := false     // said anything this turn
 	emit := func(d provider.Delta) {
 		if d.Text == "" && d.Thinking == "" {
 			return
@@ -151,7 +162,7 @@ func (s *Supervisor) turn(threadID string) {
 	}
 
 	for step := 0; step < MaxSteps; step++ {
-		if step > 0 && len(texts) > 0 {
+		if len(texts) > 0 {
 			emit(provider.Delta{Text: "\n\n"})
 		}
 		resp, err := s.opt.Provider.Stream(ctx, req, emit)
@@ -166,15 +177,23 @@ func (s *Supervisor) turn(threadID string) {
 		s.recordUsage(threadID, resp.Usage)
 		if t := resp.Message.PlainText(); t != "" {
 			texts = append(texts, t)
+			spoke = true
 		}
 		calls := resp.Message.ToolCalls()
 		if len(calls) == 0 {
 			reply(strings.Join(texts, "\n\n"), nil)
 			return
 		}
-		if reason, ok := silentOnly(calls); ok && len(texts) == 0 {
+		if reason, ok := silentOnly(calls); ok && !spoke {
 			s.reply(threadID, messageID, upTo, event.KindSilent, reason, nil)
 			return
+		}
+		if len(texts) > 0 {
+			// Store what was said before the tools run, so their results
+			// (task chips, reports) come after it, and stream the rest of
+			// the turn as a new message.
+			s.reply(threadID, messageID, upTo, event.KindStep, strings.Join(texts, "\n\n"), nil)
+			messageID, texts = ids.New(), nil
 		}
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
@@ -202,7 +221,13 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text
 		p.Content += "（模型调用失败：" + callErr.Error() + "）"
 	}
 	if strings.TrimSpace(p.Content) == "" && kind != event.KindSilent {
-		p.Content = "（模型没有返回内容）"
+		if kind == "" && replyTo > 0 && s.hasStep(threadID, replyTo) {
+			// Earlier steps of this turn spoke; the turn just ends.
+			kind = event.KindSilent
+			p.Kind = kind
+		} else {
+			p.Content = "（模型没有返回内容）"
+		}
 	}
 	if _, err := s.opt.Log.Append(s.ctx, event.New(event.MessageAssistant, event.ActorSupervisor, threadID, p)); err != nil {
 		slog.Error("supervisor: store reply", "thread", threadID, "err", err)
@@ -219,12 +244,27 @@ func (s *Supervisor) recordUsage(threadID string, u provider.Usage) {
 	}
 }
 
+// hasStep reports whether the turn answering replyTo stored a step.
+func (s *Supervisor) hasStep(threadID string, replyTo int64) bool {
+	msgs, err := s.opt.Log.Store.Messages(s.ctx, threadID, 0, HistoryMessages)
+	if err != nil {
+		return false
+	}
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.Kind == event.KindStep && m.ReplyTo == replyTo {
+			return true
+		}
+	}
+	return false
+}
+
 // unanswered returns the seq of the newest user message that no assistant
-// reply covers yet, or 0.
+// reply covers yet, or 0. Steps do not answer: a turn interrupted after a
+// step is answered again.
 func unanswered(msgs []store.Message) int64 {
 	var answered, newest int64
 	for _, m := range msgs {
-		if m.Role == "assistant" && m.ReplyTo > answered {
+		if m.Role == "assistant" && m.Kind != event.KindStep && m.ReplyTo > answered {
 			answered = m.ReplyTo
 		}
 		if m.Role == "user" {
@@ -239,9 +279,10 @@ func unanswered(msgs []store.Message) int64 {
 
 // toProvider converts stored messages to model messages. Each reply is placed
 // right after the user message it answered, so messages that arrived during a
-// turn come after its reply. Failed replies are left out so the model does not
-// imitate error text.
-func toProvider(msgs []store.Message) []provider.Message {
+// turn come after its reply; the steps and the last message of one turn are
+// joined into one assistant message. Failed replies are left out so the model
+// does not imitate error text.
+func toProvider(msgs []store.Message, label ...func(event.MessageContext) string) []provider.Message {
 	replies := map[int64][]store.Message{}
 	for _, m := range msgs {
 		if m.Role == "assistant" && m.ReplyTo > 0 {
@@ -257,7 +298,13 @@ func toProvider(msgs []store.Message) []provider.Message {
 		if m.Role == "assistant" {
 			role = provider.RoleAssistant
 		}
-		out = append(out, provider.Text(role, m.Content))
+		content := m.Content
+		if m.Role == "user" && m.Context != nil && len(label) > 0 && label[0] != nil {
+			if l := label[0](*m.Context); l != "" {
+				content = "【用户写这条消息时，正在工作台上看：" + l + "。消息里的“这个”“它”多半指它】\n" + content
+			}
+		}
+		out = append(out, provider.Text(role, content))
 	}
 	for _, m := range msgs {
 		if m.Role == "assistant" && m.ReplyTo > 0 {
@@ -265,8 +312,14 @@ func toProvider(msgs []store.Message) []provider.Message {
 		}
 		add(m)
 		if m.Role == "user" {
+			var parts []string
 			for _, r := range replies[m.Seq] {
-				add(r)
+				if !r.Error && r.Kind != event.KindSilent && strings.TrimSpace(r.Content) != "" {
+					parts = append(parts, r.Content)
+				}
+			}
+			if len(parts) > 0 {
+				out = append(out, provider.Text(provider.RoleAssistant, strings.Join(parts, "\n\n")))
 			}
 		}
 	}

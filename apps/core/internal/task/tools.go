@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
@@ -14,7 +15,8 @@ import (
 
 // Tools returns the supervisor's task tools.
 func (e *Engine) Tools() []tool.Tool {
-	return []tool.Tool{createTool{e}, updateTool{e}, cancelTool{e}, dispatchTool{e}, listTool{e}, runMessageTool{e}, runCancelTool{e}}
+	return []tool.Tool{createTool{e}, updateTool{e}, cancelTool{e}, dispatchTool{e}, listTool{e}, runMessageTool{e}, runCancelTool{e},
+		projectPutTool{e}, projectCreateTool{e}, projectCloneTool{e}}
 }
 
 type createTool struct{ e *Engine }
@@ -22,13 +24,16 @@ type createTool struct{ e *Engine }
 func (createTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "task_create",
-		Description: "创建一个任务，交给用户电脑上的编程 agent 去做。代码任务（改某个项目的代码）要给 project；" +
-			"一般任务（不涉及仓库，比如查磁盘占用、整理文件）不给 project。detail 要写清楚目标、范围和完成标准，agent 看不到这段对话。" +
+		Description: "创建一个任务，分给一个岗位（persona），交给用户电脑上的编程 agent 去做。代码任务（改某个项目的代码）要给 project；" +
+			"一般任务（不涉及仓库，比如查磁盘占用、整理文件）不给 project，会归到“杂项”；运维任务（kind=ops，部署、重启、查服务器上的服务）给 project，会在服务器上项目的目录里执行。" +
+			"按任务性质选一个合适的岗位，用户点名某个岗位时用它。detail 要写清楚目标、范围和完成标准，agent 看不到这段对话。" +
 			"dispatch 为 true 时立刻派发：有空闲机器就开始，没有就排队，等机器上线再开始。完成后会先验收，代码任务再 push 并创建 PR，结果会自动汇报到这个对话。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"title":{"type":"string","description":"一句话标题"},
 			"detail":{"type":"string","description":"完整的任务说明"},
 			"project":{"type":"string","description":"项目名或 id；一般任务不填"},
+			"kind":{"type":"string","enum":["code","general","ops"],"description":"不填时：给了 project 是 code，否则 general；部署和维护服务器用 ops"},
+			"persona":{"type":"string","description":"岗位名或 id，见环境说明里的岗位列表；不填用项目的默认岗位"},
 			"dispatch":{"type":"boolean","description":"是否立刻派发，默认 true"},
 			"agent":{"type":"string","description":"指定 agent：claude / codex / cursor / opencode / kiro；不填按项目和全局默认"},
 			"machine":{"type":"string","description":"指定机器名或 id；不填按项目的机器优先级"},
@@ -43,6 +48,7 @@ func (createTool) Spec() provider.ToolSpec {
 func (t createTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Title, Detail, Project, Agent, Machine, Parent string
+		Kind, Persona                                  string
 		PermissionMode                                 string `json:"permission_mode"`
 		Dispatch                                       *bool
 		Priority                                       int
@@ -52,7 +58,15 @@ func (t createTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 		return "", err
 	}
 	in := Input{ThreadID: tool.TurnFrom(ctx).ThreadID, Title: a.Title, Detail: a.Detail, Agent: a.Agent, Mode: a.PermissionMode,
-		Priority: a.Priority, ParentID: a.Parent, DependsOn: a.DependsOn, Dispatch: a.Dispatch == nil || *a.Dispatch, Actor: event.ActorSupervisor}
+		Priority: a.Priority, ParentID: a.Parent, DependsOn: a.DependsOn, Dispatch: a.Dispatch == nil || *a.Dispatch, Actor: event.ActorSupervisor,
+		Kind: a.Kind}
+	if a.Persona != "" {
+		p, err := t.e.findPersona(ctx, a.Persona)
+		if err != nil {
+			return "", err
+		}
+		in.Persona = p.ID
+	}
 	if a.Project != "" {
 		p, err := t.e.findProject(ctx, a.Project)
 		if err != nil {
@@ -85,6 +99,7 @@ func (updateTool) Spec() provider.ToolSpec {
 			"id":{"type":"string"},
 			"title":{"type":"string"},"detail":{"type":"string"},"priority":{"type":"integer"},
 			"agent":{"type":"string"},"machine":{"type":"string"},
+			"persona":{"type":"string","description":"岗位名或 id"},
 			"permission_mode":{"type":"string","enum":["default","auto","open"]},
 			"depends_on":{"type":"array","items":{"type":"string"}},
 			"status":{"type":"string","enum":["inbox","planned","blocked","done"]},
@@ -96,6 +111,7 @@ func (updateTool) Spec() provider.ToolSpec {
 func (t updateTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		ID, Title, Detail, Agent, Machine, Status, Reason *string
+		Persona                                           *string
 		PermissionMode                                    *string `json:"permission_mode"`
 		Priority                                          *int
 		DependsOn                                         *[]string `json:"depends_on"`
@@ -107,6 +123,17 @@ func (t updateTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("id is required")
 	}
 	f := event.TaskFields{Title: a.Title, Detail: a.Detail, Priority: a.Priority, AgentPref: a.Agent, PermissionMode: a.PermissionMode}
+	if a.Persona != nil {
+		id := ""
+		if *a.Persona != "" {
+			p, err := t.e.findPersona(ctx, *a.Persona)
+			if err != nil {
+				return "", err
+			}
+			id = p.ID
+		}
+		f.PersonaID = &id
+	}
 	if a.Machine != nil {
 		id := ""
 		if *a.Machine != "" {
@@ -244,7 +271,7 @@ func (t runMessageTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	if err := t.e.Nodes.Message(ctx, r.ID, a.Text); err != nil {
+	if err := t.e.Nodes.MessageAs(ctx, r.ID, a.Text, event.ActorSupervisor); err != nil {
 		return "", err
 	}
 	return "已转达给 " + r.Agent, nil
@@ -323,10 +350,20 @@ func describe(t store.Task) string {
 	return s
 }
 
-// Environment describes projects and the open tasks of a thread for the
-// supervisor's prompt, one line each.
+// Environment describes personas, projects and the open tasks of a thread
+// for the supervisor's prompt, one line each.
 func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 	var out []string
+	personas, _ := e.store().Personas(ctx)
+	pname := map[string]string{}
+	for _, p := range personas {
+		pname[p.ID] = p.Name
+		line := fmt.Sprintf("岗位 %s（id %s）：适合 %s", p.Name, p.ID, strings.Join(kindNames(p.Kinds), "、"))
+		if p.Agent != "" {
+			line += "，用 " + p.Agent
+		}
+		out = append(out, line)
+	}
 	ps, _ := e.store().Projects(ctx)
 	nodes, _ := e.store().Nodes(ctx)
 	name := map[string]string{}
@@ -334,19 +371,39 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		name[n.ID] = n.Name
 	}
 	for _, p := range ps {
+		if p.ID == projectkey.MiscID {
+			continue
+		}
 		var where []string
 		for _, n := range p.Nodes {
 			where = append(where, fmt.Sprintf("%s:%s", name[n.NodeID], n.Path))
 		}
-		line := fmt.Sprintf("项目 %s（id %s）：%s", p.Name, p.ID, strings.Join(where, " > "))
+		loc := strings.Join(where, " > ")
+		if loc == "" {
+			loc = "还不在任何机器上（可以用 project_clone 放到一台开发机上）"
+		}
+		line := fmt.Sprintf("项目 %s（id %s）：%s", p.Name, p.ID, loc)
+		if p.Layout == projectkey.LayoutWokspace {
+			line += "，wokspace 结构"
+		}
+		if p.DefaultPersona != "" {
+			line += "，默认岗位 " + pname[p.DefaultPersona]
+		}
 		if p.DefaultAgent != "" {
 			line += "，默认 agent " + p.DefaultAgent
 		}
+		if d := p.Deploy; d != nil {
+			line += fmt.Sprintf("，部署到 %s:%s（%s）", name[d.NodeID], d.Path, d.Command)
+			if d.AutoOnMerge {
+				line += "，PR 合并后自动部署"
+			}
+		}
 		out = append(out, line)
 	}
-	if len(ps) == 0 {
-		out = append(out, "还没有登记任何项目；代码任务需要先请用户在“项目”页面登记项目和它在哪台电脑的哪个路径。")
+	if len(ps) <= 1 {
+		out = append(out, "还没有登记任何项目；可以用 project_put 登记已有的仓库，或者用 project_create 新建一个（默认 wokspace 结构）。")
 	}
+	out = append(out, "新建项目默认使用 wokspace 规范（https://github.com/XiaoXianThis/wokspace）：用 project_create，除非用户明确要别的结构。")
 	tasks, _ := e.store().Tasks(ctx, store.TaskFilter{ThreadID: threadID, Statuses: openStatuses, Limit: 20})
 	for _, t := range tasks {
 		line := "这个对话里的" + describe(t)
@@ -356,4 +413,170 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+func kindNames(kinds []string) []string {
+	out := []string{}
+	for _, k := range kinds {
+		out = append(out, map[string]string{event.TaskKindCode: "代码任务", event.TaskKindGeneral: "一般任务", event.TaskKindOps: "运维任务"}[k])
+	}
+	if len(out) == 0 {
+		out = append(out, "各种任务")
+	}
+	return out
+}
+
+type projectPutTool struct{ e *Engine }
+
+func (projectPutTool) Spec() provider.ToolSpec {
+	return provider.ToolSpec{
+		Name: "project_put",
+		Description: "登记或修改一个项目。登记已有的仓库给 repo_url（同一个仓库在各台机器的工作空间里会被自动找到）；" +
+			"修改时给 id，只填要改的字段。部署目标（deploy）要是一台服务器上的目录加部署命令。",
+		Schema: json.RawMessage(`{"type":"object","properties":{
+			"id":{"type":"string","description":"要修改的项目名或 id；新建时不填"},
+			"name":{"type":"string"},
+			"repo_url":{"type":"string","description":"git 远端地址"},
+			"notes":{"type":"string","description":"项目说明，会写进 agent 的提示里"},
+			"default_persona":{"type":"string","description":"默认岗位名或 id"},
+			"deploy":{"type":"object","properties":{
+				"machine":{"type":"string","description":"服务器名或 id"},
+				"path":{"type":"string"},"command":{"type":"string"},"health":{"type":"string"},
+				"auto_on_merge":{"type":"boolean"}}}
+		}}`),
+	}
+}
+
+func (t projectPutTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct {
+		ID             *string `json:"id"`
+		Name           *string `json:"name"`
+		RepoURL        *string `json:"repo_url"`
+		Notes          *string `json:"notes"`
+		DefaultPersona *string `json:"default_persona"`
+		Deploy         *struct {
+			Machine, Path, Command, Health string
+			AutoOnMerge                    bool `json:"auto_on_merge"`
+		} `json:"deploy"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", err
+	}
+	in := ProjectInput{Name: a.Name, RepoURL: a.RepoURL, Notes: a.Notes}
+	if a.ID != nil && *a.ID != "" {
+		p, err := t.e.findProject(ctx, *a.ID)
+		if err != nil {
+			return "", err
+		}
+		in.ID = p.ID
+	} else if a.Name == nil {
+		return "", fmt.Errorf("%w: 新项目需要 name", ErrInvalid)
+	}
+	if a.DefaultPersona != nil {
+		id := ""
+		if *a.DefaultPersona != "" {
+			p, err := t.e.findPersona(ctx, *a.DefaultPersona)
+			if err != nil {
+				return "", err
+			}
+			id = p.ID
+		}
+		in.DefaultPersona = &id
+	}
+	if a.Deploy != nil {
+		var d *event.Deploy
+		if a.Deploy.Machine != "" {
+			id, err := t.e.findNode(ctx, a.Deploy.Machine)
+			if err != nil {
+				return "", err
+			}
+			d = &event.Deploy{NodeID: id, Path: a.Deploy.Path, Command: a.Deploy.Command, Health: a.Deploy.Health, AutoOnMerge: a.Deploy.AutoOnMerge}
+		}
+		in.Deploy = &d
+	}
+	p, err := t.e.PutProject(ctx, in, event.ActorSupervisor)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已保存项目 %s（id %s），在 %d 台机器上", p.Name, p.ID, len(p.Nodes)), nil
+}
+
+type projectCreateTool struct{ e *Engine }
+
+func (projectCreateTool) Spec() provider.ToolSpec {
+	return provider.ToolSpec{
+		Name: "project_create",
+		Description: "新建一个项目：在一台开发机的工作空间里创建仓库，默认用 wokspace 规范（wok init）。" +
+			"会请用户批准要执行的命令。owner 不为空时同时创建 GitHub 仓库并 push（也要用户批准）。完成后会在对话里汇报。",
+		Schema: json.RawMessage(`{"type":"object","properties":{
+			"name":{"type":"string","description":"项目名：小写字母、数字和连字符，比如 my-app"},
+			"machine":{"type":"string","description":"开发机名或 id；不填选第一台能用的"},
+			"layout":{"type":"string","enum":["wokspace","plain"],"description":"默认 wokspace；plain 只 git init"},
+			"owner":{"type":"string","description":"GitHub 用户或组织；不填不建远端仓库"},
+			"private":{"type":"boolean","description":"GitHub 仓库是否私有，默认 true"}
+		},"required":["name"]}`),
+	}
+}
+
+func (t projectCreateTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct {
+		Name, Machine, Layout, Owner string
+		Private                      *bool
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", err
+	}
+	in := SetupInput{Name: a.Name, Layout: a.Layout, Owner: a.Owner, Private: a.Private == nil || *a.Private,
+		ThreadID: tool.TurnFrom(ctx).ThreadID, Actor: event.ActorSupervisor}
+	if a.Machine != "" {
+		id, err := t.e.findNode(ctx, a.Machine)
+		if err != nil {
+			return "", err
+		}
+		in.NodeID = id
+	}
+	p, r, err := t.e.CreateProject(ctx, in)
+	if err != nil {
+		return "", err
+	}
+	msg := "，完成后会自动汇报"
+	if in.Owner != "" {
+		msg = "；创建 GitHub 仓库那一步要用户批准，完成后会自动汇报"
+	}
+	return fmt.Sprintf("已登记项目 %s（id %s），正在机器上创建（Run %s）%s。", p.Name, p.ID, r.ID, msg), nil
+}
+
+type projectCloneTool struct{ e *Engine }
+
+func (projectCloneTool) Spec() provider.ToolSpec {
+	return provider.ToolSpec{
+		Name:        "project_clone",
+		Description: "把一个已登记、有仓库地址的项目 clone 到一台开发机的工作空间里，让它也能在那台机器上干活。会请用户批准。",
+		Schema: json.RawMessage(`{"type":"object","properties":{
+			"project":{"type":"string","description":"项目名或 id"},
+			"machine":{"type":"string","description":"开发机名或 id；不填选第一台能用的"}
+		},"required":["project"]}`),
+	}
+}
+
+func (t projectCloneTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct{ Project, Machine string }
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", err
+	}
+	p, err := t.e.findProject(ctx, a.Project)
+	if err != nil {
+		return "", err
+	}
+	in := SetupInput{ProjectID: p.ID, ThreadID: tool.TurnFrom(ctx).ThreadID, Actor: event.ActorSupervisor}
+	if a.Machine != "" {
+		if in.NodeID, err = t.e.findNode(ctx, a.Machine); err != nil {
+			return "", err
+		}
+	}
+	r, err := t.e.CloneProject(ctx, in)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("正在把项目 %s clone 到机器上（Run %s）；git clone 要用户批准，完成后会自动汇报。", p.Name, r.ID), nil
 }

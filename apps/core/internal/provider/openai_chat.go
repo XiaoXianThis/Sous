@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 )
@@ -9,10 +11,17 @@ import (
 // openaiChat speaks the OpenAI Chat Completions format, which DeepSeek and
 // most OpenAI-compatible services accept. base_url includes the version path
 // when the service uses one (https://api.openai.com/v1, https://api.deepseek.com).
-type openaiChat struct{ cfg Config }
+type openaiChat struct {
+	cfg     Config
+	session string // fallback x-opencode-session when a request has none
+}
 
 func init() {
-	Register("openai-chat", func(c Config) (Provider, error) { return &openaiChat{cfg: c}, nil })
+	Register("openai-chat", func(c Config) (Provider, error) {
+		var b [8]byte
+		_, _ = rand.Read(b[:])
+		return &openaiChat{cfg: c, session: "sous-" + hex.EncodeToString(b[:])}, nil
+	})
 }
 
 func (p *openaiChat) Name() string { return p.cfg.Name }
@@ -90,8 +99,16 @@ func (p *openaiChat) Stream(ctx context.Context, req Request, onDelta func(Delta
 		}
 		body["tools"] = tools
 	}
+	session := req.SessionID
+	if session == "" {
+		session = p.session
+	}
 	resp, err := postStream(ctx, p.cfg.Client, p.cfg.BaseURL+"/chat/completions",
-		map[string]string{"Authorization": "Bearer " + p.cfg.APIKey}, body)
+		map[string]string{
+			"Authorization":      "Bearer " + p.cfg.APIKey,
+			"User-Agent":         "sous-hub/1.0",
+			"x-opencode-session": session,
+		}, body)
 	if err != nil {
 		return Response{}, err
 	}

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { board, parseHash, tone } from './tasks'
+import { board, tone } from './tasks'
 import type { Task } from './types'
 
 const task = (id: string, status: Task['status'], priority = 0, created_at = 0): Task => ({
   id, status, priority, created_at, updated_at: created_at, parent_id: '', origin_thread_id: '', kind: 'general', title: id,
   detail: '', status_reason: '', project_id: '', agent_pref: '', node_pref: '', permission_mode: '', branch: '',
-  base_branch: '', pr_url: '', review_note: '', next: '', dismissed: false, depends_on: [],
+  base_branch: '', pr_url: '', review_note: '', next: '', dismissed: false, depends_on: [], persona_id: '',
 })
 
 describe('board', () => {
@@ -18,14 +18,6 @@ describe('board', () => {
   })
 })
 
-describe('parseHash', () => {
-  it('reads the notification links', () => {
-    expect(parseHash('#approvals')).toEqual({ approvals: true })
-    expect(parseHash('#task=01ABC')).toEqual({ task: '01ABC' })
-    expect(parseHash('#/thread=t1')).toEqual({ thread: 't1' })
-    expect(parseHash('')).toEqual({})
-  })
-})
 
 describe('tone', () => {
   it('marks what needs attention', () => {

@@ -185,6 +185,18 @@ func (n *Notifier) message(ctx context.Context, ev event.Event, kind string) (Me
 			body += "：" + p.Reason
 		}
 		return Message{Title: title, Body: clip(body), URL: "/#task=" + ev.TaskID, Tag: "task-" + ev.TaskID, Kind: kind}, true
+	case event.InspectorFinding:
+		var p event.FindingPayload
+		ev.Decode(&p)
+		title := map[string]string{event.ActionPause: "巡检：已暂停一个 Run", event.ActionStop: "巡检：已终止一个 Run"}[p.Action]
+		if title == "" || !p.Done {
+			title = "巡检发现问题"
+		}
+		url := "/#thread=" + ev.ThreadID
+		if ev.TaskID != "" {
+			url = "/#task=" + ev.TaskID
+		}
+		return Message{Title: title, Body: clip(p.Reason), URL: url, Tag: "finding-" + p.FindingID, Kind: kind}, true
 	case event.MessageAssistant:
 		var p event.MessagePayload
 		ev.Decode(&p)

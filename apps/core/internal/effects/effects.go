@@ -28,6 +28,8 @@ type Runner struct {
 	wake     <-chan struct{}
 	interval time.Duration
 	now      func() time.Time
+	// Beat, when set, is called on every loop iteration (for the watchdog).
+	Beat func()
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -66,6 +68,9 @@ func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	for {
+		if r.Beat != nil {
+			r.Beat()
+		}
 		r.start(ctx)
 		select {
 		case <-ctx.Done():

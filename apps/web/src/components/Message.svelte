@@ -16,6 +16,10 @@
     return out
   }
   let showThinking = $state(false)
+  let showTrigger = $state(false)
+  // A trigger's first line says what fired: 【定时任务「…」】 or 【跟进】…
+  const triggerHead = $derived(message.kind === 'trigger' ? message.content.split('\n')[0].replace(/^【(定时任务|跟进)?|】$/g, '') : '')
+  const triggerLabel = $derived(message.content.startsWith('【定时任务') ? '定时任务' : '自动跟进')
   const time = $derived(
     new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
   )
@@ -23,15 +27,25 @@
 
 {#if message.kind === 'silent'}
   <p class="silent" title={message.content || undefined}>已读，不需要回复{message.content ? `：${message.content}` : ''}</p>
+{:else if message.kind === 'trigger'}
+  <div class="trigger" data-testid="message-trigger">
+    <button class="trigger-head" onclick={() => (showTrigger = !showTrigger)} aria-expanded={showTrigger}>
+      <span class="badge">{triggerLabel}</span>
+      <span class="trigger-text">{triggerHead}</span>
+      <time>{time}</time>
+    </button>
+    {#if showTrigger}<div class="trigger-body">{message.content}</div>{/if}
+  </div>
 {:else}
 <article
   class="msg {message.role}"
   class:error={message.error}
-  class:notice={message.kind === 'notice' || message.kind === 'report'}
+  class:notice={message.kind === 'notice' || message.kind === 'report' || message.kind === 'inspector'}
   data-testid="message-{message.kind ?? message.role}"
 >
   {#if message.kind === 'notice'}<span class="badge">提醒</span>{/if}
   {#if message.kind === 'report'}<span class="badge">任务汇报</span>{/if}
+  {#if message.kind === 'inspector'}<span class="badge">巡检</span>{/if}
   {#if message.thinking}
     <button class="thinking-toggle" onclick={() => (showThinking = !showThinking)}>
       {showThinking ? '收起思考过程' : '查看思考过程'}
@@ -67,6 +81,17 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   time { font-size: 12px; color: var(--muted); padding: 0 4px; }
+  .trigger { display: grid; gap: 4px; justify-items: center; }
+  .trigger-head {
+    display: flex; align-items: baseline; gap: 8px; max-width: 100%; border: 1px dashed var(--line);
+    background: transparent; border-radius: 999px; padding: 3px 12px; color: var(--muted); font-size: 13px;
+  }
+  .trigger-head .badge { flex: none; }
+  .trigger-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trigger-body {
+    white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; color: var(--muted);
+    border-left: 2px solid var(--line); padding: 2px 0 2px 10px; justify-self: stretch;
+  }
   .caret {
     display: inline-block; width: 8px; height: 1em; margin-left: 2px; vertical-align: -2px;
     background: var(--accent); animation: caret 1s steps(2) infinite;

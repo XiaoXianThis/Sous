@@ -1,6 +1,10 @@
 package event
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+)
 
 // Payloads of node, run and approval events.
 
@@ -14,6 +18,10 @@ type NodePayload struct {
 	Agents   json.RawMessage `json:"agents,omitempty"` // node.inventory: []proto.AgentInfo
 	// Concurrency is how many runs the node executes at once (node.inventory).
 	Concurrency int `json:"concurrency,omitempty"`
+	// M5 (node.inventory): role, workspaces and the wok version.
+	Role       string   `json:"role,omitempty"`
+	Workspaces []string `json:"workspaces,omitempty"`
+	Wok        *string  `json:"wok,omitempty"`
 }
 
 // Run kinds.
@@ -45,6 +53,13 @@ type RunQueuedPayload struct {
 	BaseBranch string `json:"base_branch,omitempty"` // the branch a pull request targets
 	Title      string `json:"title,omitempty"`       // the task title, for commits and pull requests
 	Force      bool   `json:"force,omitempty"`       // deliver: push with --force-with-lease after a rebase
+	// RecoveryNote comes first in the prompt of a run that picks up after
+	// an interrupted one (design §9).
+	RecoveryNote string `json:"recovery_note,omitempty"`
+	// M5: the persona's session options and name, and what a setup run does.
+	Options map[string]string `json:"options,omitempty"`
+	Persona string            `json:"persona,omitempty"`
+	Setup   *proto.Setup      `json:"setup,omitempty"`
 }
 
 type RunStartedPayload struct {

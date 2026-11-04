@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,33 @@ type Hub struct {
 
 	Providers []Provider        `yaml:"providers"`
 	Roles     map[string]string `yaml:"roles"` // role -> "provider/model"
+
+	// M4: autonomy and long-running operation. Zero values take defaults.
+	Triggers  Triggers  `yaml:"triggers"`
+	Inspector Inspector `yaml:"inspector"`
+	// RetentionDays: logs and diffs of tasks closed longer ago are
+	// archived (default 90; -1 turns it off).
+	RetentionDays int `yaml:"retention_days"`
+	// UpdateRepo is the GitHub repository releases come from (owner/name).
+	UpdateRepo string `yaml:"update_repo"`
+}
+
+// Triggers tunes follow-ups (design §9).
+type Triggers struct {
+	FollowupEvery time.Duration `yaml:"followup_every"` // default 5m
+	BlockedAfter  time.Duration `yaml:"blocked_after"`  // default 4h
+	RunTimeout    time.Duration `yaml:"run_timeout"`    // default 2h
+	ApprovalAfter time.Duration `yaml:"approval_after"` // default 2h
+	QuestionAfter time.Duration `yaml:"question_after"` // default 8h
+}
+
+// Inspector tunes the inspector agent (docs/decisions/0006).
+type Inspector struct {
+	Every        time.Duration `yaml:"every"`         // default 10m
+	Repeat       int           `yaml:"repeat"`        // default 5
+	StalledAfter time.Duration `yaml:"stalled_after"` // default 30m
+	LongAfter    time.Duration `yaml:"long_after"`    // default 3h
+	TokenAlarm   int           `yaml:"token_alarm"`   // default 2000000 per period
 }
 
 type Provider struct {

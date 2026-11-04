@@ -81,6 +81,9 @@ type Request struct {
 	Messages  []Message
 	Tools     []ToolSpec
 	MaxTokens int
+	// SessionID is a stable id for one conversation. Gateways such as
+	// OpenCode Go use it for routing and prompt caching. Optional.
+	SessionID string
 }
 
 // Delta is streamed while a response is generated.

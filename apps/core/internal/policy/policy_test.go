@@ -123,3 +123,40 @@ func TestFloorConfig(t *testing.T) {
 		t.Error("a bad pattern must be reported")
 	}
 }
+
+func TestServerRole(t *testing.T) {
+	p, _ := New(Config{})
+	cases := []struct {
+		cmd  string
+		want Category
+	}{
+		{"sudo systemctl restart app", Irreversible},
+		{"systemctl restart app", Service},
+		{"systemctl status app", Read},
+		{"docker compose up -d", Service},
+		{"docker compose ps", Read},
+		{"pm2 restart all", Service},
+		{"./deploy.sh", ExecOther},
+	}
+	for _, c := range cases {
+		raw, _ := json.Marshal(map[string]string{"command": c.cmd})
+		if got, _ := p.Classify(Request{ToolKind: "execute", RawInput: raw, Workdir: "/srv/app"}); got != c.want {
+			t.Errorf("%q = %s, want %s", c.cmd, got, c.want)
+		}
+	}
+	if DecideFor(RoleServer, ModeOpen, ExecOther) != AskUser {
+		t.Error("a server must not run in the open mode")
+	}
+	if DecideFor(RoleServer, ModeAuto, Service) != AskUser || DecideFor(RoleServer, ModeAuto, Delete) != AskUser {
+		t.Error("service changes and deletions on a server go to the user")
+	}
+	if DecideFor(RoleServer, ModeAuto, ExecOther) != AskAI || DecideFor(RoleServer, ModeDefault, Read) != Allow {
+		t.Error("other actions follow the mode")
+	}
+	if DecideFor(RoleServer, ModeDefault, EditWorktree) != AskUser {
+		t.Error("edits on a server go to the user")
+	}
+	if DecideFor(RoleDev, ModeOpen, Service) != Allow || DecideFor("", ModeDefault, Service) != AskUser {
+		t.Error("dev machines keep the M3 table")
+	}
+}

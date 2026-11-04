@@ -85,7 +85,8 @@ func PrepareTask(ctx context.Context, root, repoPath, key, branch, slug string) 
 	}
 	base, err := git(ctx, top, "rev-parse", "HEAD")
 	if err != nil {
-		return Prepared{}, fmt.Errorf("repository has no commits yet: %w", err)
+		// sous never commits in a user's repository on its own; say what to do.
+		return Prepared{}, fmt.Errorf("%s 还没有任何提交，请先在该目录执行一次 git add -A 和 git commit", top)
 	}
 	baseBranch, _ := git(ctx, top, "rev-parse", "--abbrev-ref", "HEAD")
 	if baseBranch == "HEAD" {

@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 )
 
 func projectRun(w *Writer, ev event.Event) error {
@@ -59,7 +60,24 @@ func projectRun(w *Writer, ev event.Event) error {
 		if conc <= 0 {
 			conc = 2
 		}
-		return exec(`UPDATE nodes SET agents = ?, concurrency = ?, last_seen = ? WHERE id = ?`, string(p.Agents), conc, ev.TS, p.NodeID)
+		if err := exec(`UPDATE nodes SET agents = ?, concurrency = ?, last_seen = ? WHERE id = ?`, string(p.Agents), conc, ev.TS, p.NodeID); err != nil {
+			return err
+		}
+		if p.Role != "" {
+			if err := exec(`UPDATE nodes SET role = ? WHERE id = ?`, p.Role, p.NodeID); err != nil {
+				return err
+			}
+		}
+		if p.Workspaces != nil {
+			ws, _ := json.Marshal(p.Workspaces)
+			if err := exec(`UPDATE nodes SET workspaces = ? WHERE id = ?`, string(ws), p.NodeID); err != nil {
+				return err
+			}
+		}
+		if p.Wok != nil {
+			return exec(`UPDATE nodes SET wok = ? WHERE id = ?`, *p.Wok, p.NodeID)
+		}
+		return nil
 
 	case event.RunQueued:
 		var p event.RunQueuedPayload
@@ -74,16 +92,26 @@ func projectRun(w *Writer, ev event.Event) error {
 		if mode == "" {
 			mode = "default"
 		}
-		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, ev.TS)
+		opts, setup := "", ""
+		if len(p.Options) > 0 {
+			raw, _ := json.Marshal(p.Options)
+			opts = string(raw)
+		}
+		if p.Setup != nil {
+			raw, _ := json.Marshal(p.Setup)
+			setup = string(raw)
+		}
+		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, p.RecoveryNote, ev.TS, ev.TS, opts, p.Persona, setup)
 	case event.RunStarted:
 		var p event.RunStartedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		if err := exec(`UPDATE runs SET status = ?, workdir = ?, branch = ?, base_branch = CASE WHEN ? = '' THEN base_branch ELSE ? END, started_at = ? WHERE id = ?`,
-			event.RunStatusRunning, p.Workdir, p.Branch, p.BaseBranch, p.BaseBranch, ev.TS, ev.RunID); err != nil {
+		if err := exec(`UPDATE runs SET status = ?, workdir = ?, branch = ?, base_branch = CASE WHEN ? = '' THEN base_branch ELSE ? END,
+			started_at = CASE WHEN started_at = 0 THEN ? ELSE started_at END, last_event = ? WHERE id = ?`,
+			event.RunStatusRunning, p.Workdir, p.Branch, p.BaseBranch, p.BaseBranch, ev.TS, ev.TS, ev.RunID); err != nil {
 			return err
 		}
 		// The first run of a code task names the task's branch.
@@ -91,13 +119,46 @@ func projectRun(w *Writer, ev event.Event) error {
 			base_branch = CASE WHEN base_branch = '' THEN ? ELSE base_branch END
 			WHERE id = (SELECT task_id FROM runs WHERE id = ?) AND ? != ''`, p.Branch, p.BaseBranch, ev.RunID, p.Branch)
 	case event.RunUpdate:
-		return nil // the event log is the record; the run row keeps only its state
+		// The event log is the record; the run row keeps only its state and
+		// when it last showed progress (for the inspector).
+		return exec(`UPDATE runs SET last_event = ? WHERE id = ?`, ev.TS, ev.RunID)
+	case event.RunPaused:
+		var p event.RunPausePayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		if err := exec(`UPDATE runs SET paused = 1, pause_reason = ? WHERE id = ? AND status IN ('queued', 'running')`, p.Reason, ev.RunID); err != nil {
+			return err
+		}
+		// Pausing cancels the agent's turn and with it what it was asking.
+		return exec(`UPDATE approvals SET status = 'expired', decided_at = ? WHERE run_id = ? AND status = 'pending'`, ev.TS, ev.RunID)
+	case event.RunResumed:
+		return exec(`UPDATE runs SET paused = 0, pause_reason = '', last_event = ? WHERE id = ?`, ev.TS, ev.RunID)
+	case event.RunMessage:
+		var p event.RunMessagePayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`INSERT OR IGNORE INTO run_messages(id, run_id, text, created_at) VALUES (?,?,?,?)`, p.MessageID, ev.RunID, p.Text, ev.TS)
+	case event.RunMessageDelivered:
+		var p event.RunDeliveredPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		for _, id := range p.MessageIDs {
+			if err := exec(`UPDATE run_messages SET delivered = 1 WHERE id = ?`, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	case event.RunArchived:
+		return exec(`UPDATE runs SET archived = 1 WHERE id = ?`, ev.RunID)
 	case event.RunEnded:
 		var p event.RunEndedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ? WHERE id = ?`,
+		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ?, paused = 0 WHERE id = ?`,
 			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, ev.RunID); err != nil {
 			return err
 		}
@@ -147,20 +208,31 @@ type Node struct {
 	LastSeen    int64           `json:"last_seen"`
 	CreatedAt   int64           `json:"created_at"`
 	Revoked     bool            `json:"revoked"`
+	// M5
+	Role       string   `json:"role"`
+	Workspaces []string `json:"workspaces"`
+	Wok        string   `json:"wok"`
+	// Admin is live state, not stored: "on" when the connected node
+	// accepts remote administration, "off" when its node.json turned it
+	// off, "unsupported" for an older daemon, empty when offline.
+	Admin string `json:"admin,omitempty"`
 }
 
-const nodeCols = `id, name, os, arch, hostname, version, agents, online, concurrency, last_seen, created_at, revoked`
+const nodeCols = `id, name, os, arch, hostname, version, agents, online, concurrency, last_seen, created_at, revoked, role, workspaces, wok`
 
 func scanNodes(rows *sql.Rows) ([]Node, error) {
 	defer rows.Close()
 	out := []Node{}
 	for rows.Next() {
 		var n Node
-		var agents string
-		if err := rows.Scan(&n.ID, &n.Name, &n.OS, &n.Arch, &n.Hostname, &n.Version, &agents, &n.Online, &n.Concurrency, &n.LastSeen, &n.CreatedAt, &n.Revoked); err != nil {
+		var agents, ws string
+		if err := rows.Scan(&n.ID, &n.Name, &n.OS, &n.Arch, &n.Hostname, &n.Version, &agents, &n.Online, &n.Concurrency, &n.LastSeen, &n.CreatedAt, &n.Revoked,
+			&n.Role, &ws, &n.Wok); err != nil {
 			return nil, err
 		}
 		n.Agents = json.RawMessage(agents)
+		json.Unmarshal([]byte(ws), &n.Workspaces)
+		n.Workspaces = nonNilSlice(n.Workspaces)
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -239,18 +311,40 @@ type Run struct {
 	CreatedAt  int64  `json:"created_at"`
 	StartedAt  int64  `json:"started_at"`
 	EndedAt    int64  `json:"ended_at"`
+	// M4
+	Paused       bool   `json:"paused"`
+	PauseReason  string `json:"pause_reason"`
+	Archived     bool   `json:"archived"`
+	RecoveryNote string `json:"recovery_note"`
+	LastEvent    int64  `json:"last_event"`
+	// M5
+	Options map[string]string `json:"options,omitempty"`
+	Persona string            `json:"persona,omitempty"`
+	Setup   *proto.Setup      `json:"setup,omitempty"`
 }
 
-const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at`
+const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at,
+	paused, pause_reason, archived, recovery_note, last_event, options, persona, setup`
 
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	defer rows.Close()
 	out := []Run{}
 	for rows.Next() {
 		var r Run
+		var opts, setup string
 		if err := rows.Scan(&r.ID, &r.ThreadID, &r.TaskID, &r.Purpose, &r.Mode, &r.BaseBranch, &r.PRURL, &r.Conflict, &r.Title, &r.Force, &r.NodeID, &r.Agent, &r.Kind, &r.RepoPath, &r.Prompt, &r.Status,
-			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt); err != nil {
+			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt,
+			&r.Paused, &r.PauseReason, &r.Archived, &r.RecoveryNote, &r.LastEvent, &opts, &r.Persona, &setup); err != nil {
 			return nil, err
+		}
+		if opts != "" {
+			json.Unmarshal([]byte(opts), &r.Options)
+		}
+		if setup != "" {
+			var st proto.Setup
+			if json.Unmarshal([]byte(setup), &st) == nil {
+				r.Setup = &st
+			}
 		}
 		out = append(out, r)
 	}

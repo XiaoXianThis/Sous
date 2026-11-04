@@ -55,6 +55,7 @@ func run() error {
 	defer stop()
 
 	if len(args) == 0 {
+		h.WatchdogOn = true
 		return h.Run(ctx)
 	}
 	defer h.Store.Close()

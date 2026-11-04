@@ -14,3 +14,20 @@ providers:
 roles:
   supervisor: deepseek/deepseek-v4-pro # DeepSeek also offers deepseek-flash
   # reviewer, approver and inspector default to the supervisor's model.
+  # inspector: deepseek/deepseek-flash   # a cheaper model is enough
+
+# Everything below is optional; these are the defaults.
+# triggers:                 # follow-ups the supervisor gets (design §9)
+#   followup_every: 5m
+#   blocked_after: 4h       # a blocked or failed task nobody dismissed
+#   run_timeout: 2h         # a run still going
+#   approval_after: 2h      # an approval nobody answered
+#   question_after: 8h      # a question the supervisor asked
+# inspector:                # docs/decisions/0006
+#   every: 10m
+#   repeat: 5               # more identical tool calls in a row is a loop
+#   stalled_after: 30m
+#   long_after: 3h
+#   token_alarm: 2000000    # model tokens per period
+# retention_days: 90        # archive logs and diffs of tasks closed longer ago; -1: never
+# update_repo: XiaoXianThis/Sous   # GitHub Releases that machines update from

@@ -49,7 +49,7 @@ func (r *run) deliver() {
 		push = "git push --force-with-lease -u origin " + ws.Branch
 	}
 	raw, _ := json.Marshal(map[string]string{"command": push})
-	cat, why := r.d.policy.Classify(policy.Request{ToolKind: "execute", RawInput: raw, Workdir: ws.Dir})
+	cat, why := r.d.pol().Classify(policy.Request{ToolKind: "execute", RawInput: raw, Workdir: ws.Dir})
 	ask := fmt.Sprintf("push 分支 %s 并创建 PR", ws.Branch)
 	detail := fmt.Sprintf("将执行：\n  %s\n  gh pr create --head %s", push, ws.Branch)
 	if ws.BaseBranch != "" {
@@ -60,7 +60,7 @@ func (r *run) deliver() {
 		detail += "\n\n" + stat
 	}
 	options := []proto.Option{{OptionID: "allow", Name: "批准", Kind: "allow_once"}, {OptionID: "reject", Name: "拒绝", Kind: "reject_once"}}
-	switch policy.Decide(r.spec.PermissionMode, cat) {
+	switch policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) {
 	case policy.Deny:
 		r.recordPolicy(ask+"（"+why+"）", cat, "deny")
 		r.end("failed", "", "", stat, errors.New("底线规则拒绝了 push："+why))
@@ -69,7 +69,7 @@ func (r *run) deliver() {
 		r.recordPolicy(ask, cat, "allow")
 	default:
 		review := "user"
-		if policy.Decide(r.spec.PermissionMode, cat) == policy.AskAI {
+		if policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) == policy.AskAI {
 			review = "ai"
 		}
 		if review == "ai" {
@@ -77,7 +77,7 @@ func (r *run) deliver() {
 		} else {
 			r.status("等你批准 push")
 		}
-		if opt := r.ask(ask, "execute", detail, cat, review, options); opt != "allow" {
+		if opt, _ := r.ask(ask, "execute", detail, cat, review, options); opt != "allow" {
 			if r.ctx.Err() != nil {
 				r.end("cancelled", "", "", stat, errors.New(r.stopReasonText()))
 			} else {
@@ -105,6 +105,7 @@ func (r *run) deliver() {
 	r.d.ob.reliable(proto.New(proto.TRunEnded, proto.RunEnded{
 		RunID: r.spec.RunID, Status: "succeeded", Summary: summary, DiffStat: stat, PRURL: url, Conflict: conflict,
 	}))
+	r.d.forget(r.spec.RunID)
 	slog.Info("daemon: delivered", "run", r.spec.RunID, "pr", url, "conflict", conflict)
 }
 

@@ -54,6 +54,7 @@ type TaskFields struct {
 	AgentPref      *string  `json:"agent_pref,omitempty"`
 	NodePref       *string  `json:"node_pref,omitempty"`
 	PermissionMode *string  `json:"permission_mode,omitempty"`
+	PersonaID      *string  `json:"persona_id,omitempty"`
 	DependsOn      []string `json:"depends_on,omitempty"`
 	SetDeps        bool     `json:"set_deps,omitempty"`  // DependsOn replaces the list, even when empty
 	Dismissed      *bool    `json:"dismissed,omitempty"` // the user has seen the result
@@ -69,6 +70,7 @@ type TaskCreatedPayload struct {
 	AgentPref      string   `json:"agent_pref,omitempty"`
 	NodePref       string   `json:"node_pref,omitempty"`
 	PermissionMode string   `json:"permission_mode,omitempty"` // empty: the project's or the global default
+	PersonaID      string   `json:"persona_id,omitempty"`
 	DependsOn      []string `json:"depends_on,omitempty"`
 	Status         string   `json:"status"`
 }
@@ -108,6 +110,18 @@ type ProjectNode struct {
 	NodeID   string `json:"node_id"`
 	Path     string `json:"path"`
 	Priority int    `json:"priority"` // lower first
+	// Source is "scan" for a place found in the machine's workspaces, else
+	// "manual" (M5). Scan places come back on the next scan.
+	Source string `json:"source,omitempty"`
+}
+
+// Deploy is where and how a project is deployed (M5).
+type Deploy struct {
+	NodeID      string `json:"node_id"`
+	Path        string `json:"path"`
+	Command     string `json:"command"`                 // the deploy script or command
+	Health      string `json:"health,omitempty"`        // a health check command
+	AutoOnMerge bool   `json:"auto_on_merge,omitempty"` // deploy when a PR sous opened is merged
 }
 
 type ProjectPayload struct {
@@ -117,6 +131,11 @@ type ProjectPayload struct {
 	DefaultMode  string        `json:"default_mode,omitempty"`
 	DefaultAgent string        `json:"default_agent,omitempty"`
 	Nodes        []ProjectNode `json:"nodes,omitempty"`
+	// M5
+	DefaultPersona string  `json:"default_persona,omitempty"`
+	Notes          string  `json:"notes,omitempty"`
+	Layout         string  `json:"layout,omitempty"` // wokspace / empty
+	Deploy         *Deploy `json:"deploy,omitempty"`
 }
 
 // NotifySentPayload records a push notification sent to the user's devices.

@@ -17,6 +17,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/httpapi"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/inspector"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/notify"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
@@ -24,6 +25,9 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/supervisor"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/trigger"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/watchdog"
 )
 
 type Hub struct {
@@ -36,7 +40,14 @@ type Hub struct {
 	Nodes      *nodehub.Hub
 	Tasks      *task.Engine
 	Notifier   *notify.Notifier
+	Triggers   *trigger.Scheduler
+	Inspector  *inspector.Inspector
+	Updates    *update.Checker
+	Watchdog   *watchdog.Watchdog
 	HTTP       *httpapi.Server
+	// WatchdogOn makes a stuck process exit so its service manager restarts
+	// it. The sous-hub command turns it on; tests leave it off.
+	WatchdogOn bool
 }
 
 // DBPath is where the Hub keeps its database inside the data directory.
@@ -74,8 +85,29 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		p, m := cfg.Model(r)
 		return task.Model{Provider: providers[p], Name: m}
 	}
+	h.Watchdog = watchdog.New()
 	h.Tasks = task.New(h.Log, h.Nodes)
 	h.Tasks.Reviewer, h.Tasks.Approver = role(config.RoleReviewer), role(config.RoleApprover)
+	h.Tasks.Beat = h.Watchdog.Loop("task engine", 5*time.Minute)
+
+	tc := cfg.Triggers
+	h.Triggers = trigger.New(h.Log, trigger.Options{
+		FollowupEvery: tc.FollowupEvery, BlockedAfter: tc.BlockedAfter, RunTimeout: tc.RunTimeout,
+		ApprovalAfter: tc.ApprovalAfter, QuestionAfter: tc.QuestionAfter,
+		RetentionDays: cfg.RetentionDays, Archive: h.Nodes.Archive,
+		Beat: h.Watchdog.Loop("triggers", 5*time.Minute),
+	})
+	ic := cfg.Inspector
+	insp := role(config.RoleInspector)
+	every := ic.Every
+	if every <= 0 {
+		every = 10 * time.Minute
+	}
+	h.Inspector = inspector.New(h.Log, h.Nodes, insp.Provider, insp.Name, inspector.Options{
+		Every: every, Repeat: ic.Repeat, StalledAfter: ic.StalledAfter, LongAfter: ic.LongAfter, TokenAlarm: ic.TokenAlarm,
+		Beat: h.Watchdog.Loop("inspector", every+5*time.Minute),
+	})
+	h.Updates = &update.Checker{Client: update.Client{Repo: cfg.UpdateRepo}}
 
 	sup := role(config.RoleSupervisor)
 	tools := tool.NewRegistry(
@@ -83,7 +115,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
 		tool.Notify{Log: h.Log},
 	)
-	for _, t := range h.Tasks.Tools() {
+	for _, t := range append(h.Tasks.Tools(), h.Triggers.Tools()...) {
 		tools.Register(t)
 	}
 	h.Supervisor = supervisor.New(supervisor.Options{
@@ -94,6 +126,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		Environment: func(ctx context.Context, threadID string) []string {
 			return append(h.Nodes.Environment(ctx), h.Tasks.Environment(ctx, threadID)...)
 		},
+		DescribeContext: h.Tasks.DescribeContext,
 	})
 
 	vapid, err := notify.LoadVAPID(cfg.DataDir)
@@ -104,10 +137,20 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	h.Notifier = &notify.Notifier{Log: h.Log, Sender: &notify.Sender{VAPID: vapid, Subject: pushSubject(cfg)}}
 
 	h.Effects = effects.NewRunner(st, h.Log.EffectsEnqueued(), 2*time.Second)
+	h.Effects.Beat = h.Watchdog.Loop("effects", 2*time.Minute)
 	h.Effects.Handle(store.EffectTaskAdvance, h.Tasks.Advance)
 	h.Effects.Handle(store.EffectApprove, h.Tasks.Approve)
+	h.Effects.Handle(store.EffectSetup, h.Tasks.Setup)
 	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(cfg.Roles))
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(cfg.Roles),
+		h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes))
+	h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
+	h.Nodes.DeviceRoutes(h.HTTP.Mux())
+	// The single writer's lock must never hang: every write goes through it.
+	h.Watchdog.Probe("store", 2*time.Minute, func(ctx context.Context) error {
+		_, err := h.Log.Write(ctx, func(*store.Writer) error { return nil })
+		return err
+	})
 	return h, nil
 }
 
@@ -132,7 +175,12 @@ func (h *Hub) Run(ctx context.Context) error {
 	defer cancel()
 	h.Supervisor.Start(runCtx)
 	h.Tasks.Start(runCtx)
+	h.Triggers.Start(runCtx)
+	h.Inspector.Start(runCtx)
 	go h.Effects.Run(runCtx)
+	if h.WatchdogOn {
+		go h.Watchdog.Run(runCtx)
+	}
 
 	srv := &http.Server{Addr: h.Cfg.Listen, Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)

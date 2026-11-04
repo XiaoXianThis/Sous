@@ -1,0 +1,62 @@
+# Release build for apps/core (design §15). Run by .github/workflows/release.yml
+# when a v* tag is pushed; try it locally with:
+#   goreleaser release --snapshot --clean   (in apps/core, after `wok build web`)
+# Archive names are what internal/update looks for: <binary>_<version>_<os>_<arch>.
+version: 2
+project_name: sous
+
+builds:
+  - id: sous
+    main: ./cmd/sous
+    binary: sous
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X github.com/XiaoXianThis/Sous/apps/core/internal/version.Version={{ .Tag }}"]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+  - id: sous-hub
+    main: ./cmd/sous-hub
+    binary: sous-hub
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X github.com/XiaoXianThis/Sous/apps/core/internal/version.Version={{ .Tag }}"]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: sous
+    ids: [sous]
+    name_template: "sous_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [none*]
+  - id: sous-hub
+    ids: [sous-hub]
+    name_template: "sous-hub_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      # The Hub serves the PWA from web/ next to it (web_dir in hub.yaml).
+      - src: ../../build/web/*.*
+        dst: web
+        strip_parent: true
+      - src: ../../build/web/assets/*
+        dst: web/assets
+        strip_parent: true
+      - src: configs/hub.example.yaml
+        strip_parent: true
+      - src: ../../work/infra/deploy/hub/*
+        dst: deploy
+        strip_parent: true
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  draft: false
+  prerelease: auto

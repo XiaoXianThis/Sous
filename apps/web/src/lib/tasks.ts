@@ -52,16 +52,6 @@ export function tone(s: TaskStatus): 'active' | 'attention' | 'done' | 'quiet' {
   return 'quiet'
 }
 
-/** Parses the PWA's hash routes: #approvals, #task=<id>, #thread=<id>. */
-export function parseHash(hash: string): { approvals?: boolean; task?: string; thread?: string } {
-  const h = hash.replace(/^#\/?/, '')
-  if (h === 'approvals') return { approvals: true }
-  const [k, v] = h.split('=')
-  if (k === 'task' && v) return { task: decodeURIComponent(v) }
-  if (k === 'thread' && v) return { thread: decodeURIComponent(v) }
-  return {}
-}
-
 /** The agents sous knows how to drive (core's internal/agents). */
 export const knownAgents = ['claude', 'codex', 'cursor', 'opencode', 'kiro']
 

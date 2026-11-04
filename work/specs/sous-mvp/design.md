@@ -53,7 +53,9 @@ apps/core/
 │   ├── supervisor/      主管循环、上下文组装、发言策略、主管工具
 │   ├── task/            任务状态机、依赖关系
 │   ├── router/          路由策略
-│   ├── trigger/         cron、超时、巡检 agent
+│   ├── trigger/         cron、跟进（超时、受阻、等待回复）、数据保留
+│   ├── inspector/       巡检 agent：规则预筛 + 模型判断 + 暂停/终止/通知
+│   ├── watchdog/        进程内存活检测
 │   ├── memory/          记忆检索（目前在 store 里：两字片段子串匹配打分）
 │   ├── tool/            Tool 接口、注册表、内置工具、远程 MCP 客户端
 │   ├── channel/         Channel 接口；web 实现（HTTP/WebSocket）
@@ -64,8 +66,8 @@ apps/core/
 │   ├── worker/          Worker 接口；acp / jsonstream / pty / shell 实现
 │   ├── policy/          操作分类、三档模式、底线规则
 │   ├── workspace/       git worktree 的创建、清理、分支命名
-│   ├── ipc/             daemon 本地 IPC（Unix socket / Windows 命名管道），给 desktop 和 sous chat 用
-│   ├── update/          检查 GitHub Releases、下载、替换自身
+│   ├── ipc/             daemon 本地 IPC（各平台都用 Unix socket），给 desktop 和 sous chat 用
+│   ├── update/          检查 GitHub Releases、下载、校验、替换自身
 │   └── plugin/          进程外插件宿主（stdio JSON-RPC）
 └── go.mod
 ```
@@ -238,7 +240,7 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 |---|---|---|---|---|
 | Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.100.0` | ✅ session/new 返回 modes：`default`（每步询问）、`acceptEdits`、`plan`、`auto`、`bypassPermissions` | `claude auth status` 的 JSON `loggedIn` | 命令行版要单独登录，桌面 App 的登录不通用 |
 | Codex | `npx -y @agentclientprotocol/codex-acp@2.5.0` | ✅ | `codex login status`（"Logged in" / "Not logged in"） | |
-| Cursor | `cursor-agent acp` | ✅ 需要先调用 `authenticate`（methodId `cursor_login`） | `cursor-agent status` | 本机 `status` 报已登录但 `authenticate` 卡住，疑似登录过期；客户端对 authenticate 设了 30 秒超时 |
+| Cursor | `cursor-agent acp` | ✅ 需要先调用 `authenticate`（methodId `cursor_login`）；`initialize` 的 `clientInfo` 必须带 `version` | `cursor-agent status` | 模式是 `agent` / `plan` / `ask`，其中 `ask` 是只读问答，不能当“每步询问”用，sous 固定用 `agent`（它在执行 shell 命令前会请求权限）。免费账号的默认模型不可用，要在 `node.json` 里覆盖成 `["cursor-agent", "--model", "auto", "acp"]`，否则只报 `WritableIterable is closed`。认证要读钥匙串，daemon 必须以用户身份在沙盒外运行（2026-11-04 实测跑通一般任务） |
 | OpenCode | `opencode acp`，并通过 `OPENCODE_CONFIG_CONTENT` 把 edit、bash、webfetch、external_directory 设成 `ask` | ✅ 返回 `configOptions`（可选模型），没有 `modes` | 无法预先判断 | 免费模型有额度限制（2026-11-04 实测全部用完）。审批选项 id 是 `once` / `always` / `reject`。模型在 opencode.json 或 `OPENCODE_CONFIG=<文件>` 里选 |
 | Kiro | `kiro-cli acp`（未验证） | — | — | 本机只装了 Kiro IDE，没有 Kiro CLI |
 
@@ -300,6 +302,23 @@ Node 把每个操作归为以下一类，再查表决定处理方式：
   - 续跑或重试时，新的 Run 会带上一段**恢复说明**：要求 agent 先检查工作目录、git 历史和远端状态，确认之前做到了哪一步，再决定要不要重复任何对外操作（比如 push、创建 PR）。按任务从旧到新的顺序恢复（参考 SA-15）。
   - 记录哪些追加消息已经送进 agent 的会话，重试时只补发没被读取的部分（参考 SA-16）。
 
+**M4 的实现**：
+- **定时任务**（`internal/trigger`）：`schedules` 表由 `schedule.put` / `schedule.deleted` 投影；cron 是自己写的 5 字段解析（`*`、范围、列表、步长、`@daily` 等，日和周都限定时按标准 cron 取“或”）。每 30 秒检查一次，以 `max(上次触发, 最后修改)` 为起点算下次时间，所以 Hub 停机期间错过的只补触发一次，改时间也不会立刻触发。时区按定时任务自己的 `tz`，缺省取免打扰设置里记下的设备时区。
+- **触发即消息**：定时任务和跟进都追加 `trigger.fired` 事件，投影成线程里一条 `role: user`、`kind: trigger` 的消息，主管照常处理一轮（`unanswered` 把它当成用户消息）。提示词里说明了【定时任务…】和【跟进】开头的消息是什么、怎么处理；主管可以 `stay_silent`。触发时间记在事件里（`at`），所以用假时钟的测试和真实时间一致。
+- **跟进**：每 5 分钟检查：受阻或失败且没被用户关掉的任务超过 4 小时、执行超过 2 小时的 Run、等用户审批超过 2 小时的操作、主管提的问题（最后一条助手消息以问号结尾）8 小时没有回复。每种情况按 key（`task:<id>:<状态时间>`、`run:<id>:timeout`、`approval:<id>`、`question:<消息 id>`）只跟进一次，key 记在 `trigger_state` 表。
+- **巡检**（`internal/inspector`）：每 10 分钟取一次快照。规则：同一个工具加同样的标题连续出现超过 5 次（repeat，默认暂停）；30 分钟没有任何事件、也没在等审批（stalled，通知）；执行超过 3 小时（long，通知）；一个周期内 token 超过 200 万（tokens，通知）。可疑的交给 inspector 模型判断（输出严重程度、动作、给用户看的原因），模型可以判定没问题（`none`，记下来不再问）；模型调用失败就按规则的默认动作。同一个 Run 的同一条规则只报一次，Run 被继续之后重新计。结果写 `inspector.finding`（推送 `inspector` 类通知），并在主线留一条 `kind: inspector` 的说明。
+- **暂停**：ACP 没有暂停，sous 用“取消当前这一轮 + 不结束 Run”实现：Hub 记 `run.paused` 并发 `run.pause`，Node 发 `session/cancel`、取消未答复的权限请求（Hub 侧这些审批随之过期），然后在两轮之间等待。`run.resume` 或一条追加指令让它继续。任务的状态保持进行中，原因写成“已暂停：…”，首页“需要你处理”里会列出来。
+- **进程看门狗**（`internal/watchdog`）：Hub 的副作用队列、任务引擎、定时任务、巡检这几个循环要定期心跳，数据库写锁每 15 秒探测一次；超过时限（2～5 分钟）就以退出码 3 退出，交给服务管理器重启。daemon 探测自己的锁。`sous-hub` 和 `sous daemon` 打开看门狗，测试不打开。
+- **daemon 的恢复**：发件箱持久化（`outbox.jsonl`）；每个 Run 的状态（spec、会话 id、agent 能否 `session/load`、已送达的追加消息、是否暂停）存在 `runs/<id>.json`。daemon 正常退出时不报 Run 结束；重启后按 `welcome.resume_runs` 对账：能加载会话的就加载并接着做（回放的历史不再上报，先发一段重启说明），否则报 `interrupted`。ACP 的通知改为按顺序同步处理，否则加载会话时回放的消息可能晚于加载结果到达。
+- **中断后的重试**：任务引擎收到 `interrupted`，在同一次派发内自动再开一个 Run（最多 1 次），带上恢复说明：先检查工作目录、git 历史和远端状态，不要重复对外操作，并附上上一个 Run 没送达的追加指令；同时在任务的线程里发一条带推送的汇报。再中断就按失败处理。交付 Run 中断后也会重新交付一次（push 和创建 PR 本身可以重复）。
+- **追加消息的送达**：`run.message` 先作为事件存下（机器离线也能发），Node 在把它放进 `session/prompt` 之前上报 `run.delivered`。重连时 Hub 重发没送达的，Node 按消息 id 去重。
+- **数据保留**：每天一次，把关闭超过 90 天的任务的 Run 日志和 diff 压缩成 `runs/archive/<id>.{log,diff}.gz`，记 `run.archived`；读日志和 diff 的接口会自动从归档里读。
+- **用量**：`/usage` 增加按天（按用户时区）的统计，界面有“用量”页。只统计 sous 自己的模型调用；编程 agent 不上报 token。
+- **临时故障重试**：Node 启动 agent 或打开会话时，错误文本像网络故障或 408/429/5xx 的，间隔 2、5 秒再试两次。
+- **`sous chat`**：daemon 在 `~/.sous/daemon.sock` 上提供 IPC（见 `docs/api/core-daemon-ipc.md`），用设备令牌调用 Hub 的 `/api/v1/device/` 接口（只有线程、消息、事件流和审批）。终端界面是逐行的：历史、流式回复、任务和审批提示，`/approve` 审批；daemon 重启时自动重连。
+- **更新**（`internal/update`）：Hub 缓存 GitHub Releases 的最新版本（1 小时）供界面显示；点“更新”后 Hub 发 `node.update`，Node 下载 `sous_<版本>_<系统>_<架构>`，按 `checksums.txt` 校验，替换自己（Windows 上先把正在运行的程序改名为 `.old`），上报结果，然后重启：在服务管理器下以退出码 3 退出等它拉起，在终端里用 exec 换成新程序。Run 在重启后恢复。Hub 自己不自动更新。
+- **发布**：`apps/core/.goreleaser.yaml` 和 `.github/workflows/release.yml`：打 `v*` tag 时跑测试、构建 PWA，发布 `sous`（三个系统 × amd64/arm64）和 `sous-hub`（Linux，压缩包里带 `web/`、配置模板和部署文件），版本号通过 `-ldflags` 写进 `internal/version`。
+
 ## 10. 模型层
 
 - 内部使用统一的格式：`Message{Role, Parts[]}`，Part 包括文本、工具调用、工具结果、思考内容；工具定义统一用 JSON Schema。
@@ -356,7 +375,7 @@ roles:
 | 系统服务 | `kardianos/service` |
 | 伪终端 | 选一个同时支持 Unix PTY 和 Windows ConPTY 的库（「待验证」） |
 | 执行命令 | Windows 用 PowerShell，其他平台用 sh；命令白名单分平台写 |
-| 本地 IPC | Unix socket / Windows 命名管道 |
+| 本地 IPC | 各平台都用 Unix socket（Windows 10 起支持），不用命名管道 |
 | 路径 | 一律用 `filepath`；worktree 路径不能超过 Windows 的长度限制 |
 
 ## 15. 构建与发布

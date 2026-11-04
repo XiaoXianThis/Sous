@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -225,9 +226,9 @@ func TestSilentWithTextIsRefused(t *testing.T) {
 	}}
 	log, main, _ := setup(t, p, nil)
 	say(t, log, main, "记一下")
-	msgs := waitMessages(t, log, main, 2)
-	if msgs[1].Kind != "" || !strings.Contains(msgs[1].Content, "已记下") {
-		t.Fatalf("reply: %+v", msgs[1])
+	msgs := waitMessages(t, log, main, 3)
+	if msgs[1].Kind != event.KindStep || msgs[1].Content != "好的" || msgs[2].Kind != "" || !strings.Contains(msgs[2].Content, "已记下") {
+		t.Fatalf("replies: %+v", msgs[1:])
 	}
 	res := p.requests[1].Messages[len(p.requests[1].Messages)-1].Parts[0].ToolResult
 	if res == nil || !res.IsError {
@@ -252,5 +253,84 @@ func TestRelevantMemoriesReachThePrompt(t *testing.T) {
 	}
 	if strings.Contains(sys, "爬山") {
 		t.Fatalf("unrelated memory included:\n%s", sys)
+	}
+}
+
+func TestTriggerStartsATurn(t *testing.T) {
+	p := &scripted{responses: []provider.Response{{Message: provider.Text(provider.RoleAssistant, "昨天完成了 2 个任务。")}}}
+	log, main, _ := setup(t, p, nil)
+	ev := event.New(event.TriggerFired, event.ActorTrigger, main, event.TriggerPayload{
+		Kind: event.TriggerCron, Key: "schedule:s1", ScheduleID: "", MessageID: "m1", Title: "日报", Content: "【定时任务「日报」】\n汇总昨天的进展",
+	})
+	if _, err := log.Append(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	msgs := waitMessages(t, log, main, 2)
+	if msgs[0].Kind != event.KindTrigger || msgs[0].Role != "user" || msgs[1].Content != "昨天完成了 2 个任务。" || msgs[1].ReplyTo != msgs[0].Seq {
+		t.Fatalf("messages: %+v", msgs)
+	}
+	if got := p.requests[0].Messages[0].PlainText(); !strings.Contains(got, "汇总昨天的进展") {
+		t.Fatalf("the model saw %q", got)
+	}
+	if !strings.Contains(p.requests[0].System, "【跟进】") {
+		t.Fatal("the prompt does not explain triggers")
+	}
+}
+
+// probeTool records the thread's messages at the moment it runs.
+type probeTool struct {
+	log  *eventlog.Log
+	seen []store.Message
+}
+
+func (p *probeTool) Spec() provider.ToolSpec {
+	return provider.ToolSpec{Name: "probe", Description: "test", Schema: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (p *probeTool) Call(ctx context.Context, _ json.RawMessage) (string, error) {
+	th, _ := p.log.Store.MainThreadID(ctx)
+	p.seen, _ = p.log.Store.Messages(ctx, th, 0, 50)
+	return "ok", nil
+}
+
+// What the model says before calling tools is stored before they run, so
+// whatever the tools add to the thread comes after it; the step does not
+// answer the user, the turn's last message does, and the model sees the
+// whole turn as one message.
+func TestStepsKeepTheOrderOfWordsAndTools(t *testing.T) {
+	p := &scripted{responses: []provider.Response{
+		{Message: provider.Message{Role: provider.RoleAssistant, Parts: []provider.Part{
+			{Text: "我先建任务"},
+			{ToolCall: &provider.ToolCall{ID: "c1", Name: "probe", Args: []byte(`{}`)}},
+		}}},
+		{Message: provider.Text(provider.RoleAssistant, "建好了")},
+		{Message: provider.Text(provider.RoleAssistant, "好")},
+	}}
+	probe := &probeTool{}
+	tools := tool.NewRegistry()
+	tools.Register(probe)
+	log, main, _ := setup(t, p, tools)
+	probe.log = log
+	say(t, log, main, "建三个任务")
+	msgs := waitMessages(t, log, main, 3)
+	if msgs[1].Kind != event.KindStep || msgs[1].Content != "我先建任务" || msgs[2].Content != "建好了" || msgs[2].Kind != "" {
+		t.Fatalf("messages: %+v", msgs)
+	}
+	if n := len(probe.seen); n != 2 || probe.seen[1].Kind != event.KindStep {
+		t.Fatalf("the step should be stored before the tool runs: %+v", probe.seen)
+	}
+	if got := unanswered(msgs[:2]); got != msgs[0].Seq {
+		t.Fatalf("a step must not answer the user message: %d", got)
+	}
+	say(t, log, main, "谢谢")
+	waitMessages(t, log, main, 5)
+	var assistant []string
+	for _, m := range p.requests[2].Messages {
+		if m.Role == provider.RoleAssistant {
+			assistant = append(assistant, m.PlainText())
+		}
+	}
+	if len(assistant) != 1 || assistant[0] != "我先建任务\n\n建好了" {
+		t.Fatalf("history: %q", assistant)
 	}
 }

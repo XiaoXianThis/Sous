@@ -42,9 +42,14 @@ func PushKind(ev Event) string {
 				return PushTaskBlocked // waiting for a machine: the user may want to switch one on
 			}
 		}
+	case InspectorFinding:
+		var p FindingPayload
+		if ev.Decode(&p) == nil && p.Action != "none" {
+			return PushInspector
+		}
 	case MessageAssistant:
 		var p MessagePayload
-		if ev.Decode(&p) == nil && p.Kind == KindNotice {
+		if ev.Decode(&p) == nil && (p.Kind == KindNotice || p.Notify) {
 			return PushReport
 		}
 	}

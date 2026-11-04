@@ -71,6 +71,7 @@ func newTaskEnv(t *testing.T, review ...string) *taskEnv {
 	runner := effects.NewRunner(e.log.Store, e.log.EffectsEnqueued(), 50*time.Millisecond)
 	runner.Handle(store.EffectTaskAdvance, te.tasks.Advance)
 	runner.Handle(store.EffectApprove, te.tasks.Approve)
+	runner.Handle(store.EffectSetup, te.tasks.Setup)
 	runner.Handle(store.EffectPush, func(context.Context, store.Effect) error { return nil })
 	te.tasks.Start(ctx)
 	go runner.Run(ctx)

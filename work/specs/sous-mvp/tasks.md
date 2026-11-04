@@ -4,8 +4,8 @@
 
 ## 当前状态（接手先读这里）
 
-- **进度**：M0～M3 的代码已完成，测试和浏览器验收通过。M3 用假 agent + 假 `gh` + 真实 DeepSeek（主管、验收、审批）验收了场景 1 和 3。下一步是 **M4 自主与长期运行**，从“trigger：cron、超时、跟进”开始。
-- **等用户操作的事**：部署到 agent.wxian.cc；真实设备上验收 Passkey、PWA 和 Web Push（内置浏览器面板里 Service Worker 不可用）；本机 `gh` 已登录，opencode 已实测可用；还差用户同意后用一个真实 GitHub 测试仓库做场景 1、6 的验收。
+- **进度**：M0～M4 的代码已完成，测试和验收通过。M4 用假 agent（loop / slow + session/load）+ 假 `gh` + 真实 DeepSeek（主管、验收、巡检）验收了场景 2、4、5，另外实测了定时任务、Hub 崩溃恢复和从本地假 Releases 的自更新。剩下的都是需要用户操作或真实环境的验收，以及“收尾”。
+- **等用户操作的事**：部署到 agent.wxian.cc；真实设备上验收 Passkey、PWA 和 Web Push（内置浏览器面板里 Service Worker 不可用）；用户同意后用一个真实 GitHub 测试仓库做场景 1、6 的验收；第一次打 tag 发布（`v0.1.0`），确认 Actions 的发布流程和真实 Releases 上的更新；在真机上执行 `sous service install`，用真正的 launchd / systemd 再验一次场景 4（M4 验收时用一个 shell 循环模拟了 KeepAlive）。
 - **本地开发**：`wok dev core` 启动 Hub（需要 `apps/core/.env` 里的 `DEEPSEEK_API_KEY`，没有就把 `roles.supervisor` 改成 `mock/echo`）；`wok build web` 构建前端；客户端用 `go run ./cmd/sous` 或 `wok build core` 的产物。
 - **先读**：`work/agent/memory.md`（踩过的坑）、`apps/core/AGENTS.md`、`apps/web/AGENTS.md`、`work/agent/rules/super-agent-reference.md`。
 
@@ -43,11 +43,11 @@
 - [x] proto：Hub ↔ Node 协议，与 `docs/api/core-hub-node.md` 保持一致
 - [x] auth：配对码（6 位、10 分钟、一次性）和设备令牌（Hub 只存哈希）
 - [ ] 设备令牌存进系统钥匙串（目前在 `~/.sous/node.json`，权限 0600）
-- [x] node：连接、心跳、上报机器和 agent 清单（含登录状态）、断线时缓存事件、重连后补发（内存里；daemon 进程重启会丢，见 M4）
+- [x] node：连接、心跳、上报机器和 agent 清单（含登录状态）、断线时缓存事件、重连后补发（M4 起发件箱持久化，daemon 重启也不丢）
 - [x] workspace：`~/.sous/worktrees/` 下 worktree 的创建和命名、一般任务的 `~/.sous/scratch/` 目录
-- [x] worktree 的自动清理（任务完成或取消后发 `workspace.remove`；机器离线时保留，M4 再补重试）
+- [x] worktree 的自动清理（任务完成或取消后发 `workspace.remove`；机器当时离线的，M4 起在它重新上线时补发，覆盖最近 30 天关闭的任务）
 - [x] 上传 diff（`run.diff`），Hub 端保存到 `runs/<run_id>.diff`
-- [ ] 临时性故障的自动重试（Node 侧 agent 启动失败重试；模型调用的重试 M1 已有）——推迟到 M4
+- [x] 临时性故障的自动重试（Node 侧 agent 启动失败重试，M4 完成；模型调用的重试 M1 已有）
 - [x] worker/acp：会话管理、认证重试、权限模式切换、session/update 和 permission 的映射、取消、追加指令
 - [ ] ~~worker/jsonstream、worker/pty、worker/shell 三个退路实现~~ 五个 agent 都支持 ACP，暂不需要
 - [x] `sous` 命令行：pair / daemon / status / agents / service / unpair（`service install` 尚未在真机执行过）
@@ -75,15 +75,17 @@
 
 ## M4 自主与长期运行
 
-- [ ] trigger：cron、超时、跟进
-- [ ] 巡检 agent：规则预筛 + 模型判断 + 执行动作
-- [ ] usage 记录和用量页面
-- [ ] 进程看门狗：服务管理器的重启配置、进程内存活检测、启动时回放、Node 重连对账、ACP session/load 续跑、恢复说明、只补发未读的追加消息
-- [ ] 数据保留：归档已关闭超过 90 天的任务的 Run 日志和 diff
-- [ ] `sous chat`：终端聊天（经由本地 IPC 转发）
-- [ ] update：检查 GitHub Releases、下载并替换、界面上的更新按钮
-- [ ] 加上 `.github/workflows` 发布流程：打 tag 后用 goreleaser 构建并发布
-- [ ] 验收：requirements.md 里的验收场景 2、4、5
+- [x] trigger：cron（定时任务的工具、接口和页面）、跟进（受阻或失败的任务、超时的 Run、等审批、等回复的问题，各跟进一次）；触发以 `kind: trigger` 的消息交给主管
+- [x] 巡检 agent：规则预筛（重复调用、没有进展、执行太久、token 异常）+ inspector 模型判断 + 暂停 / 终止 / 通知；Run 的暂停和继续（ACP 用取消当前这一轮实现）
+- [x] usage 记录和用量页面（按角色和模型、按天）
+- [x] 进程看门狗：服务管理器的重启配置（已有）、进程内存活检测（`internal/watchdog`）、启动时回放（effects 队列）、Node 重连对账、ACP session/load 续跑、中断后带恢复说明自动重试一次、只补发未读的追加消息；daemon 的发件箱持久化
+- [x] 临时性故障的自动重试（Node 侧 agent 启动失败，M2 推迟到这里）；机器离线时没删掉的 worktree，重新上线时补删
+- [x] 数据保留：归档已关闭超过 90 天的任务的 Run 日志和 diff
+- [x] `sous chat`：终端聊天（经由本地 IPC 转发，设备令牌代办），断线自动重连；`sous status` 显示 daemon 状态
+- [x] update：检查 GitHub Releases、下载并校验、替换并重启、界面上的更新按钮；`sous update`
+- [x] 加上 `.github/workflows` 发布流程：打 tag 后用 goreleaser 构建并发布（本地 snapshot 构建已验证）
+- [x] 验收：场景 2（`sous chat` 发消息和审批，网页上看到同一份对话并审批 push）、场景 4（`kill -9` daemon，被拉起后加载原会话续上，任务完成；不支持加载时标记中断并带恢复说明重试，有测试）、场景 5（反复读同一个文件的 Run，巡检在第一个周期内暂停并在主线说明，网页上点“继续”）
+- [ ] 真机上用 launchd / systemd 服务验收场景 4；真实 Releases 上验收更新（用户操作，见上）
 
 ## 收尾
 

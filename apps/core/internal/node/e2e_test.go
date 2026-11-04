@@ -56,7 +56,10 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(httpapi.New(cfg, log, a, hub.Routes))
+	api := httpapi.New(cfg, log, a, hub.Routes)
+	api.DeviceRoutes(hub.DeviceAuth)
+	hub.DeviceRoutes(api.Mux())
+	srv := httptest.NewServer(api)
 	main, _ := log.EnsureMainThread(context.Background())
 	e := &env{t: t, srv: srv, log: log, hub: hub, main: main, root: t.TempDir()}
 	t.Cleanup(func() { srv.Close(); st.Close() })
@@ -72,8 +75,15 @@ func newEnv(t *testing.T) *env {
 // startDaemon runs a daemon whose only agent is the fake in the given mode.
 func (e *env) startDaemon(mode string) (stop func()) {
 	e.t.Helper()
+	_, stop = e.startDaemonWith(mode)
+	return stop
+}
+
+// startDaemonWith is startDaemon with extra environment for the fake agent.
+func (e *env) startDaemonWith(mode string, env ...string) (*node.Daemon, func()) {
+	e.t.Helper()
 	cmd := acptest.Command(mode, "")
-	spec := agents.Spec{Name: "fake", Title: "Fake", Binary: cmd.Path, Launch: append([]string{cmd.Path}, cmd.Args...), Env: cmd.Env}
+	spec := agents.Spec{Name: "fake", Title: "Fake", Binary: cmd.Path, Launch: append([]string{cmd.Path}, cmd.Args...), Env: append(cmd.Env, env...)}
 	d := node.NewDaemon(e.root, e.cfg, []agents.Spec{spec})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -82,7 +92,7 @@ func (e *env) startDaemon(mode string) (stop func()) {
 		n, err := e.log.Store.Node(context.Background(), e.cfg.NodeID)
 		return err == nil && e.hub.Online(n.ID) && strings.Contains(string(n.Agents), `"fake"`)
 	})
-	return func() { cancel(); <-done }
+	return d, func() { cancel(); <-done }
 }
 
 func (e *env) waitFor(what string, ok func() bool) {
@@ -207,6 +217,41 @@ func TestRejectedApproval(t *testing.T) {
 	}
 	if err := e.hub.Decide(context.Background(), a.ID, "allow", ""); err == nil {
 		t.Fatal("decided twice")
+	}
+}
+
+// An agent that ends its turn as "cancelled" after a refusal (OpenCode)
+// is told what was refused and why, and goes on; the run is not cancelled.
+func TestRefusalDoesNotCancelRun(t *testing.T) {
+	e := newEnv(t)
+	prompts := filepath.Join(t.TempDir(), "prompts.txt")
+	_, stop := e.startDaemonWith("reject", "FAKE_ACP_PROMPTS="+prompts)
+	defer stop()
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	a := e.pendingApproval(run.ID)
+	e.hub.Decide(context.Background(), a.ID, "reject", "不要用 shell 写文件")
+	r := e.ended(run.ID)
+	if r.Status != event.RunStatusSucceeded || !strings.Contains(r.Summary, "换个办法") {
+		t.Fatalf("run: %+v", r)
+	}
+	got, _ := os.ReadFile(prompts)
+	if !strings.Contains(string(got), "被拒绝") || !strings.Contains(string(got), "不要用 shell 写文件") {
+		t.Fatalf("prompts: %s", got)
+	}
+}
+
+// An agent that ends its turn as "cancelled" with nothing refused has
+// failed: only the user cancels a run.
+func TestAgentCancelledTurnFails(t *testing.T) {
+	e := newEnv(t)
+	defer e.startDaemon("reject")()
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	a := e.pendingApproval(run.ID)
+	// Expire the request instead of refusing it: the agent sees no option
+	// chosen and still ends its turn as "cancelled".
+	e.hub.Decide(context.Background(), a.ID, "", "")
+	if r := e.ended(run.ID); r.Status != event.RunStatusFailed {
+		t.Fatalf("run: %+v", r)
 	}
 }
 

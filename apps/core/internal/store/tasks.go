@@ -8,13 +8,15 @@ import (
 	"strings"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
 )
 
 // Effect kinds enqueued by projections.
 const (
-	EffectTaskAdvance = "task.advance" // a task's run ended: review, deliver or report
-	EffectApprove     = "approve"      // the approver agent decides an approval
-	EffectPush        = "push"         // send a push notification
+	EffectTaskAdvance = "task.advance"  // a task's run ended: review, deliver or report
+	EffectApprove     = "approve"       // the approver agent decides an approval
+	EffectPush        = "push"          // send a push notification
+	EffectSetup       = "project.setup" // a clone or create run ended: record where the project is
 )
 
 // enqueueEffects schedules the side effects of a stored event, in the same
@@ -28,10 +30,13 @@ func enqueueEffects(w *Writer, ev event.Event) error {
 	}
 	switch ev.Type {
 	case event.RunEnded:
-		var task string
-		err := w.tx.QueryRowContext(w.ctx, `SELECT task_id FROM runs WHERE id = ?`, ev.RunID).Scan(&task)
+		var task, purpose string
+		err := w.tx.QueryRowContext(w.ctx, `SELECT task_id, purpose FROM runs WHERE id = ?`, ev.RunID).Scan(&task, &purpose)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if purpose == event.PurposeClone || purpose == event.PurposeCreate {
+			return w.Enqueue(EffectSetup, ev.ID, []byte(ev.RunID))
 		}
 		if task != "" {
 			return w.Enqueue(EffectTaskAdvance, ev.ID, []byte(ev.RunID))
@@ -57,9 +62,9 @@ func projectTask(w *Writer, ev event.Event) error {
 			return err
 		}
 		if err := exec(`INSERT INTO tasks(id, parent_id, origin_thread_id, kind, title, detail, status, priority, project_id,
-			agent_pref, node_pref, permission_mode, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			agent_pref, node_pref, permission_mode, persona_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.TaskID, p.ParentID, ev.ThreadID, p.Kind, p.Title, p.Detail, p.Status, p.Priority, p.ProjectID,
-			p.AgentPref, p.NodePref, p.PermissionMode, ev.TS, ev.TS); err != nil {
+			p.AgentPref, p.NodePref, p.PermissionMode, p.PersonaID, ev.TS, ev.TS); err != nil {
 			return err
 		}
 		return setDeps(w, ev.TaskID, p.DependsOn)
@@ -99,6 +104,9 @@ func projectTask(w *Writer, ev event.Event) error {
 		if p.Dismissed != nil {
 			add("dismissed", *p.Dismissed)
 		}
+		if p.PersonaID != nil {
+			add("persona_id", *p.PersonaID)
+		}
 		args = append(args, ev.TaskID)
 		if err := exec(`UPDATE tasks SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 			return err
@@ -128,22 +136,34 @@ func projectTask(w *Writer, ev event.Event) error {
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		if err := exec(`INSERT INTO projects(id, name, repo_url, default_mode, default_agent, created_at, updated_at) VALUES (?,?,?,?,?,?,?)
+		deploy := ""
+		if p.Deploy != nil && p.Deploy.NodeID != "" {
+			raw, _ := json.Marshal(p.Deploy)
+			deploy = string(raw)
+		}
+		if err := exec(`INSERT INTO projects(id, name, repo_url, default_mode, default_agent, remote_key, default_persona, notes, layout, deploy, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(id) DO UPDATE SET name = excluded.name, repo_url = excluded.repo_url, default_mode = excluded.default_mode,
-			default_agent = excluded.default_agent, updated_at = excluded.updated_at`,
-			p.ProjectID, p.Name, p.RepoURL, p.DefaultMode, p.DefaultAgent, ev.TS, ev.TS); err != nil {
+			default_agent = excluded.default_agent, remote_key = excluded.remote_key, default_persona = excluded.default_persona,
+			notes = excluded.notes, layout = CASE WHEN excluded.layout = '' THEN projects.layout ELSE excluded.layout END,
+			deploy = excluded.deploy, updated_at = excluded.updated_at`,
+			p.ProjectID, p.Name, p.RepoURL, p.DefaultMode, p.DefaultAgent, projectkey.Key(p.RepoURL), p.DefaultPersona, p.Notes, p.Layout, deploy, ev.TS, ev.TS); err != nil {
 			return err
 		}
 		if err := exec(`DELETE FROM project_nodes WHERE project_id = ?`, p.ProjectID); err != nil {
 			return err
 		}
 		for _, n := range p.Nodes {
-			if err := exec(`INSERT OR REPLACE INTO project_nodes(project_id, node_id, path, priority) VALUES (?,?,?,?)`,
-				p.ProjectID, n.NodeID, n.Path, n.Priority); err != nil {
+			src := n.Source
+			if src != "scan" {
+				src = "manual"
+			}
+			if err := exec(`INSERT OR REPLACE INTO project_nodes(project_id, node_id, path, priority, source) VALUES (?,?,?,?,?)`,
+				p.ProjectID, n.NodeID, n.Path, n.Priority, src); err != nil {
 				return err
 			}
 		}
-		return nil
+		return linkScans(w)
 
 	case event.ProjectDeleted:
 		var p event.ProjectPayload
@@ -190,13 +210,14 @@ type Task struct {
 	ReviewNote     string   `json:"review_note"`
 	Next           string   `json:"next"`
 	Dismissed      bool     `json:"dismissed"`
+	PersonaID      string   `json:"persona_id"`
 	DependsOn      []string `json:"depends_on"`
 	CreatedAt      int64    `json:"created_at"`
 	UpdatedAt      int64    `json:"updated_at"`
 }
 
 const taskCols = `id, parent_id, origin_thread_id, kind, title, detail, status, status_reason, priority, project_id,
-	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at`
+	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at, persona_id`
 
 func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 	out := []Task{}
@@ -204,7 +225,7 @@ func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 		var t Task
 		if err := rows.Scan(&t.ID, &t.ParentID, &t.OriginThreadID, &t.Kind, &t.Title, &t.Detail, &t.Status, &t.StatusReason,
 			&t.Priority, &t.ProjectID, &t.AgentPref, &t.NodePref, &t.PermissionMode, &t.Branch, &t.BaseBranch, &t.PRURL,
-			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt, &t.PersonaID); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -307,12 +328,19 @@ type Project struct {
 	Nodes        []event.ProjectNode `json:"nodes"`
 	CreatedAt    int64               `json:"created_at"`
 	UpdatedAt    int64               `json:"updated_at"`
+	// M5
+	RemoteKey      string        `json:"remote_key"`
+	DefaultPersona string        `json:"default_persona"`
+	Notes          string        `json:"notes"`
+	Layout         string        `json:"layout"`
+	Deploy         *event.Deploy `json:"deploy"`
 }
 
 // Projects lists projects by name, each with its machines in priority order.
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, repo_url, default_mode, default_agent, created_at, updated_at FROM projects ORDER BY name`)
+		`SELECT id, name, repo_url, default_mode, default_agent, created_at, updated_at, remote_key, default_persona, notes, layout, deploy
+		 FROM projects ORDER BY id = 'misc', name`)
 	if err != nil {
 		return nil, err
 	}
@@ -320,16 +348,24 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	idx := map[string]int{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultMode, &p.DefaultAgent, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var deploy string
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultMode, &p.DefaultAgent, &p.CreatedAt, &p.UpdatedAt,
+			&p.RemoteKey, &p.DefaultPersona, &p.Notes, &p.Layout, &deploy); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if deploy != "" {
+			var d event.Deploy
+			if json.Unmarshal([]byte(deploy), &d) == nil {
+				p.Deploy = &d
+			}
 		}
 		p.Nodes = []event.ProjectNode{}
 		idx[p.ID] = len(out)
 		out = append(out, p)
 	}
 	rows.Close()
-	nodes, err := s.db.QueryContext(ctx, `SELECT project_id, node_id, path, priority FROM project_nodes ORDER BY priority, node_id`)
+	nodes, err := s.db.QueryContext(ctx, `SELECT project_id, node_id, path, priority, source FROM project_nodes ORDER BY priority, node_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +373,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	for nodes.Next() {
 		var pid string
 		var n event.ProjectNode
-		if err := nodes.Scan(&pid, &n.NodeID, &n.Path, &n.Priority); err != nil {
+		if err := nodes.Scan(&pid, &n.NodeID, &n.Path, &n.Priority, &n.Source); err != nil {
 			return nil, err
 		}
 		if i, ok := idx[pid]; ok {

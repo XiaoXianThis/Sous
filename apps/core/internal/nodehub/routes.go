@@ -26,6 +26,8 @@ func (h *Hub) Routes(mux *http.ServeMux, protect func(string, http.HandlerFunc))
 	protect("POST /api/v1/nodes/pairing-code", h.pairingCode)
 	protect("PATCH /api/v1/nodes/{id}", h.renameNode)
 	protect("DELETE /api/v1/nodes/{id}", h.revokeNode)
+	h.adminRoutes(protect)
+	h.workbenchRoutes(protect)
 
 	protect("GET /api/v1/runs", h.listRuns)
 	protect("POST /api/v1/runs", h.createRun)
@@ -34,6 +36,8 @@ func (h *Hub) Routes(mux *http.ServeMux, protect func(string, http.HandlerFunc))
 	protect("GET /api/v1/runs/{id}/diff", h.runFile(h.DiffPath))
 	protect("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	protect("POST /api/v1/runs/{id}/message", h.messageRun)
+	protect("POST /api/v1/runs/{id}/pause", h.pauseRun)
+	protect("POST /api/v1/runs/{id}/resume", h.resumeRun)
 
 	protect("GET /api/v1/approvals", h.listApprovals)
 	protect("POST /api/v1/approvals/{id}/decide", h.decide)
@@ -61,6 +65,7 @@ func (h *Hub) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range nodes {
 		nodes[i].Online = h.Online(nodes[i].ID) // live state beats the stored flag
+		nodes[i].Admin = h.AdminState(nodes[i].ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 }
@@ -176,7 +181,7 @@ func (h *Hub) runFile(path func(string) string) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "not_found", "Run 不存在")
 			return
 		}
-		f, err := os.Open(path(id))
+		f, err := h.openRunFile(path(id))
 		if errors.Is(err, os.ErrNotExist) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			return
@@ -206,6 +211,24 @@ func (h *Hub) messageRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Message(r.Context(), r.PathValue("id"), strings.TrimSpace(body.Text)); err != nil {
+		writeError(w, http.StatusConflict, "run", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+}
+
+func (h *Hub) pauseRun(w http.ResponseWriter, r *http.Request) {
+	if err := h.Pause(r.Context(), r.PathValue("id"), "用户暂停", event.ActorUser); err != nil {
+		writeError(w, http.StatusConflict, "run", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+}
+
+func (h *Hub) resumeRun(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Text string }
+	json.NewDecoder(r.Body).Decode(&body)
+	if err := h.Resume(r.Context(), r.PathValue("id"), strings.TrimSpace(body.Text), event.ActorUser); err != nil {
 		writeError(w, http.StatusConflict, "run", err.Error())
 		return
 	}

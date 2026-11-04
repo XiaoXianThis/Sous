@@ -13,3 +13,4 @@ Assets shared by several apps, and asset sources (design files, vector sources, 
 
 | asset | source | license |
 |---|---|---|
+| `design/ui-redesign/*.png` | 新梦 GPT Image 2（high）生成的界面参考图（2026-11-04） | 自有生成，仅作设计参考 |

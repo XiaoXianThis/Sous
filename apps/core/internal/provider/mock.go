@@ -10,7 +10,10 @@ import (
 
 // mock is an offline provider for development and tests. It streams an echo
 // of the last user message. When the user asks for the time and a
-// current_time tool is offered, it calls that tool first.
+// current_time tool is offered, it calls that tool first. The model
+// "verdict" answers with a fixed JSON verdict instead, so the reviewer
+// passes and the approver hands every decision to the user (mock/verdict
+// for the reviewer, approver and inspector roles).
 type mock struct{ cfg Config }
 
 func init() {
@@ -35,6 +38,9 @@ func (p *mock) Stream(ctx context.Context, req Request, onDelta func(Delta)) (Re
 		}
 	}
 	usage := Usage{InputTokens: len([]rune(req.System + lastUser)), OutputTokens: 0}
+	if req.Model == "verdict" {
+		return Response{Message: Text(RoleAssistant, `{"pass":true,"decision":"escalate","severity":"low","action":"none","reason":"（模拟模型）没有发现问题，交给你决定"}`), Usage: usage}, nil
+	}
 
 	if lastResult == nil && strings.Contains(lastUser, "几点") && hasTool(req.Tools, "current_time") {
 		return Response{

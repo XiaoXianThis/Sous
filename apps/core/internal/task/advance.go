@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
@@ -55,6 +56,11 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 		return nil // an older run; a newer one decides the task's state
 	}
 
+	if r.Status == event.RunStatusInterrupted {
+		if ok, err := e.recover(ctx, t, r); ok || err != nil {
+			return err
+		}
+	}
 	if r.Purpose == event.PurposeDeliver {
 		return e.afterDeliver(ctx, t, r)
 	}
@@ -62,6 +68,15 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	case event.RunStatusSucceeded:
 		if r.Purpose == event.PurposeRebase {
 			return e.queueNext(ctx, t, event.PurposeDeliver)
+		}
+		if t.Kind == event.TaskKindOps {
+			// Operations change a server in place: there is no diff to
+			// review and nothing to deliver. The summary is the report.
+			if err := e.transition(ctx, t, event.TaskDone, "运维完成", "", event.ActorSystem); err != nil {
+				return err
+			}
+			e.report(ctx, t, fmt.Sprintf("运维任务「%s」完成了。\n\n%s", t.Title, firstNonEmpty(r.Summary, "agent 没有写总结")))
+			return nil
 		}
 		if t.Status != event.TaskReview {
 			if err := e.transition(ctx, t, event.TaskReview, "等待验收", "", event.ActorSystem); err != nil {
@@ -84,6 +99,46 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 		e.report(ctx, t, fmt.Sprintf("任务「%s」失败了：%s\n\n可以让我重试，或者换一个 agent、换一台机器再做。", t.Title, reason))
 		return nil
 	}
+}
+
+// recover starts the run again after it was interrupted (its machine's
+// daemon restarted and could not resume the agent's session), once per
+// dispatch. The new run gets a recovery note (see startRun).
+func (e *Engine) recover(ctx context.Context, t store.Task, r store.Run) (bool, error) {
+	since, _ := e.store().LastDispatch(ctx, t.ID)
+	runs, _ := e.store().Runs(ctx, store.RunFilter{TaskID: t.ID})
+	n := 0
+	for _, x := range runs {
+		if x.CreatedAt >= since && x.RecoveryNote != "" {
+			n++
+		}
+	}
+	if n >= MaxRecoveries {
+		return false, nil
+	}
+	cause := firstNonEmpty(r.Error, "原因不明")
+	if err := e.transition(ctx, t, event.TaskQueued, "执行被中断，正在重新开始", "", event.ActorSystem, waiting("", r.Purpose)); err != nil {
+		return true, err
+	}
+	e.reportNotify(ctx, t, fmt.Sprintf("任务「%s」的执行被中断了：%s。\n\n我已经让它重新开始，agent 会先检查之前做到了哪一步，不会重复 push 之类的对外操作。", t.Title, cause))
+	e.Sweep()
+	return true, nil
+}
+
+// recoveryNote opens the prompt of a run that picks up after an
+// interrupted one (design §9; SA-15, SA-16).
+func (e *Engine) recoveryNote(ctx context.Context, prev store.Run) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "【恢复说明】这个任务上一次的执行被中断了（%s）。工作目录里可能留着那次的改动。\n"+
+		"开始之前，先检查工作目录、git status、git log 和远端状态，确认之前做到了哪一步，再从那里继续；"+
+		"不要重复已经完成的对外操作（比如 push、创建 PR、发消息、调用外部服务）。", firstNonEmpty(prev.Error, "原因不明"))
+	if missed := e.Nodes.Undelivered(ctx, prev.ID); len(missed) > 0 {
+		b.WriteString("\n\n中断之前用户还补充了这些要求，上一次没来得及看到：")
+		for _, m := range missed {
+			b.WriteString("\n- " + m.Text)
+		}
+	}
+	return b.String()
 }
 
 // queueNext queues the task's next run and starts it if a machine is free.
@@ -325,12 +380,21 @@ func (e *Engine) doneReport(ctx context.Context, t store.Task, prURL string) str
 // report posts a message about the task in the thread it came from, or in
 // the main thread. The task.status event beside it sends the push.
 func (e *Engine) report(ctx context.Context, t store.Task, text string) {
+	e.post(ctx, t, text, false)
+}
+
+// reportNotify is report for news no task.status push covers.
+func (e *Engine) reportNotify(ctx context.Context, t store.Task, text string) {
+	e.post(ctx, t, text, true)
+}
+
+func (e *Engine) post(ctx context.Context, t store.Task, text string, notify bool) {
 	thread := t.OriginThreadID
 	if thread == "" {
 		thread, _ = e.store().MainThreadID(ctx)
 	}
 	ev := event.New(event.MessageAssistant, event.ActorSupervisor, thread,
-		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindReport})
+		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindReport, Notify: notify})
 	ev.TaskID = t.ID
 	if _, err := e.Log.Append(ctx, ev); err != nil {
 		slog.Error("task: post report", "task", t.ID, "err", err)
@@ -367,4 +431,30 @@ func truncate(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// cleanupWindow is how far back a reconnecting machine is asked to remove
+// the worktrees of closed tasks it missed while offline.
+const cleanupWindow = 30 * 24 * time.Hour
+
+// cleanupNode asks a machine that just came online to remove the worktrees
+// of code tasks that closed recently; removing a missing one is a no-op.
+func (e *Engine) cleanupNode(ctx context.Context, nodeID string) {
+	runs, err := e.store().Runs(ctx, store.RunFilter{NodeID: nodeID, Limit: 5000})
+	if err != nil {
+		return
+	}
+	since := time.Now().Add(-cleanupWindow).UnixMilli()
+	done := map[string]bool{}
+	for _, r := range runs {
+		if r.RepoPath == "" || r.TaskID == "" || r.Kind == event.RunKindOps || done[r.TaskID] {
+			continue
+		}
+		done[r.TaskID] = true
+		t, err := e.store().Task(ctx, r.TaskID)
+		if err != nil || !final(t.Status) || t.Kind != event.TaskKindCode || t.UpdatedAt < since {
+			continue
+		}
+		e.Nodes.RemoveWorkspace(nodeID, t.ID, r.RepoPath)
+	}
 }

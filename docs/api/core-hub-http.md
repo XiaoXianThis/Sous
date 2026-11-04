@@ -23,9 +23,9 @@
 | GET/POST | `/threads` | 列出、创建线程 |
 | GET/PATCH | `/threads/{id}` | 读取、改名或归档 |
 | GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
-| POST | `/threads/{id}/messages` | 发送消息 `{"content": "..."}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送 |
+| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?}}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么 |
 | GET | `/tasks?status=a,b&project_id=&thread_id=&parent_id=` | 列出任务（优先级高的在前，同级按创建时间） |
-| POST | `/tasks` | 创建 `{title, detail?, kind?, project_id?, priority?, agent_pref?, node_pref?, permission_mode?, parent_id?, depends_on?, thread_id?, dispatch?}`，返回 201。`kind` 缺省时有项目就是 `code`；用户创建且不派发的进 `inbox` |
+| POST | `/tasks` | 创建 `{title, detail?, kind?, project_id?, persona_id?, priority?, agent_pref?, node_pref?, permission_mode?, parent_id?, depends_on?, thread_id?, dispatch?}`，返回 201。`kind` 是 `code`、`general` 或 `ops`，缺省时有项目（不是 `misc`）就是 `code`；没有项目的任务归到内置项目 `misc`（杂项）；`ops` 必须指定项目。用户创建且不派发的进 `inbox` |
 | GET | `/tasks/{id}` | `{task, runs, subtasks}` |
 | PATCH | `/tasks/{id}` | 修改字段（只改出现的字段），`depends_on` 整体替换（成环时 400）；`dismissed: true` 表示用户看过了（从首页移除）；`status` 只能手动改成 `inbox`/`planned`/`blocked`/`done`/`cancelled`，执行中的任务要先取消（409） |
 | POST | `/tasks/{id}/dispatch` | 派发或重试 `{"node_id"?, "agent"?}`（会记到任务上）。有空闲机器就开始，否则排队（`queued`）；已交付 PR 的任务返回 409 |
@@ -38,38 +38,69 @@
 | GET | `/runs/{id}/diff` | 纯文本 diff（相对基线提交） |
 | POST | `/runs/{id}/message` | 追加指令 `{text}`，只能发给正在运行的 Run |
 | POST | `/runs/{id}/cancel` | 取消：排队中的直接结束；运行中的通知机器停下；机器离线时直接标记为已取消 |
+| POST | `/runs/{id}/pause` | 暂停：agent 停下当前这一步，Run 保留现场等待处理（它的待审批随之过期）。只能暂停运行中的 Run |
+| POST | `/runs/{id}/resume` | 继续一个暂停的 Run，`{text?}`；带 `text` 等于发一条追加指令。给暂停的 Run 发 `/message` 也会让它继续 |
 | GET | `/approvals?status=pending&run_id=` | 审批列表。`review` 为 `ai` 的正在由审批 agent 判断；`escalation` 是它转给用户时的理由 |
 | POST | `/approvals/{id}/decide` | `{option_id, note?}`；`option_id` 必须是该审批提供的选项之一，为空表示取消。已处理或已过期时返回 409 |
 | GET | `/nodes` | 机器列表（`online` 是实时状态）；`agents` 是机器上报的 AgentInfo 数组 |
 | POST | `/nodes/pairing-code` | 生成配对码 `{code, expires_at}` |
 | PATCH | `/nodes/{id}` | 改名 `{name}` |
 | DELETE | `/nodes/{id}` | 删除机器：作废令牌并断开连接 |
-| GET/POST | `/projects` | 列出、创建项目 `{name, repo_url?, default_agent?, default_mode?, nodes: [{node_id, path}]}`；`nodes` 的顺序就是路由优先级（服务端按顺序重写 `priority`）。重名返回 409 |
-| PATCH/DELETE | `/projects/{id}` | 整体替换项目；还有未关闭任务的项目不能删除（409） |
+| GET/POST | `/projects` | 列出、创建项目 `{name, repo_url?, default_agent?, default_mode?, default_persona?, notes?, layout?, nodes?: [{node_id, path, source?}], deploy?: {node_id, path, command, health?, auto_on_merge?}}`；`nodes` 的顺序就是路由优先级（服务端按顺序重写 `priority`）。重名或仓库（`remote_key`）已登记返回 409。部署目标必须是服务器 |
+| PATCH/DELETE | `/projects/{id}` | 只改出现的字段（`deploy: null` 去掉部署目标）；还有未关闭任务的项目不能删除（409），内置的 `misc` 不能删除 |
+| POST | `/projects/new` | 新建项目 `{name, node_id?, layout?: "wokspace"\|"plain", owner?, private?, thread_id?}`：登记项目，并在一台开发机（不填就选第一台在线、设置了工作空间、wokspace 时还要装了 wok 的）的第一个工作空间里创建仓库。返回 201 `{project, run}`；完成后项目自动多一个位置，结果以汇报发到 `thread_id`（缺省主线）。`name` 必须是 kebab-case |
+| POST | `/projects/{id}/clone` | `{node_id?, thread_id?}`：把项目 clone 到一台开发机的第一个工作空间，返回 201 `{run}` |
+| GET | `/repos` | 机器在工作空间里找到的仓库：`{repos: [{node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at, project_id}]}`，`project_id` 为空表示还没登记 |
+| GET/POST | `/personas` | 岗位（见 decisions/0013）：列出 `{personas}`；创建 `{name, glyph?, color?, agent?, options?: {选项 id: 值}, brief?, default_mode?, kinds?: ["code"\|"general"\|"ops"]}`，返回 201 |
+| PATCH/DELETE | `/personas/{id}` | 修改（整体替换）/ 删除；还有未关闭任务用它时 409 |
+| GET | `/overview` | 工作台总览一次需要的数据：`{projects, nodes, personas, tasks, runs, approvals, discovered}`。`tasks` 是未关闭的任务加上 24 小时内完成的，`runs` 是排队和执行中的 Run，`approvals` 是待审批的，`discovered` 是还没登记的仓库 |
+| PUT | `/nodes/{id}/role` | `{role: "dev"\|"server"}`：只能把开发机改成服务器；服务器改回开发机只能在那台机器的 node.json 里改（403 `disabled`） |
+| PUT | `/nodes/{id}/workspaces` | `{workspaces: ["~/Code"]}`：替换机器的工作空间（绝对路径或 `~/` 开头，目录必须存在），立即扫描，返回 `{workspaces, repos}` |
+| POST | `/nodes/{id}/scan` | 立即扫描工作空间，返回 `{workspaces, repos}` |
 | GET | `/memories?q=&kind=&limit=` | 有 `q` 时按相关度搜索，否则按更新时间列出（可按 `kind` 过滤）；返回 `{memories, kinds}` |
 | POST | `/memories` | 新建 `{kind, content}`，返回 201 和记忆 |
 | PUT/DELETE | `/memories/{id}` | 修改 `{kind, content}` / 删除 |
-| GET/POST/DELETE | `/schedules` `/schedules/{id}` | 定时任务 |
-| GET | `/usage?days=` | 最近 N 天（默认 30）的 token 用量，按 provider、model、role 汇总 |
+| GET/POST | `/schedules` | 列出 `{schedules}`；创建 `{title?, cron, prompt, tz?, thread_id?, enabled?}`，返回 201。`cron` 是 5 个字段（分 时 日 月 周，也接受 `@daily` 等），`tz` 是 IANA 时区（缺省用免打扰设置里记下的设备时区，再缺省用 Hub 的时区），`thread_id` 缺省为主线 |
+| PATCH/DELETE | `/schedules/{id}` | 修改（只改出现的字段）/ 删除 |
+| POST | `/schedules/{id}/run` | 立刻触发一次（不影响下次的时间） |
+| GET | `/findings?run_id=&limit=` | 巡检发现的问题，新的在前 |
+| GET | `/usage?days=&tz=` | 最近 N 天（默认 30，按 `tz` 的自然日算）的 token 用量：`{days, since, usage, daily}`。`usage` 按 provider、model、role 汇总；`daily` 是 `[{day: "YYYY-MM-DD", role, calls, input_tokens, output_tokens, cached_tokens}]` |
 | GET/PATCH | `/settings` | `{default_mode, default_agent, notify: {kind: bool}, quiet: {enabled, start, end, tz}, roles, push_devices}`；`roles` 只读，不返回任何密钥。PATCH 只改出现的字段 |
 | POST/DELETE | `/push/subscriptions` | 浏览器的 `PushSubscription.toJSON()`（`{endpoint, keys: {p256dh, auth}}`）；删除时 `{endpoint}` |
 | GET | `/push/vapid-public-key` | `{key}`：base64url 的 VAPID 公钥（`applicationServerKey`） |
 | POST | `/push/test` | 给所有已订阅的设备发一条测试通知，返回 `{devices, sent, errors}` |
-| GET | `/updates` | 各平台最新版本信息（来自 GitHub Releases 缓存） |
+| GET | `/updates?refresh=1` | `{hub: {version, update_available?}, latest?: {tag, name, url, published_at, notes}, error?, checked_at, repo, nodes: [{id, name, version, online, os, arch, update_available}]}`。最新发布从 GitHub Releases 读取，缓存 1 小时，`refresh=1` 强制刷新 |
+| POST | `/nodes/{id}/update` | 让机器安装 `{version?}`（缺省为最新发布）并重启，返回 202 `{version}`；机器离线时 409。结果以主线里的提醒告诉用户 |
+| POST | `/nodes/{id}/agents/detect` | 立刻重新检测，返回 `{agents: [AgentInfo]}` |
+| POST | `/nodes/{id}/agents/{agent}/probe` | 启动 agent、开一个会话读出它的选项后关掉（不调用模型，最长约 2 分钟），返回 `{options: [ConfigOption], at}` |
+| POST | `/nodes/{id}/agents/{agent}/install` | `{upgrade?, cols?, rows?}`：在伪终端里运行内置的安装（`upgrade` 时是升级）命令，返回 `{job_id, kind, agent, command}` |
+| POST | `/nodes/{id}/agents/{agent}/login` / `logout` | `{cols?, rows?}`：运行内置的登录 / 退出登录命令，返回同上 |
+| PUT | `/nodes/{id}/agents/{agent}/defaults` | `{options: {<选项 id>: <值>}}`：这台机器上这个 agent 每个新会话的默认选项；空对象表示全部跟随 agent |
+| PUT | `/nodes/{id}/agents/{agent}/env` | `{name, value}`：设置 API Key 环境变量（只能是 `key_env` 里的名字），`value` 为空表示清除 |
+| GET | `/nodes/{id}/jobs/{job}` | `{job_id, kind, agent, command, offset, data, running, exit_code?}`：作业最后 64 KB 的终端输出（`offset` 是 `data` 开头的字节位置） |
+| POST | `/nodes/{id}/jobs/{job}/input` / `resize` / `cancel` | `{data}` 写入终端；`{cols, rows}` 改终端大小；结束作业 |
+| GET | `/nodes/{id}/files/{agent}/{file}` | `{agent, file, path, format: "json"\|"jsonc"\|"toml"\|"text", exists, content, sha256}`。文件只能是 `AgentInfo.configs` 里的；`agent` 为 `sous`、`file` 为 `node` 时是机器的 node.json，设备令牌和 API Key 显示成 `***` |
+| PUT | `/nodes/{id}/files/{agent}/{file}` | `{content, base_sha256}`：`base_sha256` 是读到的 `sha256`（文件不存在时为空），不一致返回 409 `conflict`；格式不对 400。写入前把原文件存为 `<文件>.sous-bak`，返回新内容和 `backup` |
+
+**远程管理 agent**（上面 `/nodes/{id}/agents/*`、`/jobs/*`、`/files/*` 这几组）：Hub 转成 `node.request` 发给机器，等它回答（一般 20 秒超时）。机器离线 409 `offline`，sous 版本太旧 409 `unsupported`，机器的 node.json 关闭了远程管理 403 `disabled`，超时 504 `timeout`。`GET /nodes` 的每台机器多一个实时字段 `admin`：`on`、`off`、`unsupported`，离线时没有。`AgentInfo` 多了这些字段：`install? upgrade? login? logout?`（sous 会运行的命令，没有就不能做）、`missing?`（缺少的命令，如 `npx`）、`key_env?`、`env_set?`（已设置的变量名，不含值）、`options?`（agent 上次报告的会话选项 `[{id, name, description?, category?: "model"|"thought_level"|"model_config"|…, current, values: [{value, name, description?, group?}]}]`）、`options_at?`、`defaults?`、`configs?: [{id, path, format}]`、`launch_override?`、`job?`（正在进行的作业）。`/ws` 推送 `agent.job.started`（`{node_id, job_id, kind, agent, command}`）、临时事件 `agent.job.output`（`{node_id, job_id, offset, data}`，seq 为 0）、`agent.job.ended`（`{node_id, job_id, kind, agent, exit_code, error?}`）、`node.config_changed`（`{node_id, agent, what: "defaults"|"env:<名字>"|"file:<id>"}`，不含内容）。
+
+**机器代用接口**：已配对的机器用设备令牌（`Authorization: Bearer`）调用 `/api/v1/device/` 下的这几个接口，给 `sous chat` 用（见 `core-daemon-ipc.md`）：`GET/POST /device/threads`、`GET/POST /device/threads/{id}/messages`、`GET /device/ws`、`GET /device/approvals`、`POST /device/approvals/{id}/decide`。行为与同名接口相同，不需要 CSRF。设置、机器、任务等其他接口仍然只能用 Passkey 登录后访问。
 
 另有 `GET /healthz`（不在 `/api/v1` 下，不需要登录）返回 `{status, version}`。机器用的 `POST /api/v1/node/pair` 和 `GET /node` 见 `core-hub-node.md`。
 
-上表里列了但 `internal/` 里还没有实现的接口（定时任务、更新）属于 M4，实现时再定稿。
-
-**消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, kind?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。`kind` 为空表示普通消息，`notice` 表示主管主动发出的提醒（总在主线），`silent` 表示主管判断这条消息不需要回复（`content` 是原因）。
+**消息字段**：`{id, thread_id, role: "user"|"assistant", content, error?, reply_to?, kind?, seq, created_at}`。`reply_to` 是一条回复所回答的最新用户消息的 seq；回复期间新到的消息，会在下一轮一起回答。`kind` 为空表示普通消息，`notice` 表示主管主动发出的提醒（总在主线），`silent` 表示主管判断这条消息不需要回复（`content` 是原因），`report` 是任务引擎发的任务汇报，`trigger` 是没人输入、但要主管处理的消息（`role` 为 `user`：定时任务到点，或者 sous 的自动跟进，内容以【定时任务…】或【跟进】开头），`inspector` 是巡检发现问题时在主线留下的说明。
 
 **Run 和审批**：`/ws` 会推送 `run.queued`、`run.started`、`run.update`、`run.ended`、`approval.requested`、`approval.decided`，以及临时事件 `run.output`（seq 为 0，payload `{kind: "text"|"thought", text}`，不补发；完整文字在 `/runs/{id}/log` 里）。机器变化时推送 `node.*` 事件。
 
-**任务**：`{id, parent_id, origin_thread_id, kind: "code"|"general", title, detail, status, status_reason, priority, project_id, agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, depends_on, created_at, updated_at}`。`status` 取值 `inbox planned queued running waiting_approval blocked review done failed cancelled`；`queued` 表示等依赖或等机器（原因在 `status_reason`）。`/ws` 推送 `task.created`、`task.updated`、`task.status`、`task.reviewed`、`project.put`、`project.deleted`、`approval.escalated`、`notify.sent`。任务的结果由引擎以 `kind: "report"` 的助手消息发到发起它的线程。
+**任务**：`{id, parent_id, origin_thread_id, kind: "code"|"general"|"ops", title, detail, status, status_reason, priority, project_id, agent_pref, node_pref, permission_mode, persona_id, branch, base_branch, pr_url, review_note, next, dismissed, depends_on, created_at, updated_at}`。`next` 在排队时是下一个 Run 的用途，执行中是当前 Run 的用途（`work`、`rebase`、`deliver`），工作台据此画出任务所在的阶段。`status` 取值 `inbox planned queued running waiting_approval blocked review done failed cancelled`；`queued` 表示等依赖或等机器（原因在 `status_reason`）。`/ws` 推送 `task.created`、`task.updated`、`task.status`、`task.reviewed`、`project.put`、`project.deleted`、`approval.escalated`、`notify.sent`。任务的结果由引擎以 `kind: "report"` 的助手消息发到发起它的线程。
 
-**Run**（M3 起）：多了 `task_id, purpose: "work"|"rebase"|"deliver", permission_mode, base_branch, pr_url, conflict, title, force`。`run.update` 的 `kind` 为 `permission` 时，表示机器上的策略自己做的决定（`category`、`decision: allow|deny`）。
+**Run**（M3 起）：多了 `task_id, purpose: "work"|"rebase"|"deliver", permission_mode, base_branch, pr_url, conflict, title, force`。M5 起 `kind` 可以是 `ops`，`purpose` 可以是 `clone`、`create`（新建或 clone 项目，`prompt` 是项目 id），并多了 `persona?`（岗位名）、`options?`（岗位的会话选项）、`setup?`（`{name, remote?, layout?, owner?, private?}`）。`run.update` 的 `kind` 为 `permission` 时，表示机器上的策略自己做的决定（`category`、`decision: allow|deny`）。
 
-**推送**：通知点开后打开 PWA 的哈希路由：`/#approvals`、`/#task=<id>`、`/#thread=<id>`。
+**定时、巡检和恢复相关的事件**：`schedule.put`、`schedule.deleted`；`trigger.fired`（payload `{kind: "cron"|"followup", key, schedule_id?, message_id, title, content}`，同时作为 `kind: trigger` 的消息出现在它的线程里）；`inspector.finding`（`{finding_id, rule: "repeat"|"stalled"|"long"|"tokens", severity, action: "notify"|"pause"|"stop"|"none", reason, done}`）；`run.paused`（`{reason}`）、`run.resumed`；`run.message`（`{message_id, text}`，追加指令）、`run.message.delivered`（`{message_ids}`，已经送进 agent 的会话）；`run.archived`；`node.update_requested`、`node.update_result`（`{node_id, version, error?}`）。Run 多了 `paused, pause_reason, archived, recovery_note, last_event`；`recovery_note` 非空表示它是中断后自动重新开始的。
+
+**M5 的其他字段和事件**：机器多了 `role: "dev"|"server"`、`workspaces`、`wok`（wok 的版本，空表示没装）；项目多了 `remote_key`（规范化的仓库地址，项目的身份）、`default_persona`、`notes`、`layout: "wokspace"|""`、`deploy`，`nodes[].source` 是 `scan`（在工作空间里自动找到）或 `manual`；消息多了 `context`。`/ws` 多推送 `persona.put`、`persona.deleted`、`node.repos`、`node.role`。
+
+**推送**：通知点开后打开 PWA 的哈希路由：`/#approvals`、`/#task=<id>`、`/#thread=<id>`。M5 起工作台自己的路由是 `/#/`、`/#/projects`、`/#/project=<id>`、`/#/task=<id>`、`/#/inbox`，旧的三种链接仍然有效。
 
 **记忆**：`{id, kind: "profile"|"project"|"lesson"|"note", content, created_at, updated_at}`。记忆变化时，`/ws` 推送 `memory.put` / `memory.deleted` 事件。
 

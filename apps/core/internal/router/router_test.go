@@ -75,3 +75,32 @@ func TestRoutePinnedAndSticky(t *testing.T) {
 		t.Fatal("no machines at all must fail")
 	}
 }
+
+func TestRouteRoles(t *testing.T) {
+	yes := true
+	agents := []proto.AgentInfo{{Name: "codex", Installed: true, LoggedIn: &yes}}
+	nodes := []Node{
+		{ID: "srv", Name: "服务器", Online: true, Agents: agents, Capacity: 2, Role: "server"},
+		{ID: "mac", Name: "mac", Online: true, Agents: agents, Capacity: 2},
+	}
+	pn := []event.ProjectNode{{NodeID: "srv", Path: "/srv/app"}, {NodeID: "mac", Path: "/code/app", Priority: 1}}
+	c, err := Route(Request{Kind: event.TaskKindCode, ProjectNodes: pn, Role: "dev"}, nodes)
+	if err != nil || c.NodeID != "mac" || c.Path != "/code/app" {
+		t.Fatalf("code task: %+v %v", c, err)
+	}
+	c, err = Route(Request{Kind: event.TaskKindOps, ProjectNodes: pn, Role: "server"}, nodes)
+	if err != nil || c.NodeID != "srv" || c.Path != "/srv/app" {
+		t.Fatalf("ops task: %+v %v", c, err)
+	}
+	c, err = Route(Request{Kind: event.TaskKindOps, NodePref: "srv", Path: "/srv/deploy", Role: "server"}, nodes)
+	if err != nil || c.NodeID != "srv" || c.Path != "/srv/deploy" {
+		t.Fatalf("deploy target: %+v %v", c, err)
+	}
+	c, err = Route(Request{Kind: event.TaskKindGeneral, Role: "dev"}, nodes)
+	if err != nil || c.NodeID != "mac" {
+		t.Fatalf("general task: %+v %v", c, err)
+	}
+	if _, err := Route(Request{Kind: event.TaskKindCode, ProjectNodes: pn[:1], Role: "dev"}, nodes); err == nil {
+		t.Fatal("a code task must not go to a server")
+	}
+}

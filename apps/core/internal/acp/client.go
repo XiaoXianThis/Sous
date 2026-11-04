@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 )
 
 // ProtocolVersion is the ACP version sous speaks.
@@ -119,6 +121,45 @@ type Session struct {
 	ID          string
 	CurrentMode string
 	Modes       []Mode
+	// Options are the session's config options (models, reasoning levels…).
+	// An agent that only reports the older unstable "models" field gets
+	// one option with id LegacyModelOption.
+	Options []ConfigOption
+}
+
+// sessionResult is what session/new and session/load return.
+type sessionResult struct {
+	SessionID string `json:"sessionId"`
+	Modes     *struct {
+		CurrentModeID  string `json:"currentModeId"`
+		AvailableModes []Mode `json:"availableModes"`
+	} `json:"modes"`
+	ConfigOptions []json.RawMessage `json:"configOptions"`
+	Models        *struct {
+		CurrentModelID  string `json:"currentModelId"`
+		AvailableModels []struct {
+			ModelID     string `json:"modelId"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"availableModels"`
+	} `json:"models"`
+}
+
+func (r sessionResult) session(id string) Session {
+	s := Session{ID: id}
+	if r.Modes != nil {
+		s.CurrentMode = r.Modes.CurrentModeID
+		s.Modes = r.Modes.AvailableModes
+	}
+	s.Options = ParseConfigOptions(r.ConfigOptions)
+	if len(s.Options) == 0 && r.Models != nil && len(r.Models.AvailableModels) > 0 {
+		o := ConfigOption{ID: LegacyModelOption, Name: "Model", Category: "model", Current: r.Models.CurrentModelID}
+		for _, m := range r.Models.AvailableModels {
+			o.Values = append(o.Values, ConfigValue{Value: m.ModelID, Name: m.Name, Description: m.Description})
+		}
+		s.Options = []ConfigOption{o}
+	}
+	return s
 }
 
 // Client is one running agent process.
@@ -176,7 +217,8 @@ func Start(ctx context.Context, c Command, cb Callbacks) (*Client, error) {
 			"fs":       map[string]bool{"readTextFile": false, "writeTextFile": false},
 			"terminal": false,
 		},
-		"clientInfo": map[string]string{"name": "sous", "title": "sous"},
+		// Some agents (Cursor) reject a clientInfo without a version.
+		"clientInfo": map[string]string{"name": "sous", "title": "sous", "version": version.Version},
 	}, &cl.Init)
 	if err != nil {
 		cl.Close()
@@ -289,13 +331,7 @@ func parseUpdate(raw json.RawMessage) Update {
 // NewSession opens a session in cwd. If the agent asks for authentication,
 // it authenticates with the agent's first method and tries once more.
 func (c *Client) NewSession(ctx context.Context, cwd string) (Session, error) {
-	var res struct {
-		SessionID string `json:"sessionId"`
-		Modes     *struct {
-			CurrentModeID  string `json:"currentModeId"`
-			AvailableModes []Mode `json:"availableModes"`
-		} `json:"modes"`
-	}
+	var res sessionResult
 	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
 	err := c.conn.Call(ctx, "session/new", params, &res)
 	if IsAuthRequired(err) && len(c.Init.AuthMethods) > 0 {
@@ -313,12 +349,28 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (Session, error) {
 	if err != nil {
 		return Session{}, c.withStderr(fmt.Errorf("session/new: %w", err))
 	}
-	s := Session{ID: res.SessionID}
-	if res.Modes != nil {
-		s.CurrentMode = res.Modes.CurrentModeID
-		s.Modes = res.Modes.AvailableModes
+	return res.session(res.SessionID), nil
+}
+
+// LoadSession resumes an earlier session (agents that advertise the
+// loadSession capability). The agent replays the conversation as
+// session/update notifications before it answers.
+func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) (Session, error) {
+	var res sessionResult
+	err := c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": []any{}}, &res)
+	if IsAuthRequired(err) && len(c.Init.AuthMethods) > 0 {
+		authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		aerr := c.conn.Call(authCtx, "authenticate", map[string]string{"methodId": c.Init.AuthMethods[0].ID}, nil)
+		cancel()
+		if aerr != nil {
+			return Session{}, fmt.Errorf("%w: %v", ErrNotLoggedIn, aerr)
+		}
+		err = c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": []any{}}, &res)
 	}
-	return s, nil
+	if err != nil {
+		return Session{}, c.withStderr(fmt.Errorf("session/load: %w", err))
+	}
+	return res.session(sessionID), nil
 }
 
 // ErrNotLoggedIn means the agent needs its user to log in first.

@@ -10,3 +10,5 @@ How the system is built: what each app is responsible for, how apps relate, data
 - Prefer Mermaid diagrams inside Markdown, so agents can read, edit, and diff them.
 
 ## Documents
+
+- [workbench.md](workbench.md)：项目、岗位、任务和机器，以及工作台界面

@@ -34,9 +34,15 @@ type nodeConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// From hello: whether the node answers node.request, and whether its
+	// node.json allows it.
+	canAdmin bool
+	adminOn  bool
+
 	mu         sync.Mutex
 	dispatched map[string]bool
-	refs       map[string]runRef // run id -> where its events go
+	refs       map[string]runRef                  // run id -> where its events go
+	pending    map[string]chan proto.NodeResponse // node.request id -> its caller
 }
 
 // runRef is the thread and task a run's events belong to.
@@ -68,7 +74,7 @@ func (h *Hub) ServeNode(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(maxFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &nodeConn{hub: h, nodeID: node.ID, ws: ws, out: make(chan proto.Frame, sendBuffer), ctx: ctx, cancel: cancel,
-		dispatched: map[string]bool{}, refs: map[string]runRef{}}
+		dispatched: map[string]bool{}, refs: map[string]runRef{}, pending: map[string]chan proto.NodeResponse{}}
 	defer cancel()
 	defer ws.CloseNow()
 
@@ -80,6 +86,10 @@ func (h *Hub) ServeNode(w http.ResponseWriter, r *http.Request) {
 		ws.Close(websocket.StatusPolicyViolation, "expected hello")
 		return
 	}
+	for _, cp := range hello.Caps {
+		c.canAdmin = c.canAdmin || cp == proto.CapAdmin
+	}
+	c.adminOn = c.canAdmin && hello.Admin
 
 	h.mu.Lock()
 	if old := h.conns[node.ID]; old != nil {
@@ -196,6 +206,14 @@ func (c *nodeConn) welcome(ctx context.Context) {
 		for _, a := range decided {
 			c.send(proto.New(proto.TApprovalDecide, proto.ApprovalDecide{ApprovalID: a.ID, RunID: r.ID, OptionID: a.OptionID}))
 		}
+		// Follow-ups the agent has not read yet; the node drops the ones it
+		// already holds.
+		for _, m := range c.hub.Undelivered(ctx, r.ID) {
+			c.send(proto.New(proto.TRunMessage, proto.RunMessage{RunID: r.ID, Text: m.Text, MessageID: m.ID}))
+		}
+		if r.Paused {
+			c.send(proto.New(proto.TRunPause, proto.RunPause{RunID: r.ID, Reason: r.PauseReason}))
+		}
 	}
 }
 
@@ -211,6 +229,7 @@ func (c *nodeConn) dispatch(r store.Run) {
 	c.send(proto.New(proto.TRunStart, proto.RunStart{
 		RunID: r.ID, Agent: r.Agent, Kind: r.Kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.Mode,
 		TaskID: r.TaskID, Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
+		RecoveryNote: r.RecoveryNote, Options: r.Options, Persona: r.Persona, Setup: r.Setup,
 	}))
 }
 
@@ -255,7 +274,22 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 			return err
 		}
 		agents, _ := json.Marshal(inv.Agents)
-		return c.store(ctx, f, event.New(event.NodeInventory, event.ActorSystem, "", event.NodePayload{NodeID: c.nodeID, Agents: agents, Concurrency: inv.Concurrency}))
+		p := event.NodePayload{NodeID: c.nodeID, Agents: agents, Concurrency: inv.Concurrency, Role: inv.Role, Workspaces: inv.Workspaces}
+		if inv.Role != "" { // an M5 node: it reports wok too, even when missing
+			wok := inv.Wok
+			p.Wok = &wok
+			if p.Workspaces == nil {
+				p.Workspaces = []string{}
+			}
+		}
+		return c.store(ctx, f, event.New(event.NodeInventory, event.ActorSystem, "", p))
+
+	case proto.TNodeRepos:
+		var nr proto.NodeRepos
+		if err := f.Decode(&nr); err != nil {
+			return err
+		}
+		return c.store(ctx, f, event.New(event.NodeRepos, event.ActorSystem, "", event.NodeReposPayload{NodeID: c.nodeID, NodeRepos: nr}))
 
 	case proto.TRunStarted:
 		var p proto.RunStarted
@@ -320,6 +354,56 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 			PRURL: p.PRURL, Conflict: p.Conflict,
 		})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))
+
+	case proto.TRunDelivered:
+		var p proto.RunDelivered
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		ref, err := c.refOf(ctx, p.RunID)
+		if err != nil {
+			return err
+		}
+		ev := event.New(event.RunMessageDelivered, event.ActorSystem, "", event.RunDeliveredPayload{MessageIDs: p.MessageIDs})
+		return c.store(ctx, f, ref.stamp(ev, p.RunID))
+
+	case proto.TNodeResponse:
+		var p proto.NodeResponse
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		ch := c.pending[p.ReqID]
+		delete(c.pending, p.ReqID)
+		c.mu.Unlock()
+		if ch != nil {
+			ch <- p
+		}
+		return nil
+
+	case proto.TNodeStream:
+		var p proto.NodeStream
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		c.hub.log.Emit(event.New(event.AgentJobOutput, event.ActorSystem, "", event.AgentJobPayload{
+			NodeID: c.nodeID, JobID: p.JobID, Offset: p.Offset, Data: p.Data}))
+		return nil
+
+	case proto.TJobEnded:
+		var p proto.JobEnded
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		return c.store(ctx, f, event.New(event.AgentJobEnded, event.ActorSystem, "", event.AgentJobPayload{
+			NodeID: c.nodeID, JobID: p.JobID, Kind: p.Kind, Agent: p.Agent, ExitCode: p.ExitCode, Error: p.Error}))
+
+	case proto.TNodeUpdateResult:
+		var p proto.NodeUpdateResult
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		return c.updateResult(ctx, f, p)
 
 	case proto.TApprovalRequest:
 		var p proto.ApprovalRequest
@@ -400,4 +484,27 @@ func parseAgents(raw json.RawMessage) []proto.AgentInfo {
 	var out []proto.AgentInfo
 	json.Unmarshal(raw, &out)
 	return out
+}
+
+// updateResult records how a machine's update went and tells the user in
+// the main thread: the machine restarts right after a success.
+func (c *nodeConn) updateResult(ctx context.Context, f proto.Frame, p proto.NodeUpdateResult) error {
+	if err := c.store(ctx, f, event.New(event.NodeUpdateResult, event.ActorSystem, "", event.NodeUpdatePayload{NodeID: c.nodeID, Version: p.Version, Error: p.Error})); err != nil {
+		return err
+	}
+	n, _ := c.hub.log.Store.Node(ctx, c.nodeID)
+	text := fmt.Sprintf("机器「%s」已经安装 %s，正在重启 sous。", n.Name, p.Version)
+	if p.Error != "" {
+		text = fmt.Sprintf("机器「%s」更新失败：%s", n.Name, p.Error)
+	}
+	main, err := c.hub.log.Store.MainThreadID(ctx)
+	if err != nil {
+		return nil
+	}
+	ev := event.New(event.MessageAssistant, event.ActorSystem, main, event.MessagePayload{MessageID: f.ID + "-msg", Content: text, Kind: event.KindNotice})
+	ev.ID = f.ID + "-notice" // resent frames post it once
+	if _, err := c.hub.log.Append(ctx, ev); err != nil && !strings.Contains(err.Error(), "UNIQUE") {
+		return err
+	}
+	return nil
 }

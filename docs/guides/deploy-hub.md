@@ -2,9 +2,11 @@
 
 把 sous 的 Hub 部署到一台 Linux 服务器（x86-64），通过 `https://agent.wxian.cc` 访问。用 systemd 托管进程，Caddy 负责 HTTPS 和反向代理。部署用到的文件在 `work/infra/deploy/hub/`。
 
-## 1. 在本机构建
+## 1. 准备程序
 
-在仓库根目录执行，Windows、macOS、Linux 上的命令相同：
+最简单的是从 GitHub Releases 下载 `sous-hub_<版本>_linux_amd64.tar.gz`（ARM 服务器用 `linux_arm64`）。解压后有 `sous-hub`、`web/`（PWA）、`hub.example.yaml` 和 `deploy/`（systemd 单元和 Caddyfile），第 3 步上传这些文件即可。
+
+也可以自己构建。在仓库根目录执行，Windows、macOS、Linux 上的命令相同：
 
 ```
 wok build web
@@ -96,13 +98,22 @@ sudo -u sous /opt/sous/sous-hub -config /opt/sous/hub.yaml admin passkey-reset
 
 ## 升级
 
-重新执行第 1 步，上传新的 `sous-hub` 和 `web/`，然后：
+网页的 **机器** 面板会显示 Hub 当前的版本和最新发布的版本。Hub 不会自己更新（服务以只读方式运行程序目录）：重新执行第 1 步，上传新的 `sous-hub` 和 `web/`，然后：
 
 ```sh
 systemctl restart sous-hub
 ```
 
-数据库的结构会在启动时自动升级。
+数据库的结构会在启动时自动升级。每台电脑上的 `sous` 在机器面板里点“更新”即可，见 `connect-machine.md`。
+
+## 自动恢复
+
+- systemd 的 `Restart=always` 负责在 Hub 退出后重新拉起它。Hub 内部有看门狗：关键循环（副作用队列、任务引擎、定时任务、巡检）停止心跳，或者数据库写锁卡住超过 2 分钟，Hub 会主动退出，交给 systemd 重启。
+- 重启后，没执行完的副作用（验收、审批、推送）从队列里接着执行；机器重新连上后，Hub 和 daemon 对账，未确认的事件由 daemon 重发。
+
+## 数据保留
+
+任务关闭（完成或取消）超过 90 天后，它的 Run 日志和 diff 会被压缩到 `data/runs/archive/`，界面上照样能打开；事件表不删除。天数用 `hub.yaml` 的 `retention_days` 调整，`-1` 表示不归档。
 
 ## 备份与恢复
 

@@ -16,18 +16,21 @@ export interface Message {
   content: string
   error?: boolean
   reply_to?: number
-  /** "notice" for a proactive notification, "silent" for a turn that chose not to reply. */
   /**
    * "notice": a proactive notification; "silent": a turn that chose not to
-   * reply; "report": a task's result posted by the task engine.
+   * reply; "report": a task's result posted by the task engine; "trigger":
+   * input nobody typed (a schedule or a follow-up, role user); "inspector":
+   * the inspector's note about a finding.
    */
-  kind?: 'notice' | 'silent' | 'report'
+  kind?: 'notice' | 'silent' | 'report' | 'trigger' | 'inspector' | 'step'
   seq: number
   created_at: number
   /** Set while the reply is still streaming; never sent by the server. */
   streaming?: boolean
   /** Reasoning text streamed before the answer, if the model sends it. */
   thinking?: string
+  /** What the user was looking at on the workbench when they wrote it. */
+  context?: MessageContext
 }
 
 export interface HubEvent {
@@ -66,6 +69,66 @@ export interface AgentInfo {
   transport: string
   logged_in?: boolean
   note?: string
+  /** Commands sous runs for these actions; absent when there is none here. */
+  install?: string
+  upgrade?: string
+  login?: string
+  logout?: string
+  /** Commands the agent needs that are missing on the machine (npx). */
+  missing?: string[]
+  /** Environment variables that hold an API key, and the ones set. */
+  key_env?: string[]
+  env_set?: string[]
+  /** Session options the agent reported (models, reasoning levels). */
+  options?: ConfigOption[]
+  options_at?: number
+  defaults?: Record<string, string>
+  configs?: AgentConfigFile[]
+  launch_override?: boolean
+  /** The install or login running for it now. */
+  job?: JobStarted
+}
+
+export interface ConfigOption {
+  id: string
+  name: string
+  description?: string
+  category?: string
+  current: string
+  values: { value: string; name: string; description?: string; group?: string }[]
+}
+
+export interface AgentConfigFile {
+  id: string
+  path: string
+  format: string
+}
+
+export interface ConfigFile {
+  agent: string
+  file: string
+  path: string
+  format: string
+  exists: boolean
+  content: string
+  sha256: string
+  backup?: string
+}
+
+export type JobKind = 'install' | 'upgrade' | 'login' | 'logout'
+
+export interface JobStarted {
+  job_id: string
+  kind: JobKind
+  agent: string
+  command: string
+}
+
+export interface JobTail extends JobStarted {
+  offset: number
+  data: string
+  running: boolean
+  exit_code?: number
 }
 
 export interface Node {
@@ -80,11 +143,17 @@ export interface Node {
   concurrency: number
   last_seen: number
   created_at: number
+  /** Remote administration: on, off (node.json), unsupported (old sous), or absent when offline. */
+  admin?: 'on' | 'off' | 'unsupported'
+  /** M5: dev machine or server, its workspaces, and the wok version ('' when missing). */
+  role?: 'dev' | 'server'
+  workspaces?: string[]
+  wok?: string
 }
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
-export type RunPurpose = 'work' | 'rebase' | 'deliver'
+export type RunPurpose = 'work' | 'rebase' | 'deliver' | 'clone' | 'create'
 
 export interface Run {
   id: string
@@ -98,7 +167,7 @@ export interface Run {
   title: string
   node_id: string
   agent: string
-  kind: 'code' | 'general'
+  kind: 'code' | 'general' | 'ops'
   repo_path: string
   prompt: string
   status: RunStatus
@@ -110,6 +179,15 @@ export interface Run {
   created_at: number
   started_at: number
   ended_at: number
+  paused?: boolean
+  pause_reason?: string
+  archived?: boolean
+  recovery_note?: string
+  last_event?: number
+  /** M5: the persona's name and session options, and what a setup run does. */
+  persona?: string
+  options?: Record<string, string>
+  setup?: { name: string; remote?: string; layout?: string; owner?: string; private?: boolean }
 }
 
 export interface ApprovalOption {
@@ -149,7 +227,7 @@ export interface Task {
   id: string
   parent_id: string
   origin_thread_id: string
-  kind: 'code' | 'general'
+  kind: 'code' | 'general' | 'ops'
   title: string
   detail: string
   status: TaskStatus
@@ -165,6 +243,7 @@ export interface Task {
   review_note: string
   next: string
   dismissed: boolean
+  persona_id: string
   depends_on: string[]
   created_at: number
   updated_at: number
@@ -174,6 +253,16 @@ export interface ProjectNode {
   node_id: string
   path: string
   priority: number
+  /** "scan": found in the machine's workspaces; "manual": entered by hand. */
+  source?: 'scan' | 'manual'
+}
+
+export interface Deploy {
+  node_id: string
+  path: string
+  command: string
+  health?: string
+  auto_on_merge?: boolean
 }
 
 export interface Project {
@@ -185,6 +274,55 @@ export interface Project {
   nodes: ProjectNode[]
   created_at: number
   updated_at: number
+  remote_key?: string
+  default_persona?: string
+  notes?: string
+  layout?: 'wokspace' | ''
+  deploy?: Deploy | null
+}
+
+export type PersonaColor = 'purple' | 'teal' | 'coral' | 'pink' | 'blue' | 'green' | 'amber' | 'gray'
+
+export interface Persona {
+  id: string
+  name: string
+  glyph: string
+  color: PersonaColor
+  agent: string
+  options: Record<string, string>
+  brief: string
+  default_mode: PermissionMode | ''
+  kinds: ('code' | 'general' | 'ops')[]
+  builtin: boolean
+  created_at: number
+  updated_at: number
+}
+
+export interface RepoScan {
+  node_id: string
+  path: string
+  remote: string
+  remote_key: string
+  branch: string
+  dirty: boolean
+  wokspace: boolean
+  seen_at: number
+  project_id: string
+}
+
+export interface Overview {
+  projects: Project[]
+  nodes: Node[]
+  personas: Persona[]
+  tasks: Task[]
+  runs: Run[]
+  approvals: Approval[]
+  discovered: RepoScan[]
+}
+
+export interface MessageContext {
+  project_id?: string
+  task_id?: string
 }
 
 export interface Quiet {
@@ -206,4 +344,63 @@ export interface Settings {
 export interface Inbox {
   approvals: Approval[]
   tasks: Task[]
+}
+
+export interface Schedule {
+  id: string
+  title: string
+  cron: string
+  tz: string
+  prompt: string
+  thread_id: string
+  enabled: boolean
+  last_run: number
+  next_run: number
+  created_at: number
+  updated_at: number
+}
+
+export interface UsageRow {
+  provider: string
+  model: string
+  role: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cached_tokens: number
+}
+
+export interface UsageDay {
+  day: string
+  role: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cached_tokens: number
+}
+
+export interface Usage {
+  days: number
+  since: number
+  usage: UsageRow[]
+  daily: UsageDay[]
+}
+
+export interface NodeVersion {
+  id: string
+  name: string
+  version: string
+  online: boolean
+  os: string
+  arch: string
+  update_available: boolean
+}
+
+export interface Updates {
+  hub: { version: string; update_available?: boolean }
+  latest?: { tag: string; name: string; url: string; published_at: string; notes: string }
+  error?: string
+  checked_at: number
+  repo: string
+  nodes: NodeVersion[]
 }

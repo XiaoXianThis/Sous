@@ -1,0 +1,40 @@
+name: release
+# Pushing a tag such as v0.1.0 tests everything, builds the PWA, and
+# publishes sous (Windows, macOS, Linux) and sous-hub (Linux) to GitHub
+# Releases with goreleaser (apps/core/.goreleaser.yaml). Daemons update
+# themselves from these releases (internal/update).
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog needs the history
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/core/go.mod
+          cache-dependency-path: apps/core/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install wok
+        run: go install github.com/XiaoXianThis/wokspace/apps/wok@latest
+      - run: wok test core
+      - run: wok install web
+      - run: wok test web
+      - run: wok build web
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+          workdir: apps/core
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
