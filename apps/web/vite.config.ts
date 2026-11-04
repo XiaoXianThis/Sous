@@ -1,13 +1,12 @@
-import { defineConfig } from 'vite'
-import { svelte } from '@sveltejs/vite-plugin-svelte'
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vitest/config'
 
 // In dev, the Hub runs on :8787 (wok dev core) and Vite proxies the API to it.
 const hub = process.env.SOUS_HUB ?? 'http://127.0.0.1:8787'
 
 export default defineConfig({
-  plugins: [svelte()],
-  // Tests use Svelte's client build, so $state and $effect behave as in the browser.
-  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     proxy: {
@@ -21,8 +20,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   test: {
-    include: ['src/**/*.test.ts'],
-    // A DOM environment makes Vitest compile Svelte modules for the client.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'happy-dom',
   },
 })

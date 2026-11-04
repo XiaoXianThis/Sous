@@ -10,7 +10,7 @@
 ## Decision
 
 - `apps/core`：一个 Go module，编译出两个二进制。`sous-hub` 是服务端；`sous` 是客户端，同时负责 daemon 和命令行（`sous daemon`、`sous pair`、`sous status`、`sous chat`）。Hub 与 Node 的协议类型在同一个 module 里共用。
-- `apps/web`：Svelte PWA，构建到 `build/web/`。
+- `apps/web`：React PWA，构建到 `build/web/`。
 - `apps/desktop`：Go + Wails v3，提供托盘和窗口。窗口内嵌 `build/web/`，与本机 daemon 通过本地 IPC 契约通信。
 - daemon 和桌面界面是两个独立进程：daemon 作为系统服务常驻，界面退出或崩溃都不影响正在执行的任务；没有图形界面的 Linux 机器只装 `sous`。
 

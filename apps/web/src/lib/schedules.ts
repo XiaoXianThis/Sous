@@ -1,4 +1,4 @@
-// Display helpers for schedules and token usage, free of Svelte for tests.
+// Display helpers for schedules and token usage, free of the UI for tests.
 import type { UsageDay, UsageRow } from './types'
 
 /** Common schedules, offered as presets. */

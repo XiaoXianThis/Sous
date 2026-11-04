@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   --bg: #f6f4ef;
   --panel: #fffdf9;
@@ -9,6 +11,7 @@
   --accent-text: #f6f4ef;
   --warm: #b8732a;
   --danger: #b3261e;
+  --done: #3a9d5d;
   --user-bubble: #1f3b2d;
   --user-text: #f6f4ef;
   --radius: 14px;
@@ -32,43 +35,90 @@
     color-scheme: dark;
   }
 }
-* { box-sizing: border-box; }
-/* Scrollbars: a slim thumb, no track background, in both themes. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
-}
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--muted) 40%, transparent);
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 65%, transparent); }
-html, body, #app { height: 100%; margin: 0; }
-body {
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.6 var(--font);
-  -webkit-font-smoothing: antialiased;
-  -webkit-tap-highlight-color: transparent;
-}
-button { font: inherit; color: inherit; cursor: pointer; }
-button:disabled { cursor: default; opacity: .5; }
-textarea, input { font: inherit; color: inherit; }
-.btn {
-  border: 0; border-radius: 999px; padding: 10px 20px;
-  background: var(--accent); color: var(--accent-text); font-weight: 600;
-}
-.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
-.icon-btn {
-  border: 0; background: transparent; width: 36px; height: 36px; border-radius: 10px;
-  display: inline-grid; place-items: center; color: var(--muted);
-}
-.icon-btn:hover { background: var(--sunken); color: var(--text); }
 
+/* The same tokens as Tailwind utilities: bg-page, text-ink, border-line, ... */
+@theme inline {
+  --color-page: var(--bg);
+  --color-panel: var(--panel);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-warm: var(--warm);
+  --color-danger: var(--danger);
+  --color-done: var(--done);
+  --color-ok: var(--ok);
+  --color-info: var(--info);
+  --color-user-bubble: var(--user-bubble);
+  --color-user-text: var(--user-text);
+  --font-sans: var(--font);
+  --font-mono: ui-monospace, Menlo, Consolas, monospace;
+  --radius-app: var(--radius);
+}
+
+@layer base {
+  html, body, #root { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 var(--font);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .5; }
+  textarea, input { font: inherit; color: inherit; }
+  /* Scrollbars: a slim thumb, no track background, in both themes. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted) 40%, transparent);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 65%, transparent); }
+}
+
+@layer components {
+  .btn {
+    border: 0; border-radius: 999px; padding: 10px 20px;
+    background: var(--accent); color: var(--accent-text); font-weight: 600;
+  }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn.small { padding: 6px 14px; font-size: 14px; }
+  .icon-btn {
+    border: 0; background: transparent; width: 36px; height: 36px; border-radius: 10px;
+    display: inline-grid; place-items: center; color: var(--muted);
+  }
+  .icon-btn:hover { background: var(--sunken); color: var(--text); }
+  .link {
+    border: 0; background: none; color: var(--muted); padding: 0; font-size: 13px;
+  }
+  .link:hover:not(:disabled) { color: var(--text); }
+  .link.accent { color: var(--accent); font-weight: 600; }
+  .link.danger:hover:not(:disabled) { color: var(--danger); }
+  .link.strong { color: var(--accent); font-weight: 600; }
+  .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / .35); z-index: 30; }
+  .sheet {
+    position: fixed; z-index: 31; top: 6vh; left: 50%; transform: translateX(-50%);
+    width: min(640px, calc(100vw - 32px)); max-height: 88vh; display: flex; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 16px 18px;
+  }
+  .sheet.wide { width: min(760px, calc(100vw - 32px)); }
+  @media (max-width: 760px) {
+    .sheet, .sheet.wide {
+      top: auto; bottom: 0; left: 0; transform: none; width: 100%; max-height: 92vh;
+      border-radius: 18px 18px 0 0; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+  }
+}
 
 /* M5 workbench: tones and persona colors (light and dark). */
 :root {
@@ -106,6 +156,16 @@ textarea, input { font: inherit; color: inherit; }
   .c-amber { --p-bg: #633806; --p-fg: #fac775; }
   .c-gray { --p-bg: #444441; --p-fg: #d3d1c7; }
 }
+
+.av {
+  display: inline-grid; place-items: center; border-radius: 50%; font-weight: 600; flex: none; line-height: 1;
+  background: var(--p-bg); color: var(--p-fg); user-select: none;
+}
+.ring-accent { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--accent); }
+.ring-warning { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--warm); }
+.ring-success { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--ok); }
+.ring-danger { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--danger); }
+
 /* Components that are dialogs elsewhere, embedded in a page (settings, task view). */
 .embed > .backdrop:first-child { display: none !important; }
 .embed > .backdrop:first-child + .sheet {
@@ -113,3 +173,41 @@ textarea, input { font: inherit; color: inherit; }
   border: 0 !important; padding: 0 !important; background: transparent !important; z-index: auto !important;
 }
 .embed > .backdrop:first-child + .sheet > header { display: none !important; }
+
+@keyframes blink { 0%, 80%, 100% { opacity: .25 } 40% { opacity: 1 } }
+@keyframes caret { 50% { opacity: 0 } }
+@keyframes pulse { 50% { opacity: .55 } }
+.typing-dot { animation: blink 1.2s infinite ease-in-out; }
+.typing-dot:nth-child(2) { animation-delay: .15s; }
+.typing-dot:nth-child(3) { animation-delay: .3s; }
+.stream-caret { animation: caret 1s steps(2) infinite; }
+.stage-current { animation: pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .stage-current { animation: none; }
+}
+
+/* Reveal the chevron's direction on a collapsed section toggle. */
+.toggle[aria-expanded='false'] svg { transform: rotate(-90deg); }
+
+/* The app shell's desktop rail / phone tabs layout. */
+.shell { height: 100%; display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(320px, 400px); }
+.shell.chat-closed { grid-template-columns: 56px minmax(0, 1fr) 0; }
+.shell.chat-closed .side { display: none; }
+.shell .side .icon-btn[aria-label='收起对话'] { display: inline-grid; }
+@media (max-width: 1100px) {
+  .shell { grid-template-columns: 56px minmax(0, 1fr) minmax(300px, 340px); }
+}
+.shell .tabs { display: none; }
+@media (max-width: 760px) {
+  .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .shell .rail { display: none; }
+  .shell .work, .shell .side { grid-row: 1; grid-column: 1; border: 0; }
+  .shell .side { display: block; }
+  .shell[data-tab='chat'] .work { display: none; }
+  .shell:not([data-tab='chat']) .side { display: none; }
+  .shell .side .icon-btn[aria-label='收起对话'] { display: none; }
+  .shell .tabs {
+    display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line);
+    background: var(--sunken); padding-bottom: env(safe-area-inset-bottom);
+  }
+}

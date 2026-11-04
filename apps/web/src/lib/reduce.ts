@@ -1,5 +1,5 @@
-// Pure state transitions for the chat, driven by Hub events. Kept free of
-// Svelte so it can be unit tested.
+// Pure state transitions for the chat, driven by Hub events. Kept free of the
+// UI so it can be unit tested.
 import { applyJobEvent, type JobView } from './jobs'
 import { applyRunEvent, type RunView } from './runs'
 import type { HubEvent, Message, Thread } from './types'
@@ -48,8 +48,8 @@ export function sortThreads(threads: Thread[]): Thread[] {
 }
 
 function list(state: ChatState, threadId: string): Message[] {
-  // Read the array back after assigning it: with Svelte's $state the stored
-  // value is a reactive proxy, not the array literal that was assigned.
+  // Read the array back after assigning it, so every caller shares the stored
+  // array rather than a copy.
   if (!state.messages[threadId]) state.messages[threadId] = []
   return state.messages[threadId]
 }

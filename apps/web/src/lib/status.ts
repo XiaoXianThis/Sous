@@ -1,5 +1,5 @@
 // The workbench's visual language: one icon and one tone per state, used on
-// every page (work/specs/m5-workbench design §6). Kept free of Svelte so it
+// every page (work/specs/m5-workbench design §6). Kept free of the UI so it
 // can be unit tested.
 import type { Persona, PersonaColor, Run, Task, TaskStatus } from './types'
 
@@ -7,7 +7,7 @@ import type { Persona, PersonaColor, Run, Task, TaskStatus } from './types'
 export type Look = 'running' | 'waiting' | 'queued' | 'paused' | 'done' | 'failed' | 'planned' | 'review' | 'cancelled'
 
 export interface LookInfo {
-  icon: string // a name in Icon.svelte
+  icon: string // a name in Icon.tsx
   tone: 'accent' | 'warning' | 'neutral' | 'success' | 'danger'
   text: string
 }

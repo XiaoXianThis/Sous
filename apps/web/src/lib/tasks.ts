@@ -1,4 +1,4 @@
-// Display helpers for tasks, kept free of Svelte so they can be unit tested.
+// Display helpers for tasks, kept free of the UI so they can be unit tested.
 import type { Node, Task, TaskStatus } from './types'
 
 export const statusText: Record<TaskStatus, string> = {
