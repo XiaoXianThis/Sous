@@ -4,7 +4,9 @@ import { loadOverview, useChat } from '../lib/app'
 import { personaColors } from '../lib/status'
 import { agentChoices, modeText } from '../lib/tasks'
 import type { ConfigOption, Node, Persona } from '../lib/types'
-import Avatar from './Avatar'
+import AgentIcon, { agentTitle } from './AgentIcon'
+import Icon from './Icon'
+import Avatar, { Who } from './Avatar'
 import Sheet from './Sheet'
 
 const kindNames: Record<string, string> = { code: '代码', general: '一般', ops: '运维' }
@@ -83,14 +85,14 @@ export default function Personas({ onClose }: { onClose: () => void }) {
       {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}
 
       {editing ? (
-        <form className="border border-line rounded-[14px] p-3 grid gap-2.5" onSubmit={(e) => { e.preventDefault(); void save() }}>
+        <form className="border border-line rounded-[16px] p-3 grid gap-2.5" onSubmit={(e) => { e.preventDefault(); void save() }}>
           <div className="flex gap-3 items-center">
             <Avatar glyph={editing.glyph || editing.name?.slice(0, 1) || '?'} color={editing.color ?? 'gray'} size={44} />
             <div className="flex-1 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
               <label className="grid gap-1 text-[13px] text-muted">
                 名字
                 <input
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={editing.name ?? ''}
                   onChange={(e) => setEditing({ ...editing, name: e.currentTarget.value })}
                   required
@@ -100,7 +102,7 @@ export default function Personas({ onClose }: { onClose: () => void }) {
               <label className="grid gap-1 text-[13px] text-muted">
                 头像字
                 <input
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={editing.glyph ?? ''}
                   onChange={(e) => setEditing({ ...editing, glyph: e.currentTarget.value })}
                   maxLength={2}
@@ -125,22 +127,32 @@ export default function Personas({ onClose }: { onClose: () => void }) {
             ))}
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-            <label className="grid gap-1 text-[13px] text-muted">
+            <div className="grid gap-1 text-[13px] text-muted col-span-full" role="radiogroup" aria-label="agent">
               agent
-              <select
-                className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
-                value={editing.agent ?? ''}
-                onChange={(e) => setEditing({ ...editing, agent: e.currentTarget.value })}
-              >
-                <option value="">按项目或全局默认</option>
-                {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </label>
+              <div className="flex gap-1.5 flex-wrap">
+                {['', ...agents].map((a) => (
+                  <button
+                    key={a || 'default'}
+                    type="button"
+                    role="radio"
+                    aria-checked={(editing.agent ?? '') === a}
+                    title={a ? agentTitle(a) : '按项目或全局默认'}
+                    className={`flex items-center gap-1.5 h-9 pl-1.5 pr-2.5 rounded-[12px] border-0 text-[12.5px] font-medium transition-shadow ${
+                      (editing.agent ?? '') === a ? 'bg-panel text-ink shadow-[0_0_0_2px_var(--accent)]' : 'bg-sunken text-muted hover:text-ink'
+                    }`}
+                    onClick={() => setEditing({ ...editing, agent: a })}
+                  >
+                    {a ? <AgentIcon name={a} size={24} /> : <span className="grid place-items-center w-6 h-6 rounded-[9px] bg-hover"><Icon name="sparkles" size={14} /></span>}
+                    {a ? agentTitle(a) : '默认'}
+                  </button>
+                ))}
+              </div>
+            </div>
             {optionsOf(editing.agent ?? '').map((o) => (
               <label key={o.id} className="grid gap-1 text-[13px] text-muted">
                 {o.name}
                 <select
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={editing.options?.[o.id] ?? ''}
                   onChange={(e) => setEditing({ ...editing, options: { ...editing.options, [o.id]: e.currentTarget.value } })}
                 >
@@ -152,7 +164,7 @@ export default function Personas({ onClose }: { onClose: () => void }) {
             <label className="grid gap-1 text-[13px] text-muted">
               权限模式
               <select
-                className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                 value={editing.default_mode ?? ''}
                 onChange={(e) => setEditing({ ...editing, default_mode: e.currentTarget.value as Persona['default_mode'] })}
               >
@@ -172,7 +184,7 @@ export default function Personas({ onClose }: { onClose: () => void }) {
           <label className="grid gap-1 text-[13px] text-muted">
             岗位说明（放在每个任务前面交给 agent）
             <textarea
-              className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0 resize-y"
+              className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0 resize-y"
               rows={3}
               value={editing.brief ?? ''}
               onChange={(e) => setEditing({ ...editing, brief: e.currentTarget.value })}
@@ -184,23 +196,25 @@ export default function Personas({ onClose }: { onClose: () => void }) {
           </div>
         </form>
       ) : (
-        <button className="btn small px-4 justify-self-start" onClick={() => edit()}>新岗位</button>
+        <button className="btn small justify-self-start" onClick={() => edit()}><Icon name="plus" size={15} stroke={2.2} />新岗位</button>
       )}
 
       <ul className="list-none m-0 p-0 grid gap-2">
         {list.map((p) => (
-          <li key={p.id} className="flex gap-3 items-start border border-line rounded-[12px] px-3 py-2.5">
-            <Avatar glyph={p.glyph} color={p.color} size={34} />
+          <li key={p.id} className="flex gap-3 items-start border border-line rounded-[18px] px-4 py-3.5">
+            <Who persona={p} agent={p.agent} size={38} />
             <div className="flex-1 grid gap-0.5 min-w-0">
               <strong>{p.name}</strong>
-              <span className="text-muted text-[12px]">
-                {p.agent || '默认 agent'}{Object.values(p.options).length ? ' · ' + Object.values(p.options).join(' · ') : ''} · {p.kinds.map((k) => kindNames[k]).join('、') || '各种任务'}
+              <span className="flex gap-1 flex-wrap mt-0.5">
+                <span className="pill">{p.agent ? agentTitle(p.agent) : '默认 agent'}</span>
+                {Object.values(p.options).filter(Boolean).map((v) => <span key={v} className="pill"><Icon name="cpu" size={11} />{v}</span>)}
+                {(p.kinds.length ? p.kinds : []).map((k) => <span key={k} className="pill">{kindNames[k]}</span>)}
               </span>
               {p.brief && <span className="text-[13px] text-muted line-clamp-2">{p.brief}</span>}
             </div>
-            <span className="flex gap-3">
-              <button className="link" onClick={() => edit(p)}>编辑</button>
-              <button className="link danger" onClick={() => void remove(p)}>删除</button>
+            <span className="flex gap-0.5 -mr-1.5 -mt-1">
+              <button className="icon-btn" aria-label={`编辑 ${p.name}`} data-tip="编辑" data-tip-pos="bottom" onClick={() => edit(p)}><Icon name="edit" size={16} /></button>
+              <button className="icon-btn hover:!text-danger" aria-label={`删除 ${p.name}`} data-tip="删除" data-tip-pos="bottom" onClick={() => void remove(p)}><Icon name="trash" size={16} /></button>
             </span>
           </li>
         ))}

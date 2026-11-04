@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { ui } from '../lib/app'
 import { disablePush, enablePush, pushState, type PushState } from '../lib/push'
 import { agentChoices, modeText, pushKindText } from '../lib/tasks'
 import type { Node, PermissionMode, Settings } from '../lib/types'
@@ -84,7 +85,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               {Object.entries(modeText).map(([k, v]) => (
                 <label
                   key={k}
-                  className={`grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 items-baseline border border-line rounded-[10px] px-2.5 py-2 cursor-pointer ${
+                  className={`grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 items-baseline border border-line rounded-[12px] px-2.5 py-2 cursor-pointer ${
                     s.default_mode === k ? 'border-accent bg-[color-mix(in_srgb,var(--accent)_6%,var(--panel))]' : ''
                   }`}
                 >
@@ -99,7 +100,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           <section className="grid gap-2">
             <h3 className="m-0 text-[14px]">默认 agent</h3>
             <select
-              className="border border-line bg-page rounded-[8px] px-2 py-[5px] text-ink justify-self-start"
+              className="border border-line bg-page rounded-[10px] px-2 py-[5px] text-ink justify-self-start"
               value={s.default_agent}
               onChange={(e) => void patch({ default_agent: e.currentTarget.value })}
               aria-label="默认 agent"
@@ -140,7 +141,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               </label>
               <input
                 type="time"
-                className="border border-line bg-page rounded-[8px] px-2 py-[5px] text-ink justify-self-start"
+                className="border border-line bg-page rounded-[10px] px-2 py-[5px] text-ink justify-self-start"
                 value={s.quiet.start}
                 aria-label="开始"
                 onChange={(e) => void patch({ quiet: { ...s.quiet, start: e.currentTarget.value, tz: s.quiet.tz || tz } })}
@@ -148,7 +149,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               <span>到</span>
               <input
                 type="time"
-                className="border border-line bg-page rounded-[8px] px-2 py-[5px] text-ink justify-self-start"
+                className="border border-line bg-page rounded-[10px] px-2 py-[5px] text-ink justify-self-start"
                 value={s.quiet.end}
                 aria-label="结束"
                 onChange={(e) => void patch({ quiet: { ...s.quiet, end: e.currentTarget.value, tz: s.quiet.tz || tz } })}
@@ -167,7 +168,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 ))}
               </tbody>
             </table>
-            <p className="text-muted text-[13px] m-0">模型和 API key 在 Hub 的配置文件和环境变量里设置，界面上不显示密钥。</p>
+            <button className="link justify-self-start" onClick={() => { ui.state.settings = 'models'; ui.emit() }}>在“模型”里添加供应商、切换模型和思考强度</button>
           </section>
         </>
       )}

@@ -37,10 +37,10 @@ export default function UsagePanel({ onClose }: { onClose: () => void }) {
       {data && (
         <>
           <section className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-2">
-            <div className="border border-line rounded-[12px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.input + total.output)}</strong><span className="text-muted text-[12px]">token</span></div>
-            <div className="border border-line rounded-[12px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.input)}</strong><span className="text-muted text-[12px]">输入（缓存命中 {tokens(total.cached)}）</span></div>
-            <div className="border border-line rounded-[12px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.output)}</strong><span className="text-muted text-[12px]">输出</span></div>
-            <div className="border border-line rounded-[12px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{total.calls}</strong><span className="text-muted text-[12px]">次模型调用</span></div>
+            <div className="border border-line rounded-[14px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.input + total.output)}</strong><span className="text-muted text-[12px]">token</span></div>
+            <div className="border border-line rounded-[14px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.input)}</strong><span className="text-muted text-[12px]">输入（缓存命中 {tokens(total.cached)}）</span></div>
+            <div className="border border-line rounded-[14px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{tokens(total.output)}</strong><span className="text-muted text-[12px]">输出</span></div>
+            <div className="border border-line rounded-[14px] px-3 py-2.5 grid gap-0.5"><strong className="text-[20px]">{total.calls}</strong><span className="text-muted text-[12px]">次模型调用</span></div>
           </section>
 
           {daily.length > 1 && (

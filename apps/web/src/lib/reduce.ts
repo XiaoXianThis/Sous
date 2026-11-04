@@ -126,6 +126,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
           id: ev.thread_id!,
           title: p.title,
           kind: p.kind,
+          ...(p.project_id && { project_id: p.project_id }),
           created_at: ev.ts,
           updated_at: ev.ts,
           archived: false,

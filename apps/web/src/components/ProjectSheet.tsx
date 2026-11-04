@@ -7,6 +7,7 @@ import ApprovalCard from './ApprovalCard'
 import Icon from './Icon'
 import Locations from './Locations'
 import ProjectEditor from './ProjectEditor'
+import ProjectTile from './ProjectTile'
 import Sheet from './Sheet'
 import TaskRow from './TaskRow'
 
@@ -62,31 +63,47 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
     }
   }
 
+  const head = project ? (
+    <div className="flex items-center gap-3 min-w-0">
+      <ProjectTile name={project.name} id={project.id} size={46} misc={project.id === 'misc'} />
+      <div className="grid gap-1 min-w-0">
+        <h2 className="m-0 text-[19px] font-bold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{project.name}</h2>
+        {project.id !== 'misc' && <Locations locations={card?.locations ?? []} />}
+      </div>
+    </div>
+  ) : undefined
+  const sectionTitle = 'm-0 mb-1 text-[12px] font-semibold text-muted flex items-center gap-1.5'
+
   return (
     <>
-      <Sheet title={project ? project.name : '项目'} onClose={onClose} wide>
+      <Sheet title={project ? project.name : '项目'} onClose={onClose} wide head={head}>
       {!wb.data ? (
-        <p className="text-muted text-[13px] m-0">加载中…</p>
+        <div className="h-24 rounded-[16px] bg-sunken animate-pulse"></div>
       ) : !project ? (
         <p className="text-muted text-[13px] m-0">这个项目不存在了。</p>
       ) : (
         <>
-          <Locations locations={card?.locations ?? []} />
           {project.notes && <p className="m-0 text-[13px] text-muted [overflow-wrap:anywhere]">{project.notes}</p>}
-          {project.repo_url && (
-            <p className="m-0 flex gap-[5px] items-center text-[12px] [overflow-wrap:anywhere]">
-              <Icon name="link" size={13} /><a className="text-accent" href={project.repo_url} target="_blank" rel="noreferrer">{project.repo_url}</a>
-            </p>
-          )}
 
-          <div className="flex gap-2 flex-wrap items-center">
-            <button className="btn small" onClick={() => { ui.state.newTask = project.id; ui.emit() }}>新建任务</button>
-            {project.deploy && <button className="btn small ghost" disabled={busy} onClick={() => void deploy()}>部署</button>}
-            <button className="btn small ghost" disabled={busy} onClick={() => setEditing(true)}>编辑项目</button>
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <button className="btn small" onClick={() => { ui.state.newTask = project.id; ui.emit() }}><Icon name="plus" size={15} stroke={2.2} />新任务</button>
+            {project.deploy && (
+              <button className="btn small ghost" disabled={busy} onClick={() => void deploy()} title="sous 不会合并 PR；PR 合并后才部署">
+                <Icon name="rocket" size={14} />部署
+              </button>
+            )}
+            {project.id !== 'misc' && (
+              <button className="icon-btn solid" aria-label="编辑项目" data-tip="编辑项目" data-tip-pos="bottom" disabled={busy} onClick={() => setEditing(true)}><Icon name="edit" size={16} /></button>
+            )}
+            {project.repo_url && (
+              <a className="icon-btn solid" aria-label="仓库" data-tip={project.repo_url} data-tip-pos="bottom" href={project.repo_url.startsWith('http') ? project.repo_url : undefined} target="_blank" rel="noreferrer">
+                <Icon name={project.repo_url.includes('github') ? 'github' : 'link'} size={16} />
+              </a>
+            )}
             {clonable.length > 0 && (
-              <span className="inline-flex gap-2 items-center">
+              <span className="inline-flex gap-1.5 items-center">
                 <select
-                  className="border border-dashed border-line bg-transparent rounded-full px-2.5 py-[3px] text-[13px] text-muted"
+                  className="h-8 border-0 bg-panel shadow-soft rounded-[12px] pl-2.5 text-[13px] text-muted"
                   value={cloneTo}
                   onChange={(e) => setCloneTo(e.currentTarget.value)}
                   aria-label="clone 到"
@@ -94,24 +111,23 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
                   <option value="">clone 到…</option>
                   {clonable.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
                 </select>
-                {cloneTo && <button className="link accent" disabled={busy} onClick={() => void clone()}>开始</button>}
+                {cloneTo && <button className="btn small" disabled={busy} onClick={() => void clone()}><Icon name="download" size={14} /></button>}
               </span>
             )}
           </div>
 
           {error && <p className="m-0 text-danger text-[13px]" role="alert">{error}</p>}
-          <p className="m-0 text-[12px] text-muted">sous 不会合并 PR；PR 合并后才部署。</p>
 
           {approvals.length > 0 && (
-            <section className="grid gap-1" aria-label="需要你处理">
-              <h3 className="mt-1.5 mb-0.5 text-[14px] text-muted">需要你处理</h3>
+            <section className="grid gap-2" aria-label="需要你处理">
+              <h3 className={sectionTitle}><Icon name="hand" size={14} className="text-warm" />要你处理</h3>
               {approvals.map((a) => <ApprovalCard key={a.id} approval={a} context={titleOf(a.run_id)} />)}
             </section>
           )}
 
           {card && card.allAgents.length > 0 && (
-            <section className="grid gap-1" aria-label="正在工作">
-              <h3 className="mt-1.5 mb-0.5 text-[14px] text-muted">正在工作</h3>
+            <section className="grid gap-2" aria-label="正在工作">
+              <h3 className={sectionTitle}><Icon name="play" size={12} className="text-info" />正在工作</h3>
               {card.allAgents.map((a) => (
                 <AgentCard key={a.run.id} agent={a} onOpen={() => { ui.state.runSheet = a.run.id; ui.emit() }} />
               ))}
@@ -119,11 +135,18 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
           )}
 
           <section className="grid gap-1" aria-label="任务">
-            <h3 className="mt-1.5 mb-0.5 text-[14px] text-muted">任务</h3>
+            <h3 className={sectionTitle}><Icon name="list" size={14} />任务<span className="tabular-nums text-faint">{card?.allTasks.length ?? 0}</span></h3>
             {card?.allTasks.length ? (
-              card.allTasks.map((t) => <TaskRow key={t.task.id} task={t} onOpen={() => go({ view: 'task', id: t.task.id })} />)
+              <div className="card p-1.5 grid">
+                {card.allTasks.map((t) => <TaskRow key={t.task.id} task={t} onOpen={() => go({ view: 'task', id: t.task.id })} />)}
+              </div>
             ) : (
-              <p className="text-muted text-[13px] m-0">还没有任务。</p>
+              <button
+                className="flex items-center justify-center gap-1.5 h-12 rounded-[14px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
+                onClick={() => { ui.state.newTask = project.id; ui.emit() }}
+              >
+                <Icon name="plus" size={16} />新任务
+              </button>
             )}
           </section>
         </>

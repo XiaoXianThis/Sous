@@ -5,7 +5,7 @@ import {
   runLook, stages, taskState, taskStateDetail, taskStateRank,
   type Look, type Stage, type TaskState,
 } from './status'
-import type { AgentInfo, Node, Overview, Persona, Project, Run, Task } from './types'
+import type { AgentInfo, Node, Overview, Persona, Project, Run, Task, GitState } from './types'
 
 const MISC = 'misc'
 
@@ -22,6 +22,10 @@ export interface Location {
   online?: boolean
   title?: string
   href?: string
+  /** Machine places: the project's directory there and where its checkout stands. */
+  path?: string
+  git?: GitState
+  project?: string
 }
 
 /** A running Run, drawn as a sub-agent card. */
@@ -41,10 +45,17 @@ export interface CardTask {
   detail: string
   summary: string
   stages: Stage[]
+  /** The task's latest run, if any, and how it looks. */
+  run?: Run
+  runLook?: Look
 }
 
 export interface ProjectCard {
   project: Project
+  /** Archived projects stay off the workbench; the archive dialog lists them. */
+  archived: boolean
+  /** When the project or any of its tasks last changed (unix ms). */
+  touchedAt: number
   locations: Location[]
   /** The agents the card shows (capped). */
   agents: CardAgent[]
@@ -56,6 +67,8 @@ export interface ProjectCard {
   /** Everything behind the caps, for the project sheet. */
   allAgents: CardAgent[]
   allTasks: CardTask[]
+  /** Every task, running ones included, most urgent first (the dialog's list). */
+  listTasks: CardTask[]
   hiddenAgents: number
   hiddenTasks: number
 }
@@ -105,7 +118,10 @@ function optionName(info: AgentInfo | undefined, id: string, value?: string): st
   return opt.values.find((v) => v.value === value)?.name || value
 }
 
-/** One card per project: where it lives, who works there, and what waits. */
+/**
+ * One card per project, archived ones included (they carry `archived`): where
+ * it lives, who works there, and what waits.
+ */
 export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[] {
   // Keep the tasks the overview has; add the inbox ones it no longer lists
   // (a done task with a PR stays in the inbox until dismissed).
@@ -139,9 +155,9 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
     const all = mine.map((t) => cardTask(o, t, mine, projects.get(p.id) ?? p))
     const allAgents = [...(agentsByProject.get(p.id) ?? [])].sort((a, b) => a.run.created_at - b.run.created_at)
     const activeTaskIds = new Set(allAgents.map((a) => a.task?.id).filter(Boolean))
-    const allTasks = all
-      .filter((c) => !activeTaskIds.has(c.task.id))
-      .sort((a, b) => taskStateRank(a.state) - taskStateRank(b.state) || b.task.updated_at - a.task.updated_at)
+    const byUrgency = (a: CardTask, b: CardTask) => taskStateRank(a.state) - taskStateRank(b.state) || b.task.updated_at - a.task.updated_at
+    const listTasks = [...all].sort(byUrgency)
+    const allTasks = all.filter((c) => !activeTaskIds.has(c.task.id)).sort(byUrgency)
 
     const counts: Record<TaskState, number> = { todo: 0, active: 0, attention: 0, closed: 0 }
     for (const c of all) counts[c.state]++
@@ -152,6 +168,8 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
     const listed = allTasks.slice(0, TASK_LIMIT)
     out.push({
       project: p,
+      archived: isArchived(p),
+      touchedAt: Math.max(p.touched_at ?? 0, p.updated_at ?? 0, ...mine.map((t) => t.updated_at)),
       locations: locationsOf(p, nodes),
       agents,
       tasks: listed,
@@ -159,6 +177,7 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
       rank,
       allAgents,
       allTasks,
+      listTasks,
       hiddenAgents: allAgents.length - agents.length,
       hiddenTasks: allTasks.length - listed.length,
     })
@@ -169,13 +188,43 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
   return out.sort((a, b) => score(a) - score(b) || a.project.name.localeCompare(b.project.name))
 }
 
+export function isArchived(p: Project): boolean {
+  return (p.archived_at ?? 0) > 0
+}
+
+/**
+ * The archived cards the archive dialog shows: latest change first, narrowed
+ * by a search over the name, notes and repository.
+ */
+export function archivedCards(cards: ProjectCard[], query = ''): ProjectCard[] {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  return cards
+    .filter((c) => c.archived)
+    .filter((c) => {
+      const p = c.project
+      const text = [p.name, p.notes, p.repo_url, p.remote_key].filter(Boolean).join(' ').toLowerCase()
+      return words.every((w) => text.includes(w))
+    })
+    .sort((a, b) => b.touchedAt - a.touchedAt)
+}
+
 /** Whether a project's latest ops task finished after the given time. */
 export function deployedAfter(tasks: Task[], projectId: string, ts: number): boolean {
   return tasks.some((t) => t.project_id === projectId && t.kind === 'ops' && t.status === 'done' && t.updated_at >= ts)
 }
 
+/** The newest run of a task, with how it looks right now. */
+export function latestRun(o: Overview, taskId: string): { run?: Run; runLook?: Look } {
+  let run: Run | undefined
+  for (const r of o.runs) if (r.task_id === taskId && (!run || r.created_at > run.created_at)) run = r
+  if (!run) return {}
+  const waiting = o.approvals.some((a) => a.run_id === run!.id && a.review === 'user')
+  return { run, runLook: runLook(run, waiting) }
+}
+
 function cardTask(o: Overview, t: Task, mine: Task[], p: Project): CardTask {
   return {
+    ...latestRun(o, t.id),
     task: t,
     state: taskState(t),
     detail: taskStateDetail(t),
@@ -213,6 +262,9 @@ function locationsOf(p: Project, nodes: Map<string, Node>): Location[] {
       icon: n?.role === 'server' ? 'server' : 'laptop',
       online: n?.online ?? false,
       title: [n?.name ?? pn.node_id, n ? osText(n.os) : '', pn.path].filter(Boolean).join(' · '),
+      path: pn.path,
+      git: pn.git,
+      project: p.id,
     })
   }
   if (p.deploy) {

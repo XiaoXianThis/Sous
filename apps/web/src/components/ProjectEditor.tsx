@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
 import { go, loadOverview, useWb } from '../lib/app'
+import { setArchived } from '../lib/projects'
 import { modeText } from '../lib/tasks'
+import { isArchived } from '../lib/workbench'
 import type { Deploy, Project, ProjectNode } from '../lib/types'
 import Sheet from './Sheet'
 
@@ -77,7 +79,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           <label className="grid gap-1 text-[13px] text-muted">
             名字
             <input
-              className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+              className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
               value={name}
               onChange={(e) => setName(e.currentTarget.value)}
               required
@@ -86,7 +88,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           <label className="grid gap-1 text-[13px] text-muted">
             仓库地址
             <input
-              className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+              className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
               value={repo}
               onChange={(e) => setRepo(e.currentTarget.value)}
               placeholder="https://github.com/you/app"
@@ -97,7 +99,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
         <label className="grid gap-1 text-[13px] text-muted">
           项目说明（会写进 agent 的提示）
           <textarea
-            className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+            className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
             rows={2}
             value={notes}
             onChange={(e) => setNotes(e.currentTarget.value)}
@@ -107,7 +109,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           <label className="grid gap-1 text-[13px] text-muted">
             默认岗位
             <select
-              className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+              className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
               value={persona}
               onChange={(e) => setPersona(e.currentTarget.value)}
             >
@@ -118,7 +120,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           <label className="grid gap-1 text-[13px] text-muted">
             权限模式
             <select
-              className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+              className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
               value={mode}
               onChange={(e) => setMode(e.currentTarget.value)}
             >
@@ -128,12 +130,12 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           </label>
         </div>
 
-        <fieldset className="border border-line rounded-[12px] px-3 pt-2 pb-3 grid gap-2">
+        <fieldset className="border border-line rounded-[14px] px-3 pt-2 pb-3 grid gap-2">
           <legend className="text-[13px] text-muted px-1">在哪些机器上（越靠前越优先）</legend>
           {places.map((p, i) => (
             <div key={i} className="flex gap-1.5 items-center">
               <select
-                className="flex-none w-[140px] border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                className="flex-none w-[140px] border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                 value={p.node_id}
                 onChange={(e) => setPlaces(places.map((x, j) => (j === i ? { ...x, node_id: e.currentTarget.value } : x)))}
                 aria-label="机器"
@@ -141,20 +143,20 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                 {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}{n.role === 'server' ? '（服务器）' : ''}</option>)}
               </select>
               <input
-                className="flex-1 border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                className="flex-1 border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                 value={p.path}
                 onChange={(e) => setPlaces(places.map((x, j) => (j === i ? { ...x, path: e.currentTarget.value } : x)))}
                 placeholder="仓库在这台机器上的路径"
                 aria-label="路径"
               />
-              {p.source === 'scan' && <span className="text-[11px] text-muted border border-line rounded-[6px] px-1" title="在工作空间里自动找到">自动</span>}
+              {p.source === 'scan' && <span className="text-[11px] text-muted border border-line rounded-[8px] px-1" title="在工作空间里自动找到">自动</span>}
               <button type="button" className="link" onClick={() => setPlaces(places.filter((_, j) => j !== i))}>移除</button>
             </div>
           ))}
           {nodes.length > places.length && <button type="button" className="link accent justify-self-start" onClick={addPlace}>添加机器</button>}
         </fieldset>
 
-        <fieldset className="border border-line rounded-[12px] px-3 pt-2 pb-3 grid gap-2">
+        <fieldset className="border border-line rounded-[14px] px-3 pt-2 pb-3 grid gap-2">
           <legend className="text-[13px] text-muted px-1">部署目标</legend>
           {servers.length === 0 ? (
             <p className="m-0 text-[12px] text-muted">还没有服务器。在“设置 → 机器”里把一台机器设为服务器后，就能在这里选它部署。</p>
@@ -164,7 +166,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                 <label className="grid gap-1 text-[13px] text-muted">
                   服务器
                   <select
-                    className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                    className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                     value={deploy.node_id}
                     onChange={(e) => setDeploy({ ...deploy, node_id: e.currentTarget.value })}
                   >
@@ -176,7 +178,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                   <label className="grid gap-1 text-[13px] text-muted">
                     目录
                     <input
-                      className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                      className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                       value={deploy.path}
                       onChange={(e) => setDeploy({ ...deploy, path: e.currentTarget.value })}
                       placeholder="/srv/app"
@@ -190,7 +192,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                     <label className="grid gap-1 text-[13px] text-muted">
                       部署命令
                       <input
-                        className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                        className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                         value={deploy.command}
                         onChange={(e) => setDeploy({ ...deploy, command: e.currentTarget.value })}
                         placeholder="./deploy.sh"
@@ -199,7 +201,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                     <label className="grid gap-1 text-[13px] text-muted">
                       健康检查（可选）
                       <input
-                        className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                        className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                         value={deploy.health ?? ''}
                         onChange={(e) => setDeploy({ ...deploy, health: e.currentTarget.value })}
                         placeholder="curl -fsS localhost:8080/health"
@@ -218,6 +220,11 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
         {error && <p className="m-0 text-danger text-[13px]" role="alert">{error}</p>}
         <div className="flex gap-3.5 items-center">
           <button className="btn small px-4" type="submit" disabled={busy || !name.trim()}>保存</button>
+          {!isNew && project && project.id !== 'misc' && (
+            <button type="button" className="link" onClick={() => void setArchived(project, !isArchived(project)).then(onClose)}>
+              {isArchived(project) ? '激活项目' : '归档项目'}
+            </button>
+          )}
           {!isNew && project?.id !== 'misc' && <button type="button" className="link danger" onClick={() => void remove()}>删除项目</button>}
         </div>
       </form>

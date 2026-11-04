@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectCards, runMeta, taskSummary } from './workbench'
+import { archivedCards, projectCards, runMeta, taskSummary } from './workbench'
 import type { Overview } from './types'
 
 const node = (id: string, extra = {}) =>
@@ -150,5 +150,26 @@ describe('task summary', () => {
   it('does not repeat an agent that stands in for the persona', () => {
     const o = overview({ tasks: [task('t1', 'p', 'planned', { agent_pref: 'cursor' })] })
     expect(taskSummary(o, o.tasks[0])).toBe('cursor')
+  })
+})
+
+describe('archived projects', () => {
+  it('marks archived cards and lists them latest change first, searchable', () => {
+    const o = overview({
+      projects: [
+        project('p', ['mac']),
+        project('old', [], { name: '旧网站', notes: 'blog', archived_at: 5, updated_at: 10, touched_at: 10 }),
+        project('older', [], { name: 'older-tool', archived_at: 5, updated_at: 3, touched_at: 3 }),
+        project('misc'),
+      ],
+      tasks: [task('t1', 'older', 'review', { updated_at: 50 })],
+    })
+    const cards = projectCards(o)
+    expect(cards.find((c) => c.project.id === 'p')!.archived).toBe(false)
+    expect(cards.find((c) => c.project.id === 'older')!.touchedAt).toBe(50)
+    expect(archivedCards(cards).map((c) => c.project.id)).toEqual(['older', 'old'])
+    expect(archivedCards(cards, 'BLOG').map((c) => c.project.id)).toEqual(['old'])
+    expect(archivedCards(cards, '网站 旧').map((c) => c.project.id)).toEqual(['old'])
+    expect(archivedCards(cards, 'nothing')).toEqual([])
   })
 })

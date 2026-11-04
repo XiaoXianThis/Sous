@@ -18,7 +18,7 @@ export const looks: Record<Look, LookInfo> = {
   waiting: { icon: 'hand', tone: 'warning', text: '等你审批' },
   paused: { icon: 'pause', tone: 'warning', text: '已暂停' },
   queued: { icon: 'clock', tone: 'neutral', text: '排队' },
-  planned: { icon: 'circle', tone: 'neutral', text: '待开始' },
+  planned: { icon: 'circle-dashed', tone: 'neutral', text: '待开始' },
   done: { icon: 'check', tone: 'success', text: '完成' },
   failed: { icon: 'alert', tone: 'danger', text: '失败或受阻' },
   cancelled: { icon: 'x', tone: 'neutral', text: '已取消' },
@@ -34,7 +34,7 @@ export interface TaskStateInfo {
 }
 
 export const taskStates: Record<TaskState, TaskStateInfo> = {
-  todo: { text: '待办', icon: 'circle', tone: 'neutral' },
+  todo: { text: '待办', icon: 'circle-dashed', tone: 'neutral' },
   active: { text: '进行中', icon: 'play', tone: 'accent' },
   attention: { text: '要你处理', icon: 'hand', tone: 'warning' },
   closed: { text: '已结束', icon: 'check', tone: 'neutral' },

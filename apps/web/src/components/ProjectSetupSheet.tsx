@@ -56,7 +56,7 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
               <label className="grid gap-1 text-[13px] text-muted">
                 项目名
                 <input
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={name}
                   onChange={(e) => setName(e.currentTarget.value)}
                   placeholder="my-app"
@@ -66,7 +66,7 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
               <label className="grid gap-1 text-[13px] text-muted">
                 机器
                 <select
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={nodeId}
                   onChange={(e) => setNodeId(e.currentTarget.value)}
                 >
@@ -77,7 +77,7 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
               <label className="grid gap-1 text-[13px] text-muted">
                 结构
                 <select
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={layout}
                   onChange={(e) => setLayout(e.currentTarget.value as 'wokspace' | 'plain')}
                 >
@@ -88,7 +88,7 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
               <label className="grid gap-1 text-[13px] text-muted">
                 GitHub 用户或组织（可选）
                 <input
-                  className="border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink min-w-0"
+                  className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
                   value={owner}
                   onChange={(e) => setOwner(e.currentTarget.value)}
                   placeholder="不填就不建远端仓库"
@@ -114,7 +114,7 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
           {discovered.length > 0 ? (
             <div className="grid gap-1.5">
               {discovered.map((r) => (
-                <div key={r.node_id + r.path} className="grid grid-cols-[minmax(90px,1fr)_minmax(0,1.6fr)_minmax(0,1.6fr)_auto] gap-2.5 items-center border border-line rounded-[10px] px-2.5 py-[7px] bg-panel max-[760px]:grid-cols-1 max-[760px]:gap-0.5">
+                <div key={r.node_id + r.path} className="grid grid-cols-[minmax(90px,1fr)_minmax(0,1.6fr)_minmax(0,1.6fr)_auto] gap-2.5 items-center border border-line rounded-[12px] px-2.5 py-[7px] bg-panel max-[760px]:grid-cols-1 max-[760px]:gap-0.5">
                   <span className="flex gap-[5px] items-center min-w-0">
                     <strong>{repoName(r)}</strong>
                     {r.wokspace && <span className="text-muted inline-grid" title="wokspace"><Icon name="wok" size={12} /></span>}

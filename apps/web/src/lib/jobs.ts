@@ -166,4 +166,4 @@ export function latestJob(jobs: Record<string, JobView>, nodeId: string, agent: 
   return found
 }
 
-export const jobTitle: Record<string, string> = { install: '安装', upgrade: '升级', login: '登录', logout: '退出登录' }
+export const jobTitle: Record<string, string> = { install: '安装', upgrade: '升级', login: '登录', logout: '退出登录', shell: '终端' }

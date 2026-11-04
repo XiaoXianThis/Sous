@@ -1,15 +1,46 @@
 import { useEffect } from 'react'
+import { resolved, setTheme, useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
+import { useStoredWidth } from '../lib/resize'
 import ChatPanel from './ChatPanel'
 import Icon from './Icon'
 import ProjectSheet from './ProjectSheet'
+import ResizeHandle from './ResizeHandle'
 import RunSheet from './RunSheet'
 import SettingsModal from './SettingsModal'
 import TaskDetail from './TaskDetail'
-import TaskSheet from './TaskSheet'
 import Workbench from './Workbench'
 
-const badge = 'absolute top-0.5 min-w-4 h-4 rounded-[8px] px-1 bg-danger text-page text-[11px] leading-4 text-center font-semibold'
+const badge = 'absolute min-w-[17px] h-[17px] rounded-full px-[4px] bg-warm text-white text-[10.5px] leading-[17px] text-center font-bold shadow-[0_0_0_2px_var(--rail)] tabular-nums'
+
+function RailButton({ tip, active = false, toggle = false, onClick, children, count = 0 }: {
+  tip: string
+  active?: boolean
+  /** A panel toggle: drawn tinted when on, not as the current page. */
+  toggle?: boolean
+  onClick: () => void
+  children: React.ReactNode
+  count?: number
+}) {
+  return (
+    <button
+      className={`relative w-10 h-10 rounded-[10px] border-0 grid place-items-center transition-colors ${
+        active
+          ? toggle
+            ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent'
+            : 'bg-hover text-ink'
+          : 'bg-transparent text-muted hover:bg-hover hover:text-ink'
+      }`}
+      data-tip={tip}
+      aria-label={tip}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+      {count > 0 && <span className={`${badge} -top-0.5 -right-0.5`}>{count > 99 ? '99+' : count}</span>}
+    </button>
+  )
+}
 
 export default function Shell({ onLogout }: { onLogout: () => void }) {
   const chat = useChat()
@@ -42,9 +73,13 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
   }, [chat.tasksRev, chat.nodesRev, chat.inboxRev, chat.runsRev])
 
   const view = uiState.route.view
+  const [chatWidth, setChatWidth, resetChatWidth] = useStoredWidth('sous.chatWidth', 400)
+  useTheme()
+  const theme = resolved()
   const pending = (wb.inbox?.approvals.filter((a) => a.review === 'user').length ?? 0) + (wb.inbox?.tasks.length ?? 0)
-  const openSettings = () => {
-    ui.state.settings = 'machines'
+  const nodes = wb.data?.nodes ?? []
+  const openSettings = (tab = 'machines') => {
+    ui.state.settings = tab
     ui.emit()
   }
   const setTab = (tab: 'chat' | 'work') => {
@@ -58,43 +93,64 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
 
   return (
     <>
-      <div className={`shell ${uiState.chatOpen ? '' : 'chat-closed'}`} data-tab={uiState.tab}>
-        <nav className="rail bg-sunken border-r border-line flex flex-col items-center gap-1.5 pt-[calc(12px+env(safe-area-inset-top))] pb-[calc(12px+env(safe-area-inset-bottom))]" aria-label="主导航">
-          <span className="text-accent mb-2.5" title="sous"><Icon name="wok" size={22} /></span>
-          <button
-            className="relative w-10 h-10 rounded-[12px] border-0 bg-panel text-ink grid place-items-center shadow-[0_0_0_1px_var(--line)]"
-            title="工作台"
-            aria-label="工作台"
-            aria-current="page"
-            onClick={() => go({ view: 'overview', id: '' })}
-          >
+      <div className={`shell ${uiState.chatOpen ? '' : 'chat-closed'}`} data-tab={uiState.tab} style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
+        <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+env(safe-area-inset-top))] pb-[calc(14px+env(safe-area-inset-bottom))]" aria-label="主导航">
+          <img src="/icon.svg" alt="sous" width={32} height={32} className="rounded-[10px] mb-3" />
+          <RailButton tip="工作台" active count={pending} onClick={() => go({ view: 'overview', id: '' })}>
             <Icon name="grid" size={20} />
-            {pending > 0 && <span className={`${badge} right-0`}>{pending}</span>}
-          </button>
-          {!uiState.chatOpen && (
-            <button
-              className="relative w-10 h-10 rounded-[12px] border-0 bg-none text-muted grid place-items-center hover:bg-line hover:text-ink"
-              title="打开对话"
-              aria-label="打开对话"
-              onClick={() => {
-                ui.state.chatOpen = true
-                ui.emit()
-              }}
-            >
-              <Icon name="chat" size={20} />
-            </button>
-          )}
+          </RailButton>
+          <RailButton
+            tip={uiState.chatOpen ? '收起对话' : '打开对话'}
+            active={uiState.chatOpen}
+            toggle
+            onClick={() => {
+              ui.state.chatOpen = !ui.state.chatOpen
+              ui.emit()
+            }}
+          >
+            <Icon name="chat" size={21} />
+          </RailButton>
+
           <span className="flex-1"></span>
-          <button className="relative w-10 h-10 rounded-[12px] border-0 bg-none text-muted grid place-items-center hover:bg-line hover:text-ink" title="设置" aria-label="设置" onClick={openSettings}>
-            <Icon name="settings" size={20} />
-          </button>
+
+          <div className="grid gap-1.5 justify-items-center mb-1" aria-label="机器">
+            {nodes.slice(0, 5).map((n) => {
+              const busy = wb.data?.runs.filter((r) => r.node_id === n.id && r.status === 'running').length ?? 0
+              return (
+                <button
+                  key={n.id}
+                  className="relative w-9 h-9 rounded-[12px] grid place-items-center border-0 bg-transparent text-muted hover:bg-hover hover:text-ink"
+                  data-tip={`${n.name} · ${n.online ? '在线' : '离线'}${busy ? ` · ${busy} 个在跑` : ''}`}
+                  aria-label={`${n.name}${n.online ? '' : '（离线）'}`}
+                  onClick={() => openSettings('machines')}
+                >
+                  <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={19} />
+                  <span className={`absolute bottom-[5px] right-[5px] w-[9px] h-[9px] rounded-full shadow-[0_0_0_2px_var(--rail)] ${n.online ? (busy ? 'bg-info live-dot' : 'bg-ok') : 'bg-faint'}`}></span>
+                </button>
+              )
+            })}
+          </div>
+          <RailButton tip={theme === 'dark' ? '切换到浅色' : '切换到深色'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={19} />
+          </RailButton>
+          <RailButton tip="设置" onClick={() => openSettings('machines')}>
+            <Icon name="settings" size={21} />
+          </RailButton>
         </nav>
 
-        <main className="work overflow-y-auto min-w-0 min-h-0 bg-page pt-[env(safe-area-inset-top)]" aria-label="工作台">
+        <main className="work overflow-y-auto min-w-0 min-h-0 pt-[env(safe-area-inset-top)]" aria-label="工作台">
           <Workbench />
         </main>
 
-        <aside className="side border-l border-line min-h-0 min-w-0">
+        <aside className="side min-h-0 min-w-0">
+          <ResizeHandle
+            label="调整对话栏宽度"
+            width={chatWidth}
+            min={300}
+            max={() => Math.min(900, window.innerWidth - 488)}
+            onWidth={setChatWidth}
+            onReset={resetChatWidth}
+          />
           <ChatPanel
             onCollapse={() => {
               ui.state.chatOpen = false
@@ -104,27 +160,28 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
         </aside>
 
         <nav className="tabs" aria-label="主导航">
-          <button
-            className={`relative border-0 bg-none grid justify-items-center gap-px pt-[7px] pb-1.5 text-[11px] ${uiState.tab === 'work' ? 'text-accent' : 'text-muted'}`}
-            onClick={() => setTab('work')}
-          >
-            <Icon name="grid" size={20} /><span>工作台</span>{pending > 0 && <span className={`${badge} right-[calc(50%-22px)]`}>{pending}</span>}
-          </button>
-          <button
-            className={`relative border-0 bg-none grid justify-items-center gap-px pt-[7px] pb-1.5 text-[11px] ${uiState.tab === 'chat' ? 'text-accent' : 'text-muted'}`}
-            onClick={() => setTab('chat')}
-          >
-            <Icon name="chat" size={20} /><span>对话</span>
-          </button>
-          <button className="relative border-0 bg-none grid justify-items-center gap-px pt-[7px] pb-1.5 text-[11px] text-muted" onClick={openSettings}>
-            <Icon name="settings" size={20} /><span>设置</span>
-          </button>
+          {([
+            { key: 'work', icon: 'grid', text: '工作台', count: pending, on: uiState.tab === 'work', act: () => setTab('work') },
+            { key: 'chat', icon: 'chat', text: '对话', count: 0, on: uiState.tab === 'chat', act: () => setTab('chat') },
+            { key: 'settings', icon: 'settings', text: '设置', count: 0, on: false, act: () => openSettings('machines') },
+          ] as const).map((t) => (
+            <button
+              key={t.key}
+              className={`relative border-0 bg-transparent grid justify-items-center gap-0.5 pt-2 pb-1.5 text-[10.5px] font-semibold ${t.on ? 'text-accent' : 'text-muted'}`}
+              aria-label={t.text}
+              onClick={t.act}
+            >
+              <span className={`grid place-items-center w-14 h-7 rounded-full transition-colors ${t.on ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)]' : ''}`}>
+                <Icon name={t.icon} size={21} />
+              </span>
+              <span>{t.text}</span>
+              {t.count > 0 && <span className={`${badge} top-1 left-[calc(50%+6px)] shadow-[0_0_0_2px_var(--panel)]`}>{t.count}</span>}
+            </button>
+          ))}
         </nav>
       </div>
 
-      {view === 'task' ? (
-        <TaskSheet id={uiState.route.id} onClose={closeSheet} />
-      ) : view === 'project' ? (
+      {view === 'project' ? (
         <ProjectSheet id={uiState.route.id} onClose={closeSheet} />
       ) : null}
 
@@ -156,7 +213,11 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
         />
       )}
       {uiState.settings !== '' && <SettingsModal onLogout={onLogout} />}
-      {wb.error && !wb.data && <p className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-panel border border-danger text-danger px-3.5 py-2 rounded-[10px] m-0 z-40" role="alert">加载工作台失败：{wb.error}</p>}
+      {wb.error && !wb.data && (
+        <p className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-panel shadow-pop text-danger px-4 py-2.5 rounded-[16px] m-0 z-40 flex items-center gap-2" role="alert">
+          <Icon name="alert" size={16} />{wb.error}
+        </p>
+      )}
     </>
   )
 }

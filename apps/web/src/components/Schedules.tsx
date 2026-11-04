@@ -90,11 +90,11 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
       <p className="text-muted text-[13px] m-0">到时间时，sous 会把说明交给主管去做，比如每天早上汇总进展。也可以直接在对话里说“每天 9 点帮我……”。</p>
 
       {editing ? (
-        <form className="grid gap-2.5 border border-dashed border-accent rounded-[12px] p-3" onSubmit={(e) => { e.preventDefault(); void save() }}>
+        <form className="grid gap-2.5 border border-dashed border-accent rounded-[14px] p-3" onSubmit={(e) => { e.preventDefault(); void save() }}>
           <label className="grid gap-1 text-[14px]">
             名字
             <input
-              className="border border-line bg-page rounded-[8px] px-2 py-1.5 text-ink text-[14px]"
+              className="border border-line bg-page rounded-[10px] px-2 py-1.5 text-ink text-[14px]"
               value={editing.title ?? ''}
               onChange={(e) => setEditing({ ...editing, title: e.currentTarget.value })}
               placeholder="比如：每日进展"
@@ -104,7 +104,7 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
             时间
             <div className="flex gap-2.5 items-center flex-wrap">
               <select
-                className="border border-line bg-page rounded-[8px] px-2 py-1.5 text-ink"
+                className="border border-line bg-page rounded-[10px] px-2 py-1.5 text-ink"
                 aria-label="常用时间"
                 defaultValue=""
                 onChange={(e) => e.currentTarget.value && setEditing({ ...editing, cron: e.currentTarget.value })}
@@ -113,7 +113,7 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
                 {cronPresets.map((p) => <option key={p.cron} value={p.cron}>{p.label}</option>)}
               </select>
               <input
-                className="font-mono text-[13px] flex-1 min-w-0 border border-line bg-page rounded-[8px] px-2 py-1.5 text-ink"
+                className="font-mono text-[13px] flex-1 min-w-0 border border-line bg-page rounded-[10px] px-2 py-1.5 text-ink"
                 value={editing.cron ?? ''}
                 onChange={(e) => setEditing({ ...editing, cron: e.currentTarget.value })}
                 aria-label="cron 表达式"
@@ -125,7 +125,7 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
           <label className="grid gap-1 text-[14px]">
             要做的事
             <textarea
-              className="border border-line bg-page rounded-[8px] px-2 py-1.5 text-ink resize-y text-[14px]"
+              className="border border-line bg-page rounded-[10px] px-2 py-1.5 text-ink resize-y text-[14px]"
               rows={4}
               value={editing.prompt ?? ''}
               onChange={(e) => setEditing({ ...editing, prompt: e.currentTarget.value })}
@@ -149,7 +149,7 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
 
       <ul className="list-none m-0 p-0 grid gap-2">
         {list.map((s) => (
-          <li key={s.id} className={`border border-line rounded-[12px] px-3 py-2.5 grid gap-1 ${s.enabled ? '' : 'opacity-[.65]'}`}>
+          <li key={s.id} className={`border border-line rounded-[14px] px-3 py-2.5 grid gap-1 ${s.enabled ? '' : 'opacity-[.65]'}`}>
             <div className="flex gap-2 items-baseline flex-wrap">
               <strong>{s.title}</strong>
               <span className="text-muted text-[13px]">{describeCron(s.cron)}{s.tz ? `（${s.tz}）` : ''}</span>
@@ -168,7 +168,7 @@ export default function Schedules({ onClose }: { onClose: () => void }) {
           </li>
         ))}
         {list.length === 0 && !loading && !editing && (
-          <li className="text-muted text-center border border-dashed border-line rounded-[12px] px-3 py-6">还没有定时任务。</li>
+          <li className="text-muted text-center border border-dashed border-line rounded-[14px] px-3 py-6">还没有定时任务。</li>
         )}
       </ul>
     </Sheet>

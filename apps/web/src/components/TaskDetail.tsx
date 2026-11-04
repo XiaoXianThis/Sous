@@ -3,9 +3,12 @@ import { api } from '../lib/api'
 import { useChat } from '../lib/app'
 import { agentChoices, isOpen, modeText, statusText } from '../lib/tasks'
 import type { Node, Persona, Project, Run, Task } from '../lib/types'
+import AgentIcon, { agentTitle } from './AgentIcon'
+import Avatar from './Avatar'
+import Icon from './Icon'
 import Sheet from './Sheet'
 
-const inputCls = 'border border-line bg-page rounded-[8px] px-2.5 py-1.5 text-ink'
+const inputCls = 'border border-line bg-panel rounded-[12px] px-3 py-2 text-ink'
 
 export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, projectId: presetProject = '', compact = false }: {
   id: string // 'new' for a new task
@@ -178,6 +181,48 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
               说明（交给 agent 的完整任务说明）
               <textarea className={`${inputCls} resize-y leading-[1.5]`} value={detail} onChange={(e) => setDetail(e.currentTarget.value)} rows={5}></textarea>
             </label>
+            <div className="grid gap-1.5 text-[13px] text-muted" role="radiogroup" aria-label="岗位">
+              岗位
+              <div className="flex gap-1.5 flex-wrap">
+                {[{ id: '', name: '默认', glyph: '', color: 'gray' as const, agent: '' }, ...personas].map((p) => (
+                  <button
+                    key={p.id || 'default'}
+                    type="button"
+                    role="radio"
+                    aria-checked={persona === p.id}
+                    title={p.id ? p.name : '按项目默认'}
+                    className={`flex items-center gap-1.5 h-9 pl-1 pr-2.5 rounded-full border-0 text-[12.5px] font-medium transition-shadow ${
+                      persona === p.id ? 'bg-panel text-ink shadow-[0_0_0_2px_var(--accent)]' : 'bg-sunken text-muted hover:text-ink'
+                    }`}
+                    onClick={() => { setPersona(p.id); setDirty(true) }}
+                  >
+                    {p.id ? <Avatar glyph={p.glyph || p.name.slice(0, 1)} color={p.color} size={26} /> : <span className="grid place-items-center w-[26px] h-[26px] rounded-full bg-hover"><Icon name="sparkles" size={14} /></span>}
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-1.5 text-[13px] text-muted" role="radiogroup" aria-label="agent">
+              agent
+              <div className="flex gap-1.5 flex-wrap">
+                {['', ...agents].map((x) => (
+                  <button
+                    key={x || 'default'}
+                    type="button"
+                    role="radio"
+                    aria-checked={agent === x}
+                    title={x ? agentTitle(x) : '按项目或全局默认'}
+                    className={`flex items-center gap-1.5 h-9 pl-1.5 pr-2.5 rounded-[12px] border-0 text-[12.5px] font-medium transition-shadow ${
+                      agent === x ? 'bg-panel text-ink shadow-[0_0_0_2px_var(--accent)]' : 'bg-sunken text-muted hover:text-ink'
+                    }`}
+                    onClick={() => { setAgent(x); setDirty(true) }}
+                  >
+                    {x ? <AgentIcon name={x} size={24} /> : <span className="grid place-items-center w-6 h-6 rounded-[9px] bg-hover"><Icon name="sparkles" size={14} /></span>}
+                    {x ? agentTitle(x) : '默认'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
               <label className="grid gap-1 text-[13px] text-muted">
                 项目
@@ -191,13 +236,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                   {projects.filter((p) => p.id !== 'misc').map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
-              <label className="grid gap-1 text-[13px] text-muted">
-                岗位
-                <select className={inputCls} value={persona} onChange={(e) => setPersona(e.currentTarget.value)}>
-                  <option value="">按项目默认</option>
-                  {personas.map((p) => <option key={p.id} value={p.id}>{p.glyph} {p.name}</option>)}
-                </select>
-              </label>
+
               {isNew && (
                 <label className="grid gap-1 text-[13px] text-muted">
                   类型
@@ -220,13 +259,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                   max={10}
                 />
               </label>
-              <label className="grid gap-1 text-[13px] text-muted">
-                agent
-                <select className={inputCls} value={agent} onChange={(e) => setAgent(e.currentTarget.value)}>
-                  <option value="">按项目或全局默认</option>
-                  {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </label>
+
               <label className="grid gap-1 text-[13px] text-muted">
                 机器
                 <select className={inputCls} value={node} onChange={(e) => setNode(e.currentTarget.value)}>
@@ -245,14 +278,15 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
             <div className="flex gap-3 items-center flex-wrap">
               {isNew ? (
                 <>
-                  <button className="btn small px-4" type="button" disabled={busy} onClick={() => void save(true)}>创建并派发</button>
-                  <button className="btn small ghost px-4" type="submit" disabled={busy}>只创建</button>
+                  <button className="btn small" type="button" disabled={busy} onClick={() => void save(true)}><Icon name="send" size={14} stroke={2.2} />创建并派发</button>
+                  <button className="btn small ghost" type="submit" disabled={busy}><Icon name="plus" size={14} />只创建</button>
                 </>
               ) : (
                 <>
-                  {dirty && <button className="btn small ghost px-4" type="submit" disabled={busy}>保存</button>}
+                  {dirty && <button className="btn small ghost" type="submit" disabled={busy}><Icon name="check" size={14} stroke={2.2} />保存</button>}
                   {canDispatch && (
-                    <button className="btn small px-4" type="button" disabled={busy} onClick={() => void save(true)}>
+                    <button className="btn small" type="button" disabled={busy} onClick={() => void save(true)}>
+                      <Icon name={task?.status === 'failed' || task?.status === 'blocked' ? 'refresh' : 'send'} size={14} stroke={2.2} />
                       {task?.status === 'failed' || task?.status === 'blocked' ? '重试' : task?.status === 'queued' ? '重新派发' : '派发'}
                     </button>
                   )}
@@ -274,7 +308,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                   <ul className="list-none m-0 p-0 grid gap-1">
                     {subtasks.map((s) => (
                       <li key={s.id}>
-                        <button className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[10px] px-2.5 py-[7px] text-[13px] hover:border-accent" onClick={() => onOpenTask(s.id)}>
+                        <button className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[12px] px-2.5 py-[7px] text-[13px] hover:border-accent" onClick={() => onOpenTask(s.id)}>
                           <span className="font-semibold text-warm">{statusText[s.status]}</span>{s.title}
                         </button>
                       </li>
@@ -288,7 +322,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                   <ul className="list-none m-0 p-0 grid gap-1">
                     {task.depends_on.map((d) => (
                       <li key={d}>
-                        <button className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[10px] px-2.5 py-[7px] text-[13px] hover:border-accent" onClick={() => onOpenTask(d)}>{d}</button>
+                        <button className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[12px] px-2.5 py-[7px] text-[13px] hover:border-accent" onClick={() => onOpenTask(d)}>{d}</button>
                       </li>
                     ))}
                   </ul>
@@ -302,7 +336,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                     {runs.map((r) => (
                       <li key={r.id}>
                         <button
-                          className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[10px] px-2.5 py-[7px] text-[13px] hover:border-accent"
+                          className="flex flex-wrap gap-x-2.5 gap-y-1 w-full text-left border border-line bg-panel rounded-[12px] px-2.5 py-[7px] text-[13px] hover:border-accent"
                           onClick={() => { onClose(); onOpenThread(r.thread_id) }}
                           title="在对话里查看"
                         >

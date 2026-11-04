@@ -29,7 +29,7 @@ export default function TextViewer({ title, text, diff = false, onClose }: {
     <>
       <div className="backdrop z-40" role="presentation" onClick={onClose}></div>
       <div
-        className="sheet z-[41] top-[5vh] w-[min(900px,calc(100vw-32px))] max-h-[90vh] rounded-[16px] px-4 py-[14px] max-[760px]:w-full max-[760px]:max-h-[92vh] max-[760px]:rounded-t-[16px] max-[760px]:rounded-b-none max-[760px]:pb-[14px]"
+        className="sheet z-[41] top-[5vh] w-[min(900px,calc(100vw-32px))] max-h-[90vh] rounded-[18px] px-4 py-[14px] max-[760px]:w-full max-[760px]:max-h-[92vh] max-[760px]:rounded-t-[16px] max-[760px]:rounded-b-none max-[760px]:pb-[14px]"
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -43,7 +43,7 @@ export default function TextViewer({ title, text, diff = false, onClose }: {
         {!text.trim() ? (
           <p className="text-muted">（空）</p>
         ) : (
-          <pre className="m-0 overflow-auto font-mono text-[12.5px] leading-[1.5] bg-page border border-line rounded-[10px] px-3 py-2.5">
+          <pre className="m-0 overflow-auto font-mono text-[12.5px] leading-[1.5] bg-page border border-line rounded-[12px] px-3 py-2.5">
             {lines.map((line, i) => (
               <span key={i} className={`block whitespace-pre min-h-[1.5em] ${cls(line)}`}>{line}</span>
             ))}

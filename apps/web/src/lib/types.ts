@@ -4,6 +4,8 @@ export interface Thread {
   id: string
   title: string
   kind: 'main' | 'chat' | 'project'
+  /** Set on a project chat: the project it is scoped to. */
+  project_id?: string
   created_at: number
   updated_at: number
   archived: boolean
@@ -115,7 +117,7 @@ export interface ConfigFile {
   backup?: string
 }
 
-export type JobKind = 'install' | 'upgrade' | 'login' | 'logout'
+export type JobKind = 'install' | 'upgrade' | 'login' | 'logout' | 'shell'
 
 export interface JobStarted {
   job_id: string
@@ -127,6 +129,17 @@ export interface JobStarted {
 export interface JobTail extends JobStarted {
   offset: number
   data: string
+  running: boolean
+  exit_code?: number
+}
+
+/** A terminal the current login session opened in a project directory. */
+export interface Shell {
+  node_id: string
+  job_id: string
+  root: string
+  command: string
+  started_at: number
   running: boolean
   exit_code?: number
 }
@@ -255,6 +268,56 @@ export interface ProjectNode {
   priority: number
   /** "scan": found in the machine's workspaces; "manual": entered by hand. */
   source?: 'scan' | 'manual'
+  /** Where the checkout stands, from the machine's last scan. */
+  git?: GitState
+}
+
+export interface GitState {
+  head?: string
+  upstream?: string
+  ahead: number
+  behind: number
+  changes: number
+  untracked: number
+  fetched_at?: number
+}
+
+export interface RepoResult {
+  outcome: 'up_to_date' | 'fast_forwarded' | 'dirty' | 'diverged' | 'no_upstream' | 'pushed' | 'nothing'
+  message: string
+  branch?: string
+  commit?: string
+  git?: GitState
+}
+
+export interface ModelProvider {
+  id: string
+  name: string
+  kind: string
+  base_url: string
+  api_key_env: string
+  models: string[]
+  key_set: boolean
+  env_set: boolean
+  default_url: string
+  created_at: number
+  updated_at: number
+}
+
+export interface ModelRole {
+  provider_id: string
+  model: string
+  effort?: string
+  /** No choice of its own: uses the supervisor's. */
+  inherited?: boolean
+}
+
+export interface ModelsView {
+  providers: ModelProvider[]
+  roles: Record<string, ModelRole>
+  role_order: string[]
+  kinds: string[]
+  efforts: string[]
 }
 
 export interface Deploy {
@@ -279,6 +342,10 @@ export interface Project {
   notes?: string
   layout?: 'wokspace' | ''
   deploy?: Deploy | null
+  /** When the project was archived (unix ms); 0 or missing means active. */
+  archived_at?: number
+  /** When the project or any of its tasks last changed. */
+  touched_at?: number
 }
 
 export type PersonaColor = 'purple' | 'teal' | 'coral' | 'pink' | 'blue' | 'green' | 'amber' | 'gray'

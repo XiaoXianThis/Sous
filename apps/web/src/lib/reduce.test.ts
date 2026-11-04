@@ -15,6 +15,14 @@ describe('applyEvent', () => {
     expect(s.lastSeq).toBe(2)
   })
 
+  it('keeps the project of a project chat', () => {
+    const s = emptyState()
+    applyEvent(s, ev(1, 'thread.created', { title: 'blog 的对话', kind: 'project', project_id: 'p1' }, 'pc'))
+    applyEvent(s, ev(2, 'thread.created', { title: '新对话', kind: 'chat' }, 'c1'))
+    expect(s.threads.find((t) => t.id === 'pc')?.project_id).toBe('p1')
+    expect(s.threads.find((t) => t.id === 'c1')?.project_id).toBeUndefined()
+  })
+
   it('ignores stored events it already applied', () => {
     const s = emptyState()
     expect(applyEvent(s, ev(5, 'message.user', { message_id: 'u1', content: 'a' }))).toBe(true)

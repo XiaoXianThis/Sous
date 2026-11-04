@@ -200,7 +200,7 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
                       <label key={o.id} className="grid grid-cols-[8em_1fr] gap-2.5 items-center text-[14px] max-[760px]:grid-cols-1 max-[760px]:gap-1">
                         <span title={o.description ?? o.name}>{catName[o.category ?? ''] ?? o.name}</span>
                         <select
-                          className="border border-line bg-page text-ink rounded-[8px] px-2 py-1.5 text-[14px] min-w-0"
+                          className="border border-line bg-page text-ink rounded-[10px] px-2 py-1.5 text-[14px] min-w-0"
                           value={draft[o.id] ?? ''}
                           onChange={(e) => setDraft({ ...draft, [o.id]: e.currentTarget.value })}
                           disabled={!canAdmin}
@@ -255,7 +255,7 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
                     onChange={(e) => setKeyDraft({ ...keyDraft, [env]: e.currentTarget.value })}
                     disabled={!canAdmin}
                     onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && void setKey(env)}
-                    className="border border-line bg-page text-ink rounded-[8px] px-2 py-1.5 text-[14px] min-w-0"
+                    className="border border-line bg-page text-ink rounded-[10px] px-2 py-1.5 text-[14px] min-w-0"
                   />
                   <button className="link accent" disabled={!canAdmin || !keyDraft[env]?.trim()} onClick={() => void setKey(env)}>保存</button>
                   {agent.env_set?.includes(env) && <button className="link danger" disabled={!canAdmin} onClick={() => void setKey(env, true)}>清除</button>}

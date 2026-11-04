@@ -25,11 +25,11 @@ export default function Login({ me, onLoggedIn }: { me: Me; onLoggedIn: () => vo
   }
 
   return (
-    <main className="min-h-full grid place-items-center p-4">
-      <div className="w-[min(360px,100%)] bg-panel border border-line rounded-[20px] px-6 py-8 grid justify-items-center gap-3 text-center">
-        <img src="/icon.svg" alt="" width="56" height="56" />
-        <h1 className="mt-1 mb-0 text-[28px] tracking-[.02em]">sous</h1>
-        <p className="mt-0 mb-2 text-muted">你的副主厨</p>
+    <main className="min-h-full grid place-items-center p-4 bg-[radial-gradient(1200px_600px_at_50%_-10%,color-mix(in_srgb,var(--accent)_16%,transparent),transparent)]">
+      <div className="w-[min(360px,100%)] bg-panel shadow-pop rounded-[28px] px-7 pt-10 pb-8 grid justify-items-center gap-3 text-center rise">
+        <img src="/icon.svg" alt="" width="72" height="72" className="rounded-[22px] shadow-card" />
+        <h1 className="mt-2 mb-0 text-[28px] font-bold tracking-tight">sous</h1>
+        <p className="mt-0 mb-3 text-muted text-[13px]">你的副主厨</p>
 
         {!passkeySupported() ? (
           <p className="text-muted text-sm">这个浏览器不支持 Passkey，或者页面不是通过 HTTPS 打开的。</p>
@@ -42,6 +42,7 @@ export default function Login({ me, onLoggedIn }: { me: Me; onLoggedIn: () => vo
           </>
         ) : me.has_passkey ? (
           <button className="btn w-full" disabled={busy} onClick={() => void run(loginWithPasskey)}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12zM10.8 13.2L3 21M6 18l2 2M15 7.5h.01" /></svg>
             用 Passkey 登录
           </button>
         ) : (

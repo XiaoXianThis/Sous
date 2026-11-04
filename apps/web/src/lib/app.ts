@@ -7,7 +7,7 @@ import { applyEvent, emptyState, mergeHistory, sortThreads, type ChatState } fro
 import { runFromHistory } from './runs'
 import { home, parseRoute, routeHash, type Route } from './route'
 import { EventStream, type StreamStatus } from './stream'
-import type { HubEvent, Inbox, MessageContext, Overview, Run } from './types'
+import type { HubEvent, Inbox, MessageContext, Overview, Run, Thread } from './types'
 
 /** A mutable state object plus a version subscribers watch. */
 export class Store<T extends object> {
@@ -61,6 +61,10 @@ interface UIState {
   runSheet: string
   /** The project a new task is being created in, '' when none. */
   newTask: string
+  /** The chat shown in each project's chat panel, by project id. */
+  projectThread: Record<string, string>
+  /** A project whose dialog should open (a link to its chat); '' when none. */
+  openProject: string
 }
 
 export const ui = new Store<UIState>({
@@ -75,6 +79,8 @@ export const ui = new Store<UIState>({
   dropContext: false,
   runSheet: '',
   newTask: '',
+  projectThread: {},
+  openProject: '',
 })
 
 interface WBState {
@@ -251,6 +257,8 @@ export function stopSession() {
   ui.state.current = ''
   ui.state.runSheet = ''
   ui.state.newTask = ''
+  ui.state.projectThread = {}
+  for (const k of Object.keys(projectLoads)) delete projectLoads[k]
   wb.state.live = {}
   wb.state.inbox = null
   seeded.clear()
@@ -259,10 +267,36 @@ export function stopSession() {
   wb.emit()
 }
 
+/** Shows a thread: a general one in the chat column, a project chat in its project's dialog. */
 export async function openThread(id: string) {
-  ui.state.current = id
+  let t = chat.state.threads.find((x) => x.id === id)
+  if (!t) {
+    try {
+      t = await api.thread(id)
+      addThread(t)
+    } catch {
+      return
+    }
+  }
+  if (t.project_id) {
+    ui.state.projectThread[t.project_id] = id
+    ui.state.openProject = t.project_id
+  } else {
+    ui.state.current = id
+  }
   ui.emit()
-  if (ui.state.loaded[id]) return
+  await loadThread(id)
+}
+
+function addThread(t: Thread) {
+  if (!chat.state.threads.some((x) => x.id === t.id)) chat.state.threads.push(t)
+  sortThreads(chat.state.threads)
+  chat.emit()
+}
+
+/** Loads a thread's history and Runs once. */
+export async function loadThread(id: string) {
+  if (!id || ui.state.loaded[id]) return
   const [page, { runs }] = await Promise.all([api.messages(id), api.runs(id)])
   mergeHistory(chat.state, id, page.messages)
   const details = await Promise.all(runs.filter((r) => !chat.state.runs[r.id]).map((r) => api.run(r.id)))
@@ -278,17 +312,54 @@ export async function openThread(id: string) {
 
 export async function newThread() {
   const t = await api.createThread('新对话')
-  if (!chat.state.threads.some((x) => x.id === t.id)) chat.state.threads.push(t)
-  sortThreads(chat.state.threads)
+  addThread(t)
   ui.state.loaded[t.id] = true
   ui.state.current = t.id
-  chat.emit()
   ui.emit()
   return t
 }
 
 export async function send(content: string) {
   await api.send(ui.state.current, content, currentContext())
+}
+
+/** Loads a project's chats and shows the latest one (none until the first message). */
+const projectLoads: Record<string, Promise<void>> = {}
+export function loadProjectThreads(projectId: string): Promise<void> {
+  projectLoads[projectId] ??= api.threads(projectId).then(async ({ threads }) => {
+    for (const t of threads) addThread(t)
+    if (!ui.state.projectThread[projectId] && threads[0]) {
+      ui.state.projectThread[projectId] = threads[0].id
+      ui.emit()
+    }
+    await loadThread(ui.state.projectThread[projectId] ?? '')
+  }).catch(() => {
+    delete projectLoads[projectId]
+  })
+  return projectLoads[projectId]
+}
+
+export async function pickProjectThread(projectId: string, id: string) {
+  ui.state.projectThread[projectId] = id
+  ui.emit()
+  await loadThread(id)
+}
+
+/** Starts a fresh chat in a project. */
+export async function newProjectThread(projectId: string, title: string) {
+  const t = await api.createThread(title, projectId)
+  addThread(t)
+  ui.state.loaded[t.id] = true
+  ui.state.projectThread[projectId] = t.id
+  ui.emit()
+  return t
+}
+
+/** Sends in a project's chat, creating it on the first message. */
+export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext) {
+  let id = ui.state.projectThread[projectId]
+  if (!id) id = (await newProjectThread(projectId, title)).id
+  await api.send(id, content, context)
 }
 
 /** Shows a system notification for a notice while the page is in the background. */
@@ -312,10 +383,12 @@ export async function followHash(hash: string) {
   ui.state.newTask = ''
   ui.emit()
   const r = parseRoute(hash)
-  if (r.thread && chat.state.threads.some((t) => t.id === r.thread)) {
+  if (r.thread) {
     await openThread(r.thread)
-    ui.state.chatOpen = true
-    ui.state.tab = 'chat'
+    if (!chat.state.threads.find((t) => t.id === r.thread)?.project_id) {
+      ui.state.chatOpen = true
+      ui.state.tab = 'chat'
+    }
     ui.emit()
     history.replaceState(null, '', routeHash(ui.state.route))
     return

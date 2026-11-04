@@ -5,7 +5,7 @@ import { runFromHistory, type RunView } from '../lib/runs'
 import { avatarOf, kindText, looks, stages, taskLook } from '../lib/status'
 import { deployedAfter, personaFor } from '../lib/workbench'
 import type { Run, Task } from '../lib/types'
-import Avatar from './Avatar'
+import { Who } from './Avatar'
 import Icon from './Icon'
 import RunCard from './RunCard'
 import StageBar from './StageBar'
@@ -62,65 +62,91 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
     }
   }
 
+  const info = looks[look]
+  const kindIcon: Record<string, string> = { code: 'terminal', general: 'sparkles', ops: 'server' }
+
   return (
-    <div className={`grid gap-3 content-start ${embedded ? 'p-0 max-w-none' : 'px-[22px] pt-4 pb-7 max-w-[900px] max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-6'}`}>
+    <div className={`grid gap-4 content-start ${embedded ? 'p-0 max-w-none' : 'px-[22px] pt-4 pb-7 max-w-[900px] max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-6'}`}>
       {missing ? (
-        <p className="text-muted text-[13px] m-0">这个任务不存在，可能链接已经过期。</p>
+        <div className="grid justify-items-center gap-2 py-10 text-muted">
+          <Icon name="circle-dashed" size={32} />
+          <p className="m-0 text-[13px]">这个任务不存在，可能链接已经过期。</p>
+        </div>
       ) : task ? (
         <>
-          <header className="flex items-center gap-2.5">
+          <header className="flex items-start gap-3.5">
             {!embedded && (
               <button className="icon-btn" aria-label="返回项目" onClick={() => go(project ? { view: 'project', id: project.id } : { view: 'overview', id: '' })}><Icon name="back" /></button>
             )}
-            <Avatar glyph={a.glyph} color={a.color} title={a.title} size={34} ring={looks[look].tone === 'neutral' ? '' : looks[look].tone} />
-            <div className="min-w-0">
-              <h1 className="m-0 text-[19px] leading-[1.3]">{task.title}</h1>
-              <p className="mt-0.5 mb-0 flex flex-wrap gap-x-3 gap-y-1 text-[13px] text-muted items-center">
-                <span className={`inline-flex items-center gap-1 font-semibold tone-${looks[look].tone}`}><Icon name={looks[look].icon} size={13} />{looks[look].text}</span>
-                <span>{a.title}</span>
-                {project && <button className="link accent" onClick={() => go({ view: 'project', id: project.id })}>{project.name}</button>}
-                <span className="border border-line rounded-[6px] px-[5px] text-[11px]">{kindText[task.kind]}</span>
+            <Who persona={persona} agent={persona?.agent || task.agent_pref} size={46} />
+            <div className="min-w-0 grid gap-1.5">
+              <h1 className="m-0 text-[20px] font-bold tracking-tight leading-[1.3] [overflow-wrap:anywhere]">{task.title}</h1>
+              <p className="m-0 flex flex-wrap gap-1.5 items-center">
+                <span className={`pill tone-${info.tone}`}><Icon name={info.icon} size={12} stroke={2.2} />{info.text}</span>
+                <span className="pill" title={a.title}><Icon name="user" size={12} />{a.title}</span>
+                <span className="pill" title={`${kindText[task.kind]}任务`}><Icon name={kindIcon[task.kind] ?? 'dot'} size={12} />{kindText[task.kind]}</span>
               </p>
             </div>
           </header>
 
-          <StageBar stages={stages(task, { hasDeploy: !!project?.deploy, deployed: task.status === 'done' && !!data && deployedAfter(data.tasks, task.project_id, task.updated_at) })} labels />
-          {task.status_reason && <p className="m-0 text-muted text-[13px] [overflow-wrap:anywhere]">{task.status_reason}</p>}
-          {task.pr_url && (
-            <p className="m-0 flex gap-1.5 items-center flex-wrap text-[13px] [overflow-wrap:anywhere]">
-              <Icon name="branch" size={14} /><a className="text-accent" href={task.pr_url} target="_blank" rel="noreferrer">{task.pr_url}</a><span className="text-muted text-[13px] m-0">sous 不会合并，请你评审后合并</span>
+          <div className="card px-3 pt-4 pb-3">
+            <StageBar stages={stages(task, { hasDeploy: !!project?.deploy, deployed: task.status === 'done' && !!data && deployedAfter(data.tasks, task.project_id, task.updated_at) })} labels />
+          </div>
+
+          {task.status_reason && (
+            <p className="m-0 flex gap-2 items-start text-muted text-[13px] [overflow-wrap:anywhere] bg-sunken rounded-[14px] px-3 py-2">
+              <Icon name="bulb" size={15} className="mt-[2px]" />{task.status_reason}
             </p>
+          )}
+          {task.pr_url && (
+            <a
+              className="flex gap-3 items-center rounded-[16px] px-3 py-2.5 no-underline text-ink bg-[color-mix(in_srgb,var(--ok)_9%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--ok)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--ok)_14%,var(--panel))]"
+              href={task.pr_url}
+              target="_blank"
+              rel="noreferrer"
+              title="sous 不会合并，请你评审后合并"
+            >
+              <span className="grid place-items-center w-9 h-9 rounded-[12px] bg-ok text-white flex-none"><Icon name="pr" size={18} stroke={2} /></span>
+              <span className="grid min-w-0 flex-1 leading-tight">
+                <span className="font-semibold text-[14px]">Pull Request</span>
+                <span className="text-[12px] text-muted overflow-hidden text-ellipsis whitespace-nowrap">{task.pr_url.replace(/^https?:\/\//, '')}</span>
+              </span>
+              <Icon name="external" size={16} className="text-muted" />
+            </a>
           )}
 
           {active && (
-            <form className="flex gap-1.5 border border-line bg-panel rounded-full py-[3px] pr-1 pl-3.5" onSubmit={(e) => { e.preventDefault(); void sendNote() }}>
+            <form className="flex items-center gap-1.5 bg-panel shadow-card rounded-[18px] py-1 pr-1 pl-3" onSubmit={(e) => { e.preventDefault(); void sendNote() }}>
+              <Icon name="message" size={16} className="text-muted" />
               <input
-                className="flex-1 border-0 outline-0 bg-transparent"
+                className="flex-1 border-0 outline-0 bg-transparent py-1.5 !shadow-none"
                 value={note}
                 onChange={(e) => setNote(e.currentTarget.value)}
-                placeholder={`给正在干活的 ${a.title} 补充一句…`}
+                placeholder={`给 ${a.title} 补充一句…`}
                 aria-label="追加指令"
               />
-              <button className="icon-btn" type="submit" aria-label="发送" disabled={!note.trim()}><Icon name="send" /></button>
+              <button className="icon-btn primary w-8 h-8 disabled:bg-sunken disabled:text-faint" type="submit" aria-label="发送" disabled={!note.trim()}><Icon name="send" size={16} stroke={2.2} /></button>
             </form>
           )}
 
-          {error && <p className="text-danger text-[13px] m-0">{error}</p>}
+          {error && <p className="text-danger text-[13px] m-0 flex items-center gap-1.5"><Icon name="alert" size={14} />{error}</p>}
 
-          <section className="grid gap-2.5" aria-label="执行记录">
+          <section className="grid gap-3" aria-label="执行记录">
             {views.length === 0 ? (
-              <p className="text-muted text-[13px] m-0">还没有执行过。</p>
+              <div className="flex items-center gap-2 text-muted text-[13px] rounded-[16px] border border-dashed border-line-strong px-3 py-3">
+                <Icon name="clock" size={16} />还没有执行过
+              </div>
             ) : (
               views.map((v) => <RunCard key={v.run.id} view={v} nodeName={nodeName} full />)
             )}
           </section>
 
           <section className="grid gap-2">
-            <button className="toggle justify-self-start inline-flex gap-1 items-center border-0 bg-none text-muted text-[13px] p-0" onClick={() => setShowForm(!showForm)} aria-expanded={showForm}>
-              <Icon name="chevron" size={14} />任务说明和设置
+            <button className="toggle justify-self-start inline-flex gap-1.5 items-center border-0 bg-sunken rounded-full text-muted text-[12.5px] font-semibold px-3 py-1.5 hover:text-ink" onClick={() => setShowForm(!showForm)} aria-expanded={showForm}>
+              <Icon name="settings" size={14} />说明与设置<Icon name="chevron" size={13} />
             </button>
             {showForm && (
-              <div className="border border-line rounded-[14px] bg-panel px-3.5 py-3 embed">
+              <div className="card px-4 py-3.5 embed">
                 <TaskDetail
                   id={id}
                   compact
@@ -136,7 +162,12 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
             )}
           </section>
         </>
-      ) : null}
+      ) : (
+        <div className="grid gap-3">
+          <div className="h-12 rounded-[16px] bg-sunken animate-pulse"></div>
+          <div className="h-20 rounded-[16px] bg-sunken animate-pulse"></div>
+        </div>
+      )}
     </div>
   )
 }

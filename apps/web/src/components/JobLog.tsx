@@ -150,7 +150,7 @@ export default function JobLog({ nodeId, jobId }: { nodeId: string; jobId: strin
       </div>
 
       {(links.urls.length > 0 || links.codes.length > 0) && (
-        <div className="border border-accent rounded-[10px] px-2.5 py-2 grid gap-1.5 text-[13px]">
+        <div className="border border-accent rounded-[12px] px-2.5 py-2 grid gap-1.5 text-[13px]">
           {links.urls.map((u) => (
             <div key={u} className="flex gap-2.5 items-baseline min-w-0">
               <a className="text-accent font-semibold whitespace-nowrap" href={u} target="_blank" rel="noreferrer noopener" title={u}>打开链接</a>
@@ -167,13 +167,13 @@ export default function JobLog({ nodeId, jobId }: { nodeId: string; jobId: strin
         </div>
       )}
 
-      <div className="h-[300px] bg-sunken rounded-[10px] p-1.5 overflow-hidden max-[760px]:h-[240px]" ref={box}></div>
+      <div className="h-[300px] bg-sunken rounded-[12px] p-1.5 overflow-hidden max-[760px]:h-[240px]" ref={box}></div>
 
       {job?.running ? (
         <>
           <div className="flex gap-2">
             <input
-              className="flex-1 min-w-0 border border-line bg-page text-ink rounded-[8px] px-2.5 py-1.5 font-mono text-[13px]"
+              className="flex-1 min-w-0 border border-line bg-page text-ink rounded-[10px] px-2.5 py-1.5 font-mono text-[13px]"
               value={line}
               onChange={(e) => setLine(e.currentTarget.value)}
               placeholder="粘贴验证码或输入后按回车发送"
@@ -187,7 +187,7 @@ export default function JobLog({ nodeId, jobId }: { nodeId: string; jobId: strin
           </div>
           <div className="flex gap-1.5 flex-wrap">
             {keys.map(([label, seq]) => (
-              <button key={label} className="border border-line bg-panel text-ink rounded-[6px] px-[9px] py-[3px] text-[12px]" onClick={() => send(seq)}>{label}</button>
+              <button key={label} className="border border-line bg-panel text-ink rounded-[8px] px-[9px] py-[3px] text-[12px]" onClick={() => send(seq)}>{label}</button>
             ))}
           </div>
         </>

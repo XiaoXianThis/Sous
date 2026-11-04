@@ -27,6 +27,19 @@ export async function registerPasskey(setupToken?: string) {
   await request('POST', '/api/v1/auth/passkey/register/finish', credentialJSON(cred))
 }
 
+/**
+ * Proves again that the owner is here, for actions that need a recent login
+ * (the Hub answers them with code "reauth"). The session stays the same.
+ */
+export async function reauthenticate() {
+  const me = await request<{ dev_login?: boolean }>('GET', '/api/v1/me')
+  if (me.dev_login) {
+    await request('POST', '/api/v1/auth/dev-login')
+    return
+  }
+  await loginWithPasskey()
+}
+
 export async function loginWithPasskey() {
   const opts = await request<any>('POST', '/api/v1/auth/passkey/login/begin')
   const pk = opts.publicKey

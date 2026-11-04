@@ -83,7 +83,7 @@ export default function Memories({ onClose }: { onClose: () => void }) {
   const editor = (
     <>
       <select
-        className="border border-line bg-page rounded-[10px] px-2.5 py-2 outline-0 resize-y w-auto justify-self-start"
+        className="border border-line bg-page rounded-[12px] px-2.5 py-2 outline-0 resize-y w-auto justify-self-start"
         value={draftKind}
         onChange={(e) => setDraftKind(e.currentTarget.value as MemoryKind)}
         aria-label="类型"
@@ -91,7 +91,7 @@ export default function Memories({ onClose }: { onClose: () => void }) {
         {kinds.map((k) => <option key={k} value={k}>{kindNames[k]}</option>)}
       </select>
       <textarea
-        className="border border-line bg-page rounded-[10px] px-2.5 py-2 outline-0 resize-y w-full"
+        className="border border-line bg-page rounded-[12px] px-2.5 py-2 outline-0 resize-y w-full"
         rows={3}
         value={draftContent}
         onChange={(e) => setDraftContent(e.currentTarget.value)}
@@ -120,7 +120,7 @@ export default function Memories({ onClose }: { onClose: () => void }) {
         <div className="flex gap-2">
           <input
             type="search"
-            className="flex-1 min-w-0 border border-line bg-page rounded-[10px] px-3 py-2 outline-0 focus:border-accent"
+            className="flex-1 min-w-0 border border-line bg-page rounded-[12px] px-3 py-2 outline-0 focus:border-accent"
             placeholder="搜索记忆"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
@@ -153,9 +153,9 @@ export default function Memories({ onClose }: { onClose: () => void }) {
         {error && <p className="text-danger text-[13px] m-0 mb-2" role="alert">{error}</p>}
 
         <ul className="list-none m-0 p-0 overflow-y-auto grid gap-2">
-          {editing === 'new' && <li className="border border-line rounded-[12px] px-3 py-2.5 grid gap-2">{editor}</li>}
+          {editing === 'new' && <li className="border border-line rounded-[14px] px-3 py-2.5 grid gap-2">{editor}</li>}
           {memories.map((m) => (
-            <li key={m.id} className={`border border-line rounded-[12px] px-3 py-2.5 grid ${editing === m.id ? 'gap-2' : 'gap-1'}`}>
+            <li key={m.id} className={`border border-line rounded-[14px] px-3 py-2.5 grid ${editing === m.id ? 'gap-2' : 'gap-1'}`}>
               {editing === m.id ? (
                 editor
               ) : (
@@ -171,7 +171,7 @@ export default function Memories({ onClose }: { onClose: () => void }) {
             </li>
           ))}
           {memories.length === 0 && !loading && editing !== 'new' && (
-            <li className="text-muted text-center border border-dashed border-line rounded-[12px] px-3 py-6">
+            <li className="text-muted text-center border border-dashed border-line rounded-[14px] px-3 py-6">
               {query ? '没有找到相关记忆' : '还没有记忆。和 sous 聊聊你的习惯和项目，它会自己记下来。'}
             </li>
           )}

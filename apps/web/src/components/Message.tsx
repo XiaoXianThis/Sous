@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { Message } from '../lib/types'
+import Icon from './Icon'
+import Markdown, { CopyButton } from './Markdown'
 
 // Turns http(s) links in plain text into parts, so PR links are clickable.
 function linkify(text: string): { text: string; url?: string }[] {
@@ -14,19 +16,26 @@ function linkify(text: string): { text: string; url?: string }[] {
   return out
 }
 
+const noticeLook: Record<string, { icon: string; text: string; color: string }> = {
+  notice: { icon: 'bell', text: '提醒', color: 'var(--warm)' },
+  report: { icon: 'check-circle', text: '任务汇报', color: 'var(--ok)' },
+  inspector: { icon: 'shield', text: '巡检', color: 'var(--info)' },
+}
+
 export default function MessageView({ message }: { message: Message }) {
   const [showThinking, setShowThinking] = useState(false)
   const [showTrigger, setShowTrigger] = useState(false)
 
   // A trigger's first line says what fired: 【定时任务「…」】 or 【跟进】…
   const triggerHead = message.kind === 'trigger' ? message.content.split('\n')[0].replace(/^【(定时任务|跟进)?|】$/g, '') : ''
-  const triggerLabel = message.content.startsWith('【定时任务') ? '定时任务' : '自动跟进'
+  const scheduled = message.content.startsWith('【定时任务')
   const time = new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
   if (message.kind === 'silent') {
     return (
-      <p className="mt-[-6px] mb-0 mx-0 text-[12px] text-muted px-1 overflow-hidden text-ellipsis whitespace-nowrap" title={message.content || undefined}>
-        已读，不需要回复{message.content ? `：${message.content}` : ''}
+      <p className="m-0 -mt-1.5 flex items-center gap-1 text-[11.5px] text-faint px-1 overflow-hidden" title={message.content || '已读，不需要回复'}>
+        <Icon name="check" size={12} stroke={2.4} /><Icon name="check" size={12} stroke={2.4} className="-ml-2" />
+        {message.content && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{message.content}</span>}
       </p>
     )
   }
@@ -35,16 +44,17 @@ export default function MessageView({ message }: { message: Message }) {
     return (
       <div className="grid grid-cols-[minmax(0,1fr)] gap-1 justify-items-center" data-testid="message-trigger">
         <button
-          className="flex items-baseline gap-2 max-w-full border border-dashed border-line bg-transparent rounded-full px-3 py-[3px] text-muted text-[13px]"
+          className="flex items-center gap-1.5 max-w-full border-0 bg-sunken rounded-full px-2.5 py-1 text-muted text-[12px] hover:text-ink"
           onClick={() => setShowTrigger(!showTrigger)}
           aria-expanded={showTrigger}
+          title={scheduled ? '定时任务' : '自动跟进'}
         >
-          <span className="justify-self-start text-[12px] font-semibold text-warm flex-none">{triggerLabel}</span>
+          <Icon name={scheduled ? 'calendar' : 'refresh'} size={12} className="text-warm" />
           <span className="overflow-hidden text-ellipsis whitespace-nowrap">{triggerHead}</span>
-          <time className="text-[12px] text-muted px-1">{time}</time>
+          <time className="text-faint tabular-nums">{time}</time>
         </button>
         {showTrigger && (
-          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] text-muted border-l-2 border-line py-0.5 pl-2.5 justify-self-stretch">
+          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px] text-muted bg-sunken rounded-[14px] px-3 py-2 justify-self-stretch">
             {message.content}
           </div>
         )}
@@ -52,51 +62,72 @@ export default function MessageView({ message }: { message: Message }) {
     )
   }
 
-  const notice = message.kind === 'notice' || message.kind === 'report' || message.kind === 'inspector'
+  const notice = message.kind ? noticeLook[message.kind] : undefined
+  const user = message.role === 'user'
+
+  if (user) {
+    return (
+      <article className="grid gap-1 justify-items-end group" data-testid={`message-${message.kind ?? message.role}`}>
+        <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
+          {linkify(message.content).map((part, i) =>
+            part.url ? (
+              <a key={i} href={part.url} target="_blank" rel="noreferrer" className="md-link">{part.text}</a>
+            ) : (
+              <span key={i}>{part.text}</span>
+            ),
+          )}
+        </div>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
+          <time className="text-[11px] text-faint px-1 tabular-nums">{time}</time>
+          <CopyButton text={message.content} />
+        </div>
+      </article>
+    )
+  }
+
   return (
     <article
-      className={`grid gap-1 max-w-full ${message.role === 'user' ? 'justify-items-end' : ''} ${
-        notice ? 'border border-line border-l-[3px] border-l-warm rounded-[12px] bg-panel px-3.5 py-2.5' : ''
-      }`}
+      className={`grid gap-1.5 min-w-0 group ${notice ? 'rounded-[12px] border border-line bg-panel px-3.5 py-3' : ''}`}
       data-testid={`message-${message.kind ?? message.role}`}
     >
-      {message.kind === 'notice' && <span className="justify-self-start text-[12px] font-semibold text-warm">提醒</span>}
-      {message.kind === 'report' && <span className="justify-self-start text-[12px] font-semibold text-warm">任务汇报</span>}
-      {message.kind === 'inspector' && <span className="justify-self-start text-[12px] font-semibold text-warm">巡检</span>}
+      {notice && (
+        <span className="flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: notice.color }}>
+          <Icon name={notice.icon} size={14} stroke={2} />{notice.text}
+        </span>
+      )}
       {message.thinking && (
-        <>
+        <div className="grid gap-1.5">
           <button
-            className="justify-self-start border-0 bg-sunken text-muted text-[12px] px-2.5 py-[3px] rounded-full"
+            className="toggle justify-self-start inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-muted text-[13px] hover:text-ink"
             onClick={() => setShowThinking(!showThinking)}
+            aria-expanded={showThinking}
+            aria-label={showThinking ? '收起思考过程' : '查看思考过程'}
           >
-            {showThinking ? '收起思考过程' : '查看思考过程'}
+            <Icon name="brain" size={14} />
+            <span>{message.streaming && !message.content ? '正在思考' : '思考过程'}</span>
+            <Icon name="chevron" size={12} className={`transition-transform ${showThinking ? 'rotate-180' : ''}`} />
           </button>
           {showThinking && (
-            <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] text-muted border-l-2 border-line py-0.5 pl-2.5">
+            <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.65] text-muted border-l-2 border-line py-0.5 pl-3">
               {message.thinking}
             </div>
           )}
-        </>
+        </div>
       )}
-      <div
-        className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${message.error ? 'text-danger' : ''} ${
-          message.role === 'user'
-            ? 'bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[18px_18px_4px_18px] max-w-[min(85%,560px)]'
-            : 'px-0.5 py-0.5'
-        }`}
-      >
-        {linkify(message.content).map((part, i) =>
-          part.url ? (
-            <a key={i} href={part.url} target="_blank" rel="noreferrer" className={message.role === 'user' ? 'text-inherit' : 'text-accent'}>
-              {part.text}
-            </a>
-          ) : (
-            <span key={i}>{part.text}</span>
-          ),
-        )}
-        {message.streaming && <span className="inline-block w-2 h-[1em] ml-0.5 align-[-2px] bg-accent stream-caret"></span>}
-      </div>
-      {!message.streaming && <time className="text-[12px] text-muted px-1">{time}</time>}
+      {message.error ? (
+        <div className="flex gap-2 items-start text-[13.5px] text-danger rounded-[12px] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-3 py-2.5">
+          <Icon name="alert" size={15} className="mt-[3px] flex-none" />
+          <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</span>
+        </div>
+      ) : (
+        (message.content || message.streaming) && <Markdown text={message.content} streaming={message.streaming} />
+      )}
+      {!message.streaming && message.content && (
+        <div className="flex items-center gap-0.5 -ml-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
+          <CopyButton text={message.content} />
+          <time className="text-[11px] text-faint px-1 tabular-nums">{time}</time>
+        </div>
+      )}
     </article>
   )
 }

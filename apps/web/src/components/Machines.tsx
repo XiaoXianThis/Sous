@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
+import { ago } from '../lib/time'
 import { api } from '../lib/api'
 import { useChat } from '../lib/app'
 import { jobTitle, latestJob } from '../lib/jobs'
 import type { AgentInfo, Node, Updates } from '../lib/types'
+import AgentIcon from './AgentIcon'
 import AgentPanel from './AgentPanel'
+import Icon from './Icon'
 import ConfigEditor from './ConfigEditor'
 
 const osName: Record<string, string> = { darwin: 'macOS', linux: 'Linux', windows: 'Windows' }
@@ -157,15 +160,6 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   }
 
   const pairCommand = code ? `sous pair ${location.origin} ${code.code}` : ''
-  function ago(ts: number) {
-    if (!ts) return ''
-    const m = Math.round((Date.now() - ts) / 60000)
-    if (m < 1) return '刚刚'
-    if (m < 60) return `${m} 分钟前`
-    if (m < 1440) return `${Math.round(m / 60)} 小时前`
-    return `${Math.round(m / 1440)} 天前`
-  }
-
   return (
     <>
       <div className="backdrop" role="presentation" onClick={onClose}></div>
@@ -179,9 +173,9 @@ export default function Machines({ onClose }: { onClose: () => void }) {
         <p className="text-muted text-[13px] m-0">装了 sous 客户端的电脑。sous 会把编程任务派到这些电脑上的 agent 去做。</p>
 
         {code ? (
-          <div className="border border-dashed border-accent rounded-[12px] px-3 py-2.5 grid gap-2">
+          <div className="border border-dashed border-accent rounded-[14px] px-3 py-2.5 grid gap-2">
             <p className="m-0 text-[14px]">在要添加的电脑上运行（10 分钟内有效）：</p>
-            <code className="font-mono text-[13px] bg-page px-2.5 py-2 rounded-[8px] [overflow-wrap:anywhere] select-all">{pairCommand}</code>
+            <code className="font-mono text-[13px] bg-page px-2.5 py-2 rounded-[10px] [overflow-wrap:anywhere] select-all">{pairCommand}</code>
             <p className="text-muted text-[13px] m-0">服务器加上 <code>--role server</code>；加上 <code>--workspace ~/Code</code> 指定放项目的目录。</p>
             <div className="flex gap-3 items-center">
               <button className="btn small ghost py-[7px] px-4" onClick={() => void navigator.clipboard?.writeText(pairCommand)}>复制命令</button>
@@ -189,7 +183,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         ) : (
-          <button className="btn small py-[7px] px-4 justify-self-start self-start" onClick={() => void pair()}>配对新机器</button>
+          <button className="btn small justify-self-start self-start" onClick={() => void pair()}><Icon name="plus" size={15} stroke={2.2} />配对新机器</button>
         )}
 
         {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}
@@ -205,13 +199,16 @@ export default function Machines({ onClose }: { onClose: () => void }) {
 
         <ul className="list-none m-0 p-0 overflow-y-auto grid gap-2">
           {nodes.map((n) => (
-            <li key={n.id} className="border border-line rounded-[12px] px-3 py-2.5 grid gap-1.5">
+            <li key={n.id} className="border border-line rounded-[18px] px-4 py-3.5 grid gap-2.5">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className={`w-2 h-2 rounded-full flex-none ${n.online ? 'bg-done' : 'bg-muted'}`}></span>
+                <span className="relative grid place-items-center w-9 h-9 rounded-[12px] bg-sunken text-muted flex-none">
+                  <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={19} />
+                  <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--panel)] ${n.online ? 'bg-ok' : 'bg-faint'}`}></span>
+                </span>
                 {renaming === n.id ? (
                   <>
                     <input
-                      className="flex-1 min-w-0 border border-line bg-page rounded-[8px] px-2 py-1 text-ink"
+                      className="flex-1 min-w-0 border border-line bg-page rounded-[10px] px-2 py-1 text-ink"
                       value={draftName}
                       aria-label="机器名"
                       onChange={(e) => setDraftName(e.currentTarget.value)}
@@ -234,12 +231,20 @@ export default function Machines({ onClose }: { onClose: () => void }) {
                   <tbody>
                     {sortAgents(n.agents).map((a) => (
                       <tr key={a.name}>
-                        <td className={`py-[3px] pr-3 ${a.installed ? '' : 'text-muted'}`}>{a.title}</td>
-                        <td className="py-[3px] pr-3 text-muted">{a.installed ? (a.version ?? '') : ''}{summary(a) ? ` ${summary(a)}` : ''}</td>
-                        <td className={`py-[3px] pr-3 ${!a.installed ? 'text-muted' : a.logged_in === false ? 'text-danger' : a.logged_in ? 'text-done' : 'text-muted'}`}>
-                          {!a.installed ? '未安装' : a.logged_in === false ? '未登录' : a.logged_in ? '已登录' : '登录状态未知'}
+                        <td className={`py-1.5 pr-3 ${a.installed ? 'font-medium' : 'text-muted'}`}>
+                          <span className={`inline-flex items-center gap-2 whitespace-nowrap ${a.installed ? '' : 'grayscale opacity-60'}`}><AgentIcon name={a.name} size={22} />{a.title}</span>
                         </td>
-                        <td className="py-[3px] text-right pr-0 whitespace-nowrap">
+                        <td className="py-1.5 pr-3 text-muted max-[760px]:hidden">{a.installed ? (a.version ?? '') : ''}{summary(a) ? ` ${summary(a)}` : ''}</td>
+                        <td className="py-1.5 pr-3">
+                          <span
+                            className={`pill ${!a.installed ? '' : a.logged_in === false ? 'tone-danger' : a.logged_in ? 'tone-success' : ''}`}
+                            title={!a.installed ? '未安装' : a.logged_in === false ? '未登录' : a.logged_in ? '已登录' : '登录状态未知'}
+                          >
+                            <Icon name={!a.installed ? 'download' : a.logged_in === false ? 'key' : a.logged_in ? 'check' : 'circle-dashed'} size={11} stroke={2.4} />
+                            {!a.installed ? '未安装' : a.logged_in === false ? '未登录' : a.logged_in ? '已登录' : '未知'}
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right pr-0 whitespace-nowrap">
                           {jobOf(n, a) && <span className="text-muted text-[13px] mr-2">正在{jobTitle[jobOf(n, a)?.kind ?? '']}…</span>}
                           <button className="link accent" onClick={() => setPanel({ node: n.id, agent: a.name })}>
                             {n.admin === 'on' && n.online && !a.installed && a.install ? '安装' : n.admin === 'on' && n.online && a.installed && a.logged_in === false && a.login ? '登录' : '管理'}
@@ -253,13 +258,13 @@ export default function Machines({ onClose }: { onClose: () => void }) {
                 <p className="text-muted text-[13px] m-0">还没有收到这台机器的 agent 清单</p>
               ) : null}
               <div className="flex flex-wrap gap-x-3 gap-y-1.5 items-center text-[13px]">
-                <span className={`text-[12px] border rounded-[6px] px-1.5 ${n.role === 'server' ? 'border-dashed text-warm border-warm' : 'border-line'}`}>
-                  {n.role === 'server' ? '服务器' : '开发机'}
+                <span className={`pill ${n.role === 'server' ? 'tone-warning' : ''}`}>
+                  <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={11} />{n.role === 'server' ? '服务器' : '开发机'}
                 </span>
                 {wsEdit === n.id ? (
                   <>
                     <textarea
-                      className="flex-1 min-w-[200px] border border-line bg-page rounded-[8px] px-2 py-1 text-[13px]"
+                      className="flex-1 min-w-[200px] border border-line bg-page rounded-[10px] px-2 py-1 text-[13px]"
                       rows={2}
                       value={wsDraft}
                       onChange={(e) => setWsDraft(e.currentTarget.value)}
@@ -273,7 +278,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
                   <>
                     <span className="text-muted text-[13px] m-0" title="sous 在这些目录里找 git 仓库，新项目也放在第一个目录里">工作空间：{n.workspaces?.length ? n.workspaces.join('、') : '未设置'}</span>
                     {n.online && n.admin === 'on' && (
-                      <button className="link" onClick={() => { setWsEdit(n.id); setWsDraft((n.workspaces ?? []).join('\n')) }}>修改</button>
+                      <button className="icon-btn w-7 h-7" aria-label="修改工作空间" onClick={() => { setWsEdit(n.id); setWsDraft((n.workspaces ?? []).join('\n')) }}><Icon name="edit" size={14} /></button>
                     )}
                     {n.role !== 'server' && <span className="text-muted text-[13px] m-0">{n.wok ? `wok ${n.wok}` : '没装 wok'}</span>}
                   </>
@@ -284,25 +289,25 @@ export default function Machines({ onClose }: { onClose: () => void }) {
               </div>
               {n.online && n.admin === 'off' && <p className="text-muted text-[13px] m-0">这台机器关闭了远程管理（node.json 里的 remote_admin）。</p>}
               {n.online && n.admin === 'unsupported' && <p className="text-muted text-[13px] m-0">更新这台机器上的 sous 后，就能在这里安装、登录和配置 agent。</p>}
-              <div className="flex justify-end gap-3.5">
+              <div className="flex justify-end items-center gap-0.5 -mb-1.5 -mr-1.5">
                 {n.online && n.admin === 'on' && (
                   <>
-                    <button className="link" disabled={detecting[n.id]} onClick={() => void detect(n)}>{detecting[n.id] ? '正在检测…' : '重新检测'}</button>
-                    <button className="link" onClick={() => setNodeFile(n.id)}>node.json</button>
+                    <button className="icon-btn" aria-label="重新检测 agent" data-tip="重新检测" data-tip-pos="bottom" disabled={detecting[n.id]} onClick={() => void detect(n)}><Icon name="refresh" size={16} className={detecting[n.id] ? 'spin' : ''} /></button>
+                    <button className="icon-btn" aria-label="编辑 node.json" data-tip="node.json" data-tip-pos="bottom" onClick={() => setNodeFile(n.id)}><Icon name="file" size={16} /></button>
                   </>
                 )}
                 {updating[n.id] ? (
                   <span className="text-muted text-[13px] m-0">{updating[n.id]}</span>
                 ) : nodeVersion(n.id)?.update_available && n.online ? (
-                  <button className="link accent" onClick={() => void update(n)}>更新到 {updates?.latest?.tag}</button>
+                  <button className="btn small" onClick={() => void update(n)}><Icon name="download" size={14} />{updates?.latest?.tag}</button>
                 ) : null}
-                <button className="link" onClick={() => { setRenaming(n.id); setDraftName(n.name) }}>改名</button>
-                <button className="link danger" onClick={() => void remove(n)}>删除</button>
+                <button className="icon-btn" aria-label="改名" data-tip="改名" data-tip-pos="bottom" onClick={() => { setRenaming(n.id); setDraftName(n.name) }}><Icon name="edit" size={16} /></button>
+                <button className="icon-btn hover:!text-danger" aria-label="删除机器" data-tip="删除" data-tip-pos="bottom" onClick={() => void remove(n)}><Icon name="trash" size={16} /></button>
               </div>
             </li>
           ))}
           {nodes.length === 0 && !loading && (
-            <li className="text-muted text-center border border-dashed border-line rounded-[12px] px-3 py-6">还没有机器。点“配对新机器”，然后在电脑上安装 sous 客户端并运行配对命令。</li>
+            <li className="text-muted text-center border border-dashed border-line rounded-[14px] px-3 py-6">还没有机器。点“配对新机器”，然后在电脑上安装 sous 客户端并运行配对命令。</li>
           )}
         </ul>
       </div>
