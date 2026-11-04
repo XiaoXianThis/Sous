@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/json"
+	"runtime"
 	"testing"
 )
 
@@ -30,6 +31,9 @@ func exec(cmd string) Request {
 }
 
 func TestClassifyCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the cases use Unix paths")
+	}
 	p, err := New(Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +74,9 @@ func TestClassifyCommands(t *testing.T) {
 }
 
 func TestClassifyFilesAndArgv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the cases use Unix paths")
+	}
 	p, _ := New(Config{})
 	wd := "/w/tree"
 	edit := func(kind, path string) Category {

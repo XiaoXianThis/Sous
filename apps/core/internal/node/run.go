@@ -73,9 +73,9 @@ type run struct {
 	// the run then tells the agent and lets it continue (maxRefusalTurns).
 	refused      []string
 	refusalTurns int
-	turnText    strings.Builder
-	workdir     string
-	loading     bool // replaying a loaded session: its updates are old news
+	turnText     strings.Builder
+	workdir      string
+	loading      bool // replaying a loaded session: its updates are old news
 	// resumed is set for a run restored after a restart of the daemon.
 	resumed *savedRun
 }

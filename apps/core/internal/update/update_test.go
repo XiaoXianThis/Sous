@@ -91,7 +91,7 @@ func TestInstallReplacesExecutable(t *testing.T) {
 	if tag != "v0.2.0" || string(got) != "new binary" {
 		t.Fatalf("tag %s, exe %q", tag, got)
 	}
-	if info, _ := os.Stat(exe); info.Mode().Perm()&0o100 == 0 {
+	if info, _ := os.Stat(exe); runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
 		t.Fatal("the new executable is not executable")
 	}
 }

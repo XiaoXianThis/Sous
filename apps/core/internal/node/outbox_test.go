@@ -15,6 +15,7 @@ func TestOutboxPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { o.close() }()
 	for i := 0; i < 5; i++ {
 		o.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{RunID: "r", Kind: "status", Text: "x"}))
 	}
@@ -52,6 +53,7 @@ func TestOutboxPersists(t *testing.T) {
 func TestOutboxCompacts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.jsonl")
 	o, _ := openOutbox(path)
+	defer func() { o.close() }()
 	for i := 1; i <= compactAfter+10; i++ {
 		o.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{RunID: "r"}))
 		o.ack(int64(i))
