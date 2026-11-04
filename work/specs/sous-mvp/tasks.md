@@ -5,7 +5,7 @@
 ## 当前状态（接手先读这里）
 
 - **进度**：M0～M3 的代码已完成，测试和浏览器验收通过。M3 用假 agent + 假 `gh` + 真实 DeepSeek（主管、验收、审批）验收了场景 1 和 3。下一步是 **M4 自主与长期运行**，从“trigger：cron、超时、跟进”开始。
-- **等用户操作的事**：部署到 agent.wxian.cc；真实设备上验收 Passkey、PWA 和 Web Push（内置浏览器面板里 Service Worker 不可用）；在一台电脑上登录编程 agent（推荐 `claude`，然后 `/login`）和 `gh auth login`，再用真实 agent 和真实 GitHub 仓库做一次场景 1、6 的验收。
+- **等用户操作的事**：部署到 agent.wxian.cc；真实设备上验收 Passkey、PWA 和 Web Push（内置浏览器面板里 Service Worker 不可用）；本机 `gh` 已登录，opencode 已实测可用；还差用户同意后用一个真实 GitHub 测试仓库做场景 1、6 的验收。
 - **本地开发**：`wok dev core` 启动 Hub（需要 `apps/core/.env` 里的 `DEEPSEEK_API_KEY`，没有就把 `roles.supervisor` 改成 `mock/echo`）；`wok build web` 构建前端；客户端用 `go run ./cmd/sous` 或 `wok build core` 的产物。
 - **先读**：`work/agent/memory.md`（踩过的坑）、`apps/core/AGENTS.md`、`apps/web/AGENTS.md`、`work/agent/rules/super-agent-reference.md`。
 
@@ -55,7 +55,7 @@
 - [x] web：机器面板（配对、改名、删除、agent 状态）、对话里的 Run 卡片（计划、工具调用、审批按钮、取消、diff 和日志查看）
 - [x] supervisor：`run_agent` 工具；每轮提示里带上机器和 agent 列表（M3 换成了任务工具，`run_agent` 已移除）
 - [x] 验收（假 agent）：在网页上让 DeepSeek 主管派活 → 审批 → agent 在 worktree 里改代码 → 查看 diff；取消；用户的工作区不受影响
-- [ ] 验收（真实 agent）：等用户登录一个 agent 后再做
+- [x] 验收（真实 agent）：2026-11-04 本机用 opencode（模型 `deepseek/deepseek-flash`）跑通派活 → 改代码 → 审批 → diff；顺带发现并修复了 opencode 绕过权限策略的问题（见 design.md 第 7 节）
 
 ## M3 核心闭环
 
@@ -70,7 +70,7 @@
 - [x] 交付：push 分支并创建 PR（deliver Run，git-remote 类按模式审批），有冲突时派 Run 去 rebase 再 `--force-with-lease`；sous 不合并
 - [x] web：首页只显示需要用户处理的事（主线顶部的“需要你处理”）
 - [x] 验收（假 agent + 假 gh + 真实 DeepSeek）：场景 1（主线下达 → 派发 → 审批 → 验收 → 审批 push → PR → 汇报）、场景 3（离线排队，机器上线后自动开始）；另外验收了自动审批模式、验收打回直到受阻、重试、执行中追加指令、取消
-- [ ] 验收（真实 agent 和真实 GitHub）：场景 1、6，等用户登录 agent 和 gh 后再做
+- [ ] 验收（真实 agent 和真实 GitHub）：场景 1、6。2026-11-04 已用真实 opencode + 本地裸仓库 origin + 假 `gh` 在本机跑通场景 1 两遍（含 shell 和删除操作的用户审批）；还差真实 GitHub 仓库和场景 6
 - [ ] 主管的 `request_approval` 工具（主管自己需要用户拍板时）：暂缓，目前主管直接在对话里问
 
 ## M4 自主与长期运行

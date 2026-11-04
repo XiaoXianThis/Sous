@@ -95,7 +95,13 @@ func Builtin() []Spec {
 		{
 			Name: "opencode", Title: "OpenCode", Binary: "opencode", VersionArgs: []string{"--version"},
 			Launch: []string{"opencode", "acp"},
-			Note:   "可以使用多个模型服务商，登录状态无法预先判断",
+			// opencode has no "ask" session mode over ACP and allows edits and
+			// shell commands by default, which would bypass sous's policy. This
+			// inline config (merged over the user's own) makes it ask instead.
+			// Pick a model in opencode.json or with OPENCODE_CONFIG=<file>;
+			// overriding OPENCODE_CONFIG_CONTENT would drop these rules.
+			Env:  []string{`OPENCODE_CONFIG_CONTENT={"permission":{"edit":"ask","bash":"ask","webfetch":"ask","external_directory":"ask"}}`},
+			Note: "可以使用多个模型服务商，登录状态无法预先判断",
 		},
 		{
 			Name: "kiro", Title: "Kiro", Binary: "kiro-cli", VersionArgs: []string{"--version"},

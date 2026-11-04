@@ -239,7 +239,7 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 | Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.100.0` | ✅ session/new 返回 modes：`default`（每步询问）、`acceptEdits`、`plan`、`auto`、`bypassPermissions` | `claude auth status` 的 JSON `loggedIn` | 命令行版要单独登录，桌面 App 的登录不通用 |
 | Codex | `npx -y @agentclientprotocol/codex-acp@2.5.0` | ✅ | `codex login status`（"Logged in" / "Not logged in"） | |
 | Cursor | `cursor-agent acp` | ✅ 需要先调用 `authenticate`（methodId `cursor_login`） | `cursor-agent status` | 本机 `status` 报已登录但 `authenticate` 卡住，疑似登录过期；客户端对 authenticate 设了 30 秒超时 |
-| OpenCode | `opencode acp` | ✅ 返回 `configOptions`（可选模型） | 无法预先判断 | 免费模型有额度限制 |
+| OpenCode | `opencode acp`，并通过 `OPENCODE_CONFIG_CONTENT` 把 edit、bash、webfetch、external_directory 设成 `ask` | ✅ 返回 `configOptions`（可选模型），没有 `modes` | 无法预先判断 | 免费模型有额度限制（2026-11-04 实测全部用完）。审批选项 id 是 `once` / `always` / `reject`。模型在 opencode.json 或 `OPENCODE_CONFIG=<文件>` 里选 |
 | Kiro | `kiro-cli acp`（未验证） | — | — | 本机只装了 Kiro IDE，没有 Kiro CLI |
 
 - 实测必须在沙盒外进行：agent 的登录凭据在 macOS 钥匙串里，受限的沙盒环境读不到，会误报“未登录”。真实的 daemon 以用户身份运行，没有这个问题。
@@ -247,6 +247,7 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 - Go 版 ACP 客户端是自己实现的（`internal/acp`，stdio 上按行分隔的 JSON-RPC 2.0），不声明 fs 和 terminal 能力，agent 用自己的工具在 worktree 里干活。
 - 测试用的假 agent 在 `internal/acp/acptest`：在测试二进制里运行，覆盖写文件、认证、未登录、慢任务、崩溃几种行为。
 - **权限请求先过本地策略**（M3，`internal/policy`）：按第 8 节分类和查表，自动放行或拒绝的操作作为 `run.update`（`kind: permission`）写进事件日志；需要审批的才发 `approval.request`。各家 agent 的“每步询问”模式（`default`、`ask`、`manual`）在 `default` 和 `auto` 下启用；`open` 下切到 agent 的放行模式。
+- OpenCode 没有可切换的 session mode，默认直接放行改文件和 shell 命令，不会发 `session/request_permission`，等于绕过 sous 的策略（2026-11-04 用真实 opencode 发现）。现在启动时用内联配置让它每步询问；`open` 模式下它照样询问，由 sous 的策略放行，底线规则仍然生效。
 - **设备令牌目前存在 `~/.sous/node.json`（权限 0600）**，还没有放进系统钥匙串。
 
 **任务的执行（M3 实现）**：
