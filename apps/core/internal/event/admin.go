@@ -15,13 +15,16 @@ const (
 )
 
 type AgentJobPayload struct {
-	NodeID   string `json:"node_id"`
-	JobID    string `json:"job_id"`
-	Kind     string `json:"kind,omitempty"` // install / upgrade / login / logout
-	Agent    string `json:"agent,omitempty"`
-	Command  string `json:"command,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Error    string `json:"error,omitempty"`
+	NodeID  string `json:"node_id"`
+	JobID   string `json:"job_id"`
+	Kind    string `json:"kind,omitempty"` // install / upgrade / login / logout
+	Agent   string `json:"agent,omitempty"`
+	Command string `json:"command,omitempty"`
+	// Shells: the directory and project it was opened in.
+	Path      string `json:"path,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
+	ExitCode  int    `json:"exit_code,omitempty"`
+	Error     string `json:"error,omitempty"`
 	// agent.job.output only.
 	Offset int64  `json:"offset,omitempty"`
 	Data   string `json:"data,omitempty"`

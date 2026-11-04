@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
@@ -57,6 +58,12 @@ func New(st *store.Store, cfg *config.Hub) (*Auth, error) {
 		RPID:          cfg.RPID(),
 		RPDisplayName: "sous",
 		RPOrigins:     []string{cfg.PublicURL},
+		// A passkey is the only factor, so it must verify the user
+		// (fingerprint, face, PIN), not just that someone touched it.
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
+			UserVerification: protocol.VerificationRequired,
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -181,6 +188,34 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// FreshLogin is how recent a passkey login must be for RequireFresh.
+const FreshLogin = 15 * time.Minute
+
+// RequireFresh reports whether the request's session logged in with a
+// passkey within FreshLogin, and otherwise answers 401 "reauth": the page
+// then asks for the passkey again and retries. Guards what a stolen cookie
+// must not be enough for, such as opening a shell on a machine.
+func (a *Auth) RequireFresh(w http.ResponseWriter, r *http.Request) bool {
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		if at, err := a.st.SessionCreated(r.Context(), hash(c.Value)); err == nil && time.Since(at) < FreshLogin {
+			return true
+		}
+	}
+	writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要重新验证 Passkey")
+	return false
+}
+
+// Owner is an opaque id of the request's login session, for things that
+// belong to one session (shells). It is not the session token, nor what the
+// database keeps, so it is safe to hand to a machine.
+func (a *Auth) Owner(r *http.Request) string {
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	return hash("sous-session-owner:" + hash(c.Value))
 }
 
 // login creates a session and sets its cookies.

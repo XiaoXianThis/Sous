@@ -42,7 +42,7 @@ func setup(t *testing.T) *client {
 	eng := task.New(log, nodes)
 	vapid, _ := notify.LoadVAPID(t.TempDir())
 	n := &notify.Notifier{Log: log, Sender: &notify.Sender{VAPID: vapid}}
-	srv := httptest.NewServer(httpapi.New(cfg, log, a, nodes.Routes, eng.Routes, n.Routes(map[string]string{"supervisor": "deepseek/x"})))
+	srv := httptest.NewServer(httpapi.New(cfg, log, a, nodes.Routes, eng.Routes, n.Routes(func(context.Context) map[string]string { return map[string]string{"supervisor": "deepseek/x"} })))
 	log.EnsureMainThread(context.Background())
 	t.Cleanup(func() { srv.Close(); st.Close() })
 

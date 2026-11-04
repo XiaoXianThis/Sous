@@ -94,3 +94,125 @@ func TestGeneral(t *testing.T) {
 		t.Fatalf("general diff: %q %q %v", d, s, err)
 	}
 }
+
+// gitT runs git in dir and fails the test on error.
+func gitT(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// twoMachines returns a bare origin with one commit on main and a clone of
+// it (this machine's checkout); other is another machine's clone.
+func twoMachines(t *testing.T) (origin, mine, other string) {
+	t.Helper()
+	seed := gitInit(t)
+	gitT(t, seed, "branch", "-M", "main")
+	origin = filepath.Join(t.TempDir(), "origin.git")
+	gitT(t, seed, "clone", "-q", "--bare", seed, origin)
+	mine = filepath.Join(t.TempDir(), "mine")
+	other = filepath.Join(t.TempDir(), "other")
+	gitT(t, seed, "clone", "-q", origin, mine)
+	gitT(t, seed, "clone", "-q", origin, other)
+	return origin, mine, other
+}
+
+func commitFile(t *testing.T, dir, name, text string) string {
+	t.Helper()
+	os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644)
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", name)
+	return gitT(t, dir, "rev-parse", "HEAD")
+}
+
+// A machine whose checkout is behind starts the task from the remote's
+// latest code, and its own checkout is left alone.
+func TestTaskStartsFromRemoteWhenBehind(t *testing.T) {
+	ctx := context.Background()
+	_, mine, other := twoMachines(t)
+	before := gitT(t, mine, "rev-parse", "HEAD")
+	latest := commitFile(t, other, "b.txt", "from the other machine\n")
+	gitT(t, other, "push", "-q", "origin", "main")
+
+	p, err := PrepareTask(ctx, t.TempDir(), mine, "01JTASKREMOTEAAAAAAAAAAAAA", "", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Base != latest || p.BaseBranch != "main" {
+		t.Fatalf("base %s %q, want %s main", p.Base, p.BaseBranch, latest)
+	}
+	if _, err := os.Stat(filepath.Join(p.Dir, "b.txt")); err != nil {
+		t.Fatal("the worktree lacks the other machine's commit")
+	}
+	if !strings.Contains(p.Note, "origin/main") {
+		t.Errorf("note %q", p.Note)
+	}
+	if gitT(t, mine, "rev-parse", "HEAD") != before {
+		t.Error("the user's checkout moved")
+	}
+	if up, _ := exec.Command("git", "-C", p.Dir, "rev-parse", "--abbrev-ref", "@{u}").Output(); len(up) > 0 {
+		t.Errorf("the task branch tracks %s", up)
+	}
+	// Diffs are against where the task started, not the old local HEAD.
+	os.WriteFile(filepath.Join(p.Dir, "c.txt"), []byte("task\n"), 0o644)
+	diff, _, err := Diff(ctx, p)
+	if err != nil || strings.Contains(diff, "b.txt") || !strings.Contains(diff, "c.txt") {
+		t.Fatalf("diff %v %q", err, diff)
+	}
+}
+
+// Local commits that were never pushed are not in the task; the note says so.
+func TestTaskNotesUnpushedCommits(t *testing.T) {
+	_, mine, _ := twoMachines(t)
+	commitFile(t, mine, "local.txt", "only here\n")
+	p, err := PrepareTask(context.Background(), t.TempDir(), mine, "01JTASKUNPUSHEDAAAAAAAAAAA", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Note, "1 个提交还没推送") {
+		t.Fatalf("note %q", p.Note)
+	}
+	if _, err := os.Stat(filepath.Join(p.Dir, "local.txt")); err == nil {
+		t.Error("an unpushed commit is in the task")
+	}
+}
+
+// A task that names its base branch starts from origin/<that branch>.
+func TestTaskStartsFromRequestedBranch(t *testing.T) {
+	_, mine, other := twoMachines(t)
+	gitT(t, other, "checkout", "-qb", "release")
+	rel := commitFile(t, other, "r.txt", "release\n")
+	gitT(t, other, "push", "-q", "origin", "release")
+	p, err := PrepareTaskOn(context.Background(), t.TempDir(), mine, "01JTASKRELEASEAAAAAAAAAAAA", "", "", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Base != rel || p.BaseBranch != "release" {
+		t.Fatalf("base %s %q", p.Base, p.BaseBranch)
+	}
+}
+
+// Without a reachable remote the task starts from the local HEAD and says why.
+func TestTaskFallsBackToLocalHead(t *testing.T) {
+	ctx := context.Background()
+	_, mine, _ := twoMachines(t)
+	gitT(t, mine, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	head := gitT(t, mine, "rev-parse", "HEAD")
+	p, err := PrepareTask(ctx, t.TempDir(), mine, "01JTASKOFFLINEAAAAAAAAAAAA", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Base != head || p.BaseBranch != "main" || !strings.Contains(p.Note, "拉取 origin 失败") {
+		t.Fatalf("%+v", p)
+	}
+
+	// A repository with no remote at all just uses its HEAD, quietly.
+	repo := gitInit(t)
+	p, err = PrepareTask(ctx, t.TempDir(), repo, "01JTASKLOCALONLYAAAAAAAAAA", "", "")
+	if err != nil || p.Base != gitT(t, repo, "rev-parse", "HEAD") || p.Note != "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+}

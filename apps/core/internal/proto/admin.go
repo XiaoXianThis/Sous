@@ -17,19 +17,24 @@ const CapAdmin = "admin"
 
 // Request ops.
 const (
-	OpDetect      = "agents.detect"       // -> []AgentInfo
-	OpProbe       = "agents.probe"        // {agent} -> AgentInfo
-	OpInstall     = "agents.install"      // {agent, upgrade, cols, rows} -> JobStarted
-	OpLogin       = "agents.login"        // {agent, cols, rows} -> JobStarted
-	OpLogout      = "agents.logout"       // {agent, cols, rows} -> JobStarted
-	OpSetDefaults = "agents.set_defaults" // {agent, options} -> AgentInfo
-	OpSetEnv      = "agents.set_env"      // {agent, name, value} -> AgentInfo
-	OpJobInput    = "job.input"           // {job_id, data}
-	OpJobResize   = "job.resize"          // {job_id, cols, rows}
-	OpJobCancel   = "job.cancel"          // {job_id}
-	OpJobTail     = "job.tail"            // {job_id} -> JobTail
-	OpConfigRead  = "config.read"         // {agent, file} -> ConfigFile
-	OpConfigWrite = "config.write"        // {agent, file, content, base_sha256} -> ConfigFile
+	OpDetect       = "agents.detect"       // -> []AgentInfo
+	OpProbe        = "agents.probe"        // {agent} -> AgentInfo
+	OpInstall      = "agents.install"      // {agent, upgrade, cols, rows} -> JobStarted
+	OpLogin        = "agents.login"        // {agent, cols, rows} -> JobStarted
+	OpLogout       = "agents.logout"       // {agent, cols, rows} -> JobStarted
+	OpSetDefaults  = "agents.set_defaults" // {agent, options} -> AgentInfo
+	OpSetEnv       = "agents.set_env"      // {agent, name, value} -> AgentInfo
+	OpJobInput     = "job.input"           // {job_id, data}
+	OpJobResize    = "job.resize"          // {job_id, cols, rows}
+	OpJobCancel    = "job.cancel"          // {job_id}
+	OpJobTail      = "job.tail"            // {job_id} -> JobTail
+	OpConfigRead   = "config.read"         // {agent, file} -> ConfigFile
+	OpConfigWrite  = "config.write"        // {agent, file, content, base_sha256} -> ConfigFile
+	OpProjectLs    = "project.ls"          // {root, rel} -> ProjectDir
+	OpProjectRead  = "project.read"        // {root, rel} -> ProjectFile
+	OpProjectWrite = "project.write"       // {root, rel, content, base_sha256} -> ProjectFile
+	OpShellOpen    = "shell.open"          // {root, owner, cols, rows} -> JobStarted
+	OpShellList    = "shell.list"          // {root, owner} -> []ShellInfo
 )
 
 // Error codes of node.response.
@@ -74,6 +79,9 @@ type AgentArgs struct {
 
 type JobArgs struct {
 	JobID string `json:"job_id"`
+	// Owner must match the owner of a shell (ShellArgs.Owner); jobs
+	// without an owner (installs, logins) ignore it.
+	Owner string `json:"owner,omitempty"`
 	Data  string `json:"data,omitempty"`
 	Cols  int    `json:"cols,omitempty"`
 	Rows  int    `json:"rows,omitempty"`
@@ -85,7 +93,28 @@ const (
 	JobUpgrade = "upgrade"
 	JobLogin   = "login"
 	JobLogout  = "logout"
+	JobShell   = "shell" // a terminal the user opened in a project directory
 )
+
+// ShellArgs opens or lists shells in a project directory. Root follows the
+// rules of ProjectArgs. Owner is an opaque id of the login session that
+// opened the shell: only the same session can list, type into, resize or
+// close it.
+type ShellArgs struct {
+	Root  string `json:"root"`
+	Owner string `json:"owner"`
+	Cols  int    `json:"cols,omitempty"`
+	Rows  int    `json:"rows,omitempty"`
+}
+
+type ShellInfo struct {
+	JobID     string `json:"job_id"`
+	Root      string `json:"root"`
+	Command   string `json:"command"`
+	StartedAt int64  `json:"started_at"`
+	Running   bool   `json:"running"`
+	Exit      *int   `json:"exit_code,omitempty"`
+}
 
 type JobStarted struct {
 	JobID   string `json:"job_id"`
@@ -163,4 +192,33 @@ type AgentConfigFile struct {
 	ID     string `json:"id"`
 	Path   string `json:"path"`
 	Format string `json:"format"`
+}
+
+// ProjectArgs names a file or directory inside a project's directory on a
+// machine. Root must be inside one of the machine's workspaces; Rel is a
+// slash-separated path under Root.
+type ProjectArgs struct {
+	Root       string `json:"root"`
+	Rel        string `json:"rel"`
+	Content    string `json:"content,omitempty"`
+	BaseSHA256 string `json:"base_sha256,omitempty"`
+}
+
+type ProjectEntry struct {
+	Name string `json:"name"`
+	Dir  bool   `json:"dir"`
+	Size int64  `json:"size"`
+}
+
+type ProjectDir struct {
+	Rel     string         `json:"rel"`
+	Entries []ProjectEntry `json:"entries"`
+}
+
+type ProjectFile struct {
+	Rel     string `json:"rel"`
+	Size    int64  `json:"size"`
+	Binary  bool   `json:"binary"`
+	Content string `json:"content"`
+	SHA256  string `json:"sha256"`
 }

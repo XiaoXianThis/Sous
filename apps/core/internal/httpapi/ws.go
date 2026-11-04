@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -23,7 +24,29 @@ const (
 // ws streams events: first everything stored after ?since=<seq>, then live
 // events. Ephemeral events (seq 0) are only sent live. A client that falls
 // behind is disconnected and reconnects with the last seq it saw.
-func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ws(w http.ResponseWriter, r *http.Request) { s.stream(w, r, nil) }
+
+// deviceWS is the event stream for paired machines (`sous chat`): only the
+// conversation, runs starting and ending, and approvals. Terminal output of
+// installs, logins and shells, file and config changes never reach a
+// device token.
+func (s *Server) deviceWS(w http.ResponseWriter, r *http.Request) { s.stream(w, r, deviceEvent) }
+
+func deviceEvent(t event.Type) bool {
+	switch t {
+	case event.RunQueued, event.RunStarted, event.RunEnded:
+		return true
+	}
+	for _, p := range []string{"thread.", "message.", "approval.", "trigger."} {
+		if strings.HasPrefix(string(t), p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stream sends the events allow accepts (all of them when it is nil).
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, allow func(event.Type) bool) {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	opts := &websocket.AcceptOptions{}
 	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
@@ -52,10 +75,13 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, ev := range evs {
+			last = ev.Seq
+			if allow != nil && !allow(ev.Type) {
+				continue
+			}
 			if err := send(ctx, conn, ev); err != nil {
 				return
 			}
-			last = ev.Seq
 		}
 		if len(evs) < backlogBatch {
 			break
@@ -74,6 +100,12 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if ev.Seq != 0 && ev.Seq <= last {
+				continue
+			}
+			if allow != nil && !allow(ev.Type) {
+				if ev.Seq != 0 {
+					last = ev.Seq
+				}
 				continue
 			}
 			if err := send(ctx, conn, ev); err != nil {

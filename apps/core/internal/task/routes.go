@@ -26,6 +26,8 @@ func (e *Engine) Routes(mux *http.ServeMux, protect func(string, http.HandlerFun
 	protect("POST /api/v1/projects", e.putProject)
 	protect("PATCH /api/v1/projects/{id}", e.putProject)
 	protect("DELETE /api/v1/projects/{id}", e.deleteProject)
+	protect("POST /api/v1/projects/{id}/archive", e.archiveProject(true))
+	protect("POST /api/v1/projects/{id}/activate", e.archiveProject(false))
 
 	protect("GET /api/v1/inbox", e.inbox)
 	e.workbenchRoutes(protect)
@@ -207,6 +209,18 @@ func (e *Engine) putProject(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, p)
+}
+
+// archiveProject archives a project or makes it active again.
+func (e *Engine) archiveProject(archived bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := e.ArchiveProject(r.Context(), r.PathValue("id"), archived, event.ActorUser)
+		if err != nil {
+			taskError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	}
 }
 
 func (e *Engine) deleteProject(w http.ResponseWriter, r *http.Request) {

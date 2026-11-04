@@ -56,6 +56,9 @@ func (p *openaiResponses) Stream(ctx context.Context, req Request, onDelta func(
 	if req.MaxTokens > 0 {
 		body["max_output_tokens"] = req.MaxTokens
 	}
+	if req.Effort != "" {
+		body["reasoning"] = map[string]any{"effort": openaiEffort(req.Effort)}
+	}
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range req.Tools {

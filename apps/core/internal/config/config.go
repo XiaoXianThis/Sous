@@ -4,9 +4,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,6 +26,14 @@ type Hub struct {
 	DataDir string `yaml:"data_dir"`
 	// WebDir is the built PWA to serve (build/web). Empty disables it.
 	WebDir string `yaml:"web_dir"`
+	// TLSCert and TLSKey make the Hub serve HTTPS itself (PEM files),
+	// for when no reverse proxy terminates TLS in front of it.
+	TLSCert string `yaml:"tls_cert"`
+	TLSKey  string `yaml:"tls_key"`
+	// InsecureListen allows plain HTTP on an address other than loopback,
+	// for a proxy on another host or a container network that encrypts
+	// the hop itself. Without it such a listen address is refused.
+	InsecureListen bool `yaml:"insecure_listen"`
 	// Dev enables the loopback-only dev login and relaxes cookie security.
 	Dev bool `yaml:"dev"`
 	// EnvFile is an optional KEY=VALUE file (never committed) that sets
@@ -33,6 +43,9 @@ type Hub struct {
 
 	Providers []Provider        `yaml:"providers"`
 	Roles     map[string]string `yaml:"roles"` // role -> "provider/model"
+	// Efforts sets a role's reasoning effort (low / medium / high / xhigh
+	// / max); a role without one uses the model's default.
+	Efforts map[string]string `yaml:"efforts"`
 
 	// M4: autonomy and long-running operation. Zero values take defaults.
 	Triggers  Triggers  `yaml:"triggers"`
@@ -42,7 +55,13 @@ type Hub struct {
 	RetentionDays int `yaml:"retention_days"`
 	// UpdateRepo is the GitHub repository releases come from (owner/name).
 	UpdateRepo string `yaml:"update_repo"`
+
+	explicit map[string]bool // roles the file sets itself
 }
+
+// RoleSet reports whether the file names a model for the role itself
+// (rather than falling back on the supervisor's).
+func (c *Hub) RoleSet(role string) bool { return c.explicit[role] }
 
 // Triggers tunes follow-ups (design §9).
 type Triggers struct {
@@ -125,11 +144,20 @@ func (c *Hub) applyDefaults(base string) {
 	if c.WebDir != "" && !filepath.IsAbs(c.WebDir) {
 		c.WebDir = filepath.Join(base, c.WebDir)
 	}
+	for _, f := range []*string{&c.TLSCert, &c.TLSKey} {
+		if *f != "" && !filepath.IsAbs(*f) {
+			*f = filepath.Join(base, *f)
+		}
+	}
 	if c.EnvFile != "" && !filepath.IsAbs(c.EnvFile) {
 		c.EnvFile = filepath.Join(base, c.EnvFile)
 	}
 	if c.Roles == nil {
 		c.Roles = map[string]string{}
+	}
+	c.explicit = map[string]bool{}
+	for r := range c.Roles {
+		c.explicit[r] = true
 	}
 	// Unset roles fall back to the supervisor's model.
 	if sup, ok := c.Roles[RoleSupervisor]; ok {
@@ -149,6 +177,12 @@ func (c *Hub) Validate() error {
 	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
 		return fmt.Errorf("public_url must use https outside localhost")
 	}
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return fmt.Errorf("tls_cert and tls_key go together")
+	}
+	if c.TLSCert == "" && !c.InsecureListen && !loopbackListen(c.Listen) {
+		return fmt.Errorf("listen %q is reachable from other machines over plain HTTP: listen on 127.0.0.1 behind a TLS proxy, set tls_cert and tls_key, or set insecure_listen: true if the network in between is encrypted", c.Listen)
+	}
 	names := map[string]bool{}
 	for _, p := range c.Providers {
 		if p.Name == "" || p.Kind == "" {
@@ -159,8 +193,15 @@ func (c *Hub) Validate() error {
 		}
 		names[p.Name] = true
 	}
-	if c.Roles[RoleSupervisor] == "" {
-		return fmt.Errorf("roles.supervisor is required")
+	// Roles are optional: models are configured on the page (stored in the
+	// database); the file's providers and roles are imported once.
+	for role, e := range c.Efforts {
+		if _, ok := c.Roles[role]; !ok {
+			return fmt.Errorf("efforts.%s: no such role", role)
+		}
+		if !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, e) {
+			return fmt.Errorf("efforts.%s %q must be low, medium, high, xhigh or max", role, e)
+		}
 	}
 	for role, ref := range c.Roles {
 		prov, model, ok := strings.Cut(ref, "/")
@@ -173,6 +214,23 @@ func (c *Hub) Validate() error {
 	}
 	return nil
 }
+
+// loopbackListen reports whether addr only accepts connections from this
+// machine.
+func loopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// TLS reports whether the Hub serves HTTPS itself.
+func (c *Hub) TLS() bool { return c.TLSCert != "" }
 
 // Model splits a role's "provider/model" reference.
 func (c *Hub) Model(role string) (provider, model string) {

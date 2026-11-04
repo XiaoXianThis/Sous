@@ -33,6 +33,7 @@ var jobTimeouts = map[string]time.Duration{
 	proto.JobUpgrade: 15 * time.Minute,
 	proto.JobLogin:   10 * time.Minute,
 	proto.JobLogout:  2 * time.Minute,
+	proto.JobShell:   24 * time.Hour, // a shell left open is closed after a day
 }
 
 type job struct {
@@ -41,6 +42,10 @@ type job struct {
 	kind    string
 	agent   string
 	command string
+	// Shells only: the directory, the session that owns it, when it started.
+	root    string
+	owner   string
+	started time.Time
 
 	pty    pty.Pty
 	cmd    *pty.Cmd
@@ -103,7 +108,7 @@ func (a *admin) startJob(op string, args proto.AgentArgs) (any, error) {
 		j.mu.Lock()
 		live, ended := j.running, j.endedAt
 		j.mu.Unlock()
-		if live {
+		if live && j.kind != proto.JobShell {
 			running++
 			if j.agent == spec.Name {
 				a.mu.Unlock()
@@ -121,7 +126,9 @@ func (a *admin) startJob(op string, args proto.AgentArgs) (any, error) {
 	a.jobs[j.id] = j
 	a.mu.Unlock()
 
-	if err := j.start(spec, r, path, argv, args.Cols, args.Rows); err != nil {
+	home, _ := os.UserHomeDir()
+	env := append(append(os.Environ(), spec.Env...), r.Env...)
+	if err := j.start(path, argv, home, env, args.Cols, args.Rows); err != nil {
 		a.mu.Lock()
 		delete(a.jobs, j.id)
 		a.mu.Unlock()
@@ -136,7 +143,8 @@ func jobTitle(kind string) string {
 	return map[string]string{proto.JobInstall: "安装", proto.JobUpgrade: "升级", proto.JobLogin: "登录", proto.JobLogout: "退出登录"}[kind]
 }
 
-func (j *job) start(spec agents.Spec, r agents.Recipe, path string, argv []string, cols, rows int) error {
+// start runs path on a new pseudo-terminal in dir.
+func (j *job) start(path string, argv []string, dir string, env []string, cols, rows int) error {
 	p, err := pty.New()
 	if err != nil {
 		return err
@@ -150,10 +158,7 @@ func (j *job) start(spec agents.Spec, r agents.Recipe, path string, argv []strin
 	p.Resize(cols, rows)
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeouts[j.kind])
 	c := p.CommandContext(ctx, path, argv...)
-	home, _ := os.UserHomeDir()
-	c.Dir = home
-	env := append(os.Environ(), spec.Env...)
-	env = append(env, r.Env...)
+	c.Dir = dir
 	c.Env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
 	if err := c.Start(); err != nil {
 		cancel()

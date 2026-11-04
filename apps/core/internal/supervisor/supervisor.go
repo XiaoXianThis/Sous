@@ -133,11 +133,20 @@ func (s *Supervisor) turn(threadID string) {
 	}
 
 	mainID, _ := st.MainThreadID(ctx)
-	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID})
+	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID})
+	project := ""
+	if thread.ProjectID != "" {
+		project = thread.ProjectID
+		if s.opt.DescribeContext != nil {
+			if d := s.opt.DescribeContext(ctx, event.MessageContext{ProjectID: thread.ProjectID}); d != "" {
+				project = d
+			}
+		}
+	}
 	req := provider.Request{
 		Model: s.opt.Model, SessionID: threadID,
 		System: prompts.Supervisor(prompts.Env{
-			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind,
+			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind, Project: project,
 			Memories: s.recall(ctx, history),
 			Machines: s.environment(ctx, threadID),
 		}),
@@ -174,7 +183,7 @@ func (s *Supervisor) turn(threadID string) {
 			reply(strings.Join(texts, "\n\n"), err)
 			return
 		}
-		s.recordUsage(threadID, resp.Usage)
+		s.recordUsage(threadID, resp)
 		if t := resp.Message.PlainText(); t != "" {
 			texts = append(texts, t)
 			spoke = true
@@ -234,9 +243,13 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text
 	}
 }
 
-func (s *Supervisor) recordUsage(threadID string, u provider.Usage) {
+func (s *Supervisor) recordUsage(threadID string, resp provider.Response) {
+	u, model := resp.Usage, resp.Model
+	if model == "" {
+		model = s.opt.Model
+	}
 	ev := event.New(event.UsageRecorded, event.ActorSupervisor, threadID, event.UsagePayload{
-		Provider: s.opt.Provider.Name(), Model: s.opt.Model, Role: "supervisor",
+		Provider: s.opt.Provider.Name(), Model: model, Role: "supervisor",
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens,
 	})
 	if _, err := s.opt.Log.Append(s.ctx, ev); err != nil {

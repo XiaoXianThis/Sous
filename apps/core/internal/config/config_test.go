@@ -46,7 +46,6 @@ roles:
 
 func TestValidateRejectsBadConfig(t *testing.T) {
 	cases := map[string]string{
-		"no supervisor":    "providers: [{name: a, kind: mock}]\n",
 		"unknown provider": "providers: [{name: a, kind: mock}]\nroles: {supervisor: b/m}\n",
 		"bad role ref":     "providers: [{name: a, kind: mock}]\nroles: {supervisor: a}\n",
 		"http public url":  "public_url: http://agent.example.com\nproviders: [{name: a, kind: mock}]\nroles: {supervisor: a/m}\n",
@@ -55,6 +54,15 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	for name, body := range cases {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+// Models are configured on the page: a file without roles (or providers) is fine.
+func TestRolesAreOptional(t *testing.T) {
+	for _, body := range []string{"", "providers: [{name: a, kind: mock}]\n"} {
+		if _, err := Load(write(t, body)); err != nil {
+			t.Errorf("%q: %v", body, err)
 		}
 	}
 }
@@ -90,5 +98,34 @@ func TestEnvFile(t *testing.T) {
 func TestMissingEnvFileIsFine(t *testing.T) {
 	if _, err := Load(write(t, "env_file: nope.env\nproviders: [{name: a, kind: mock}]\nroles: {supervisor: a/m}\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPlainListenOutsideLoopbackIsRefused(t *testing.T) {
+	base := func() *Hub {
+		return &Hub{PublicURL: "https://a.example", Providers: []Provider{{Name: "m", Kind: "mock"}},
+			Roles: map[string]string{RoleSupervisor: "m/x"}}
+	}
+	for addr, ok := range map[string]bool{"127.0.0.1:8787": true, "localhost:1": true, "[::1]:8787": true, "0.0.0.0:8787": false, ":8787": false} {
+		c := base()
+		c.Listen = addr
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("listen %s: %v", addr, err)
+		}
+	}
+	c := base()
+	c.Listen, c.TLSCert, c.TLSKey = ":8443", "c.pem", "k.pem"
+	if err := c.Validate(); err != nil {
+		t.Errorf("TLS listen: %v", err)
+	}
+	c = base()
+	c.Listen, c.InsecureListen = ":8787", true
+	if err := c.Validate(); err != nil {
+		t.Errorf("insecure_listen: %v", err)
+	}
+	c = base()
+	c.Listen, c.Efforts = "127.0.0.1:1", map[string]string{RoleSupervisor: "extreme"}
+	if err := c.Validate(); err == nil {
+		t.Error("bad effort accepted")
 	}
 }

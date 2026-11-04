@@ -277,10 +277,13 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	if in.Kind == event.TaskKindCode && in.ProjectID == "" {
 		return store.Task{}, fmt.Errorf("%w: 代码任务需要指定项目", ErrInvalid)
 	}
+	var archived bool
 	if in.ProjectID != "" {
-		if _, err := e.store().Project(ctx, in.ProjectID); err != nil {
+		p, err := e.store().Project(ctx, in.ProjectID)
+		if err != nil {
 			return store.Task{}, fmt.Errorf("%w: 项目 %s 不存在", ErrInvalid, in.ProjectID)
 		}
+		archived = p.Archived()
 	}
 	if in.ParentID != "" {
 		if _, err := e.store().Task(ctx, in.ParentID); err != nil {
@@ -304,6 +307,13 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, PersonaID: in.Persona, DependsOn: in.DependsOn, Status: status,
 	})
 	ev.TaskID = ids.New()
+	if archived {
+		// New work in an archived project brings it back to the workbench.
+		if _, err := e.Log.Append(ctx, event.New(event.ProjectArchived, in.Actor, "",
+			event.ProjectArchivedPayload{ProjectID: in.ProjectID, Archived: false})); err != nil {
+			return store.Task{}, err
+		}
+	}
 	if _, err := e.Log.Append(ctx, ev); err != nil {
 		return store.Task{}, err
 	}

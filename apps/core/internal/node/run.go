@@ -187,7 +187,11 @@ func (r *run) prepare() (workspace.Prepared, error) {
 		if r.resumed == nil {
 			r.status("正在准备独立的 git worktree")
 		}
-		return workspace.PrepareTask(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title))
+		ws, err := workspace.PrepareTaskOn(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title), r.spec.BaseBranch)
+		if err == nil && ws.Note != "" {
+			r.status(ws.Note)
+		}
+		return ws, err
 	}
 	return workspace.PrepareGeneral(r.d.root, key)
 }

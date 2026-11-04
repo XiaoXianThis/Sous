@@ -168,7 +168,7 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		var args proto.JobArgs
 		json.Unmarshal(req.Args, &args)
 		j := a.job(args.JobID)
-		if j == nil {
+		if j == nil || !j.ownedBy(args.Owner) {
 			return nil, nodeErr(proto.ErrCodeNotFound, "这个作业已经不在了")
 		}
 		switch req.Op {
@@ -190,6 +190,21 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		var args proto.ConfigArgs
 		json.Unmarshal(req.Args, &args)
 		return a.writeConfig(args)
+	case proto.OpProjectLs, proto.OpProjectRead, proto.OpProjectWrite:
+		var args proto.ProjectArgs
+		json.Unmarshal(req.Args, &args)
+		return a.projectOp(req.Op, args)
+	case proto.OpShellOpen, proto.OpShellList:
+		var args proto.ShellArgs
+		json.Unmarshal(req.Args, &args)
+		if req.Op == proto.OpShellOpen {
+			return a.openShell(args)
+		}
+		return a.listShells(args)
+	case proto.OpRepoSync, proto.OpRepoWIP:
+		var args proto.RepoArgs
+		json.Unmarshal(req.Args, &args)
+		return a.repoOp(ctx, req.Op, args.Root)
 	case proto.OpScan:
 		return a.d.sendRepos(ctx), nil
 	case proto.OpSetWorkspaces:

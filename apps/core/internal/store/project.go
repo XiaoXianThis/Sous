@@ -19,8 +19,8 @@ func project(w *Writer, ev event.Event) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO threads(id, title, kind, created_at, updated_at) VALUES (?,?,?,?,?)`,
-			ev.ThreadID, p.Title, p.Kind, ev.TS, ev.TS)
+			`INSERT INTO threads(id, title, kind, project_id, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
+			ev.ThreadID, p.Title, p.Kind, p.ProjectID, ev.TS, ev.TS)
 		return err
 
 	case event.MessageUser, event.MessageAssistant:
@@ -75,7 +75,7 @@ func project(w *Writer, ev event.Event) error {
 		return projectAuto(w, ev)
 
 	case event.TaskCreated, event.TaskUpdated, event.TaskStatus, event.TaskReviewed,
-		event.ProjectPut, event.ProjectDeleted:
+		event.ProjectPut, event.ProjectDeleted, event.ProjectArchived:
 		return projectTask(w, ev)
 
 	case event.PersonaPut, event.PersonaDeleted, event.NodeRepos, event.NodeRole:

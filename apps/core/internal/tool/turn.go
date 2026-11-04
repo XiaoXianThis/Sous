@@ -6,6 +6,8 @@ import "context"
 type Turn struct {
 	ThreadID     string
 	MainThreadID string
+	// ProjectID is set in a project chat: the turn may only touch this project.
+	ProjectID string
 }
 
 type turnKey struct{}

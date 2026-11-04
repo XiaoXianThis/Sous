@@ -342,6 +342,34 @@ ALTER TABLE runs ADD COLUMN setup TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE messages ADD COLUMN context TEXT NOT NULL DEFAULT '';
 `,
+	// 7: archived projects (0 means active).
+	`
+ALTER TABLE projects ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0;
+`,
+	// 8: project chats (threads scoped to one project).
+	`
+ALTER TABLE threads ADD COLUMN project_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX threads_project ON threads(project_id, updated_at);
+`,
+	// 9: where each checkout stands against its upstream (multi-machine-sync),
+	// and the model providers configured on the page with their API keys.
+	`
+ALTER TABLE repo_scans ADD COLUMN git TEXT NOT NULL DEFAULT '';
+CREATE TABLE model_providers (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  base_url    TEXT NOT NULL DEFAULT '',
+  api_key_env TEXT NOT NULL DEFAULT '',
+  models      TEXT NOT NULL DEFAULT '[]',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE TABLE model_keys (
+  provider_id TEXT PRIMARY KEY,
+  api_key     TEXT NOT NULL
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -368,7 +368,7 @@ func (in *Inspector) ask(ctx context.Context, t store.Task, input string, out an
 		return err
 	}
 	ev := event.New(event.UsageRecorded, event.ActorInspector, t.OriginThreadID, event.UsagePayload{
-		Provider: in.Provider.Name(), Model: in.Model, Role: "inspector",
+		Provider: in.Provider.Name(), Model: provider.ModelOf(resp, in.Model), Role: "inspector",
 		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, CachedTokens: resp.Usage.CachedTokens,
 	})
 	ev.TaskID = t.ID

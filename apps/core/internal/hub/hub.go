@@ -3,8 +3,10 @@ package hub
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -35,6 +37,7 @@ type Hub struct {
 	Store      *store.Store
 	Log        *eventlog.Log
 	Auth       *auth.Auth
+	Models     *models.Registry
 	Supervisor *supervisor.Supervisor
 	Effects    *effects.Runner
 	Nodes      *nodehub.Hub
@@ -65,26 +68,24 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		st.Close()
 		return nil, err
 	}
-	providers := map[string]provider.Provider{}
-	for _, pc := range cfg.Providers {
-		p, err := provider.New(provider.Config{Name: pc.Name, Kind: pc.Kind, BaseURL: pc.BaseURL, APIKey: pc.APIKey()})
-		if err != nil {
-			st.Close()
-			return nil, fmt.Errorf("provider %s: %w", pc.Name, err)
-		}
-		if pc.Kind != "mock" && pc.APIKey() == "" {
-			slog.Warn("provider has no API key", "provider", pc.Name, "env", pc.APIKeyEnv)
-		}
-		providers[pc.Name] = provider.WithRetry(p, 3, 2*time.Second)
+	// Models are configured on the page and kept in the database; hub.yaml's
+	// providers and roles are imported on the first start.
+	h.Models = models.New(h.Log)
+	h.Models.Wrap = func(p provider.Provider) provider.Provider { return provider.WithRetry(p, 3, 2*time.Second) }
+	if err := h.Models.Seed(context.Background(), cfg); err != nil {
+		st.Close()
+		return nil, fmt.Errorf("import models from hub.yaml: %w", err)
+	}
+	if !h.Models.Configured(context.Background(), config.RoleSupervisor) {
+		slog.Warn("no model is configured for the supervisor yet: add a provider in Settings → Models")
 	}
 	if h.Nodes, err = nodehub.New(h.Log, cfg.DataDir); err != nil {
 		st.Close()
 		return nil, err
 	}
-	role := func(r string) task.Model {
-		p, m := cfg.Model(r)
-		return task.Model{Provider: providers[p], Name: m}
-	}
+	h.Nodes.Owner, h.Nodes.Fresh = h.Auth.Owner, h.Auth.RequireFresh
+	// Each role's provider looks up its current model on every call.
+	role := func(r string) task.Model { return task.Model{Provider: h.Models.For(r), Name: r} }
 	h.Watchdog = watchdog.New()
 	h.Tasks = task.New(h.Log, h.Nodes)
 	h.Tasks.Reviewer, h.Tasks.Approver = role(config.RoleReviewer), role(config.RoleApprover)
@@ -142,7 +143,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	h.Effects.Handle(store.EffectApprove, h.Tasks.Approve)
 	h.Effects.Handle(store.EffectSetup, h.Tasks.Setup)
 	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(cfg.Roles),
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(h.Models.RoleRefs), h.Models.Routes(h.Auth.RequireFresh),
 		h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes))
 	h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
 	h.Nodes.DeviceRoutes(h.HTTP.Mux())
@@ -182,9 +183,17 @@ func (h *Hub) Run(ctx context.Context) error {
 		go h.Watchdog.Run(runCtx)
 	}
 
-	srv := &http.Server{Addr: h.Cfg.Listen, Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: h.Cfg.Listen, Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10,
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() {
+		if h.Cfg.TLS() {
+			errCh <- srv.ListenAndServeTLS(h.Cfg.TLSCert, h.Cfg.TLSKey)
+			return
+		}
+		errCh <- srv.ListenAndServe()
+	}()
 	slog.Info("sous-hub listening", "addr", h.Cfg.Listen, "public_url", h.Cfg.PublicURL, "dev", h.Cfg.Dev)
 
 	select {

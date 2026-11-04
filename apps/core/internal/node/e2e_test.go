@@ -3,6 +3,8 @@ package node_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -41,6 +43,9 @@ type env struct {
 	main string
 	root string // the node's ~/.sous
 	cfg  node.Config
+	// engine serves the task and project endpoints (not started: tests
+	// that need it running use newTaskEnv).
+	engine *task.Engine
 }
 
 func newEnv(t *testing.T) *env {
@@ -56,12 +61,14 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := httpapi.New(cfg, log, a, hub.Routes)
+	hub.Owner, hub.Fresh = a.Owner, a.RequireFresh
+	engine := task.New(log, hub)
+	api := httpapi.New(cfg, log, a, hub.Routes, engine.Routes)
 	api.DeviceRoutes(hub.DeviceAuth)
 	hub.DeviceRoutes(api.Mux())
 	srv := httptest.NewServer(api)
 	main, _ := log.EnsureMainThread(context.Background())
-	e := &env{t: t, srv: srv, log: log, hub: hub, main: main, root: t.TempDir()}
+	e := &env{t: t, srv: srv, log: log, hub: hub, main: main, root: t.TempDir(), engine: engine}
 	t.Cleanup(func() { srv.Close(); st.Close() })
 
 	code, _ := hub.NewPairingCode()
@@ -341,6 +348,27 @@ func TestRevokedMachineIsDisconnected(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond) // the daemon retries; the Hub must keep refusing it
 	if e.hub.Online(e.cfg.NodeID) {
 		t.Fatal("revoked machine reconnected")
+	}
+}
+
+// Wrong codes in a row burn every outstanding code, so six digits cannot be
+// guessed.
+func TestPairingCodesBurnAfterWrongGuesses(t *testing.T) {
+	e := newEnv(t)
+	code, _ := e.hub.NewPairingCode()
+	for i := 0; i < 5; i++ {
+		guess := fmt.Sprintf("%06d", i)
+		if guess == code {
+			guess = "999999"
+		}
+		node.Pair(context.Background(), t.TempDir(), e.srv.URL, guess, "x")
+	}
+	if _, err := node.Pair(context.Background(), t.TempDir(), e.srv.URL, code, "a"); err == nil {
+		t.Fatal("a code survived five wrong guesses")
+	}
+	fresh, _ := e.hub.NewPairingCode()
+	if _, err := node.Pair(context.Background(), t.TempDir(), e.srv.URL, fresh, "b"); err != nil {
+		t.Fatalf("a new code after the lockout: %v", err)
 	}
 }
 

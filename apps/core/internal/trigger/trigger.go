@@ -210,7 +210,7 @@ func (s *Scheduler) Followups(ctx context.Context) {
 	}
 
 	// Questions first: a follow-up in the same thread becomes its last message.
-	threads, _ := st.Threads(ctx)
+	threads, _ := st.AllThreads(ctx)
 	for _, th := range threads {
 		msgs, err := st.Messages(ctx, th.ID, 0, 1)
 		if err != nil || len(msgs) == 0 {

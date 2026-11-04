@@ -55,3 +55,17 @@ type MessageContext struct {
 	ProjectID string `json:"project_id,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
 }
+
+// ProjectRepoOp records a sync or WIP save of a project's checkout that
+// the user asked for from the page (multi-machine-sync).
+const ProjectRepoOp Type = "project.repo_op"
+
+type ProjectRepoOpPayload struct {
+	ProjectID string `json:"project_id"`
+	NodeID    string `json:"node_id"`
+	Path      string `json:"path"`
+	Op        string `json:"op"` // repo.sync / repo.wip
+	Outcome   string `json:"outcome"`
+	Message   string `json:"message"`
+	Branch    string `json:"branch,omitempty"`
+}

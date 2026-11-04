@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,13 +88,52 @@ func Describe(ctx context.Context, dir string) proto.Repo {
 			}
 		}
 	}
-	if b, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		r.Branch = strings.TrimSpace(b)
-	}
-	if st, err := git(ctx, dir, "status", "--porcelain"); err == nil {
-		r.Dirty = strings.TrimSpace(st) != ""
+	r.Branch, r.Git = State(ctx, dir)
+	r.Dirty = r.Git != nil && r.Git.Changes+r.Git.Untracked > 0
+	if r.Branch == "" {
+		if b, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+			r.Branch = strings.TrimSpace(b)
+		}
 	}
 	return r
+}
+
+// State reads a checkout's branch and where it stands against its upstream,
+// from one `git status`, without network access. Nil when git fails.
+func State(ctx context.Context, dir string) (branch string, st *proto.GitState) {
+	out, err := git(ctx, dir, "status", "--porcelain=v2", "--branch")
+	if err != nil {
+		return "", nil
+	}
+	st = &proto.GitState{}
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "# branch.oid "):
+			if oid := strings.TrimPrefix(line, "# branch.oid "); oid != "(initial)" {
+				st.Head = oid
+			}
+		case strings.HasPrefix(line, "# branch.head "):
+			if h := strings.TrimPrefix(line, "# branch.head "); h != "(detached)" {
+				branch = h
+			} else {
+				branch = "HEAD"
+			}
+		case strings.HasPrefix(line, "# branch.upstream "):
+			st.Upstream = strings.TrimPrefix(line, "# branch.upstream ")
+		case strings.HasPrefix(line, "# branch.ab "):
+			fmt.Sscanf(strings.TrimPrefix(line, "# branch.ab "), "+%d -%d", &st.Ahead, &st.Behind)
+		case strings.HasPrefix(line, "? "):
+			st.Untracked++
+		case line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "!"):
+			st.Changes++
+		}
+	}
+	if gitDir, err := git(ctx, dir, "rev-parse", "--absolute-git-dir"); err == nil {
+		if fi, err := os.Stat(filepath.Join(gitDir, "FETCH_HEAD")); err == nil {
+			st.FetchedAt = fi.ModTime().UnixMilli()
+		}
+	}
+	return branch, st
 }
 
 // IsWokspace reports whether dir follows the wokspace layout: an AGENTS.md

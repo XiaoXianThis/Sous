@@ -333,3 +333,33 @@ func TestMemoriesCRUD(t *testing.T) {
 		t.Fatalf("delete twice: %d", code)
 	}
 }
+
+func TestSecurityHeaders(t *testing.T) {
+	e := newEnv(t, false)
+	resp, err := e.client.Get(e.srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"script-src 'self';", "frame-ancestors 'none'", "connect-src 'self' ws://localhost:8787"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP %q lacks %q", csp, want)
+		}
+	}
+	if resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("headers %v", resp.Header)
+	}
+	if resp.Header.Get("Strict-Transport-Security") != "" {
+		t.Error("HSTS over plain http")
+	}
+}
+
+func TestRequestBodyIsCapped(t *testing.T) {
+	e := newEnv(t, true)
+	e.login(t)
+	huge := map[string]string{"title": strings.Repeat("x", 5<<20)}
+	if code := e.do(t, "POST", "/api/v1/threads", huge, nil); code != 400 {
+		t.Fatalf("5 MB body: %d", code)
+	}
+}

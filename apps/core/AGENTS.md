@@ -48,6 +48,7 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 - daemon 的本地接口在 `<home>/daemon.sock`：同一个 home 只能跑一个 daemon。`sous chat --home <同一个目录>` 连它。
 - ACP 的通知在读循环里同步处理（保证顺序），通知回调不能阻塞；会阻塞的只有请求（权限）。
 - agent 的会话模式名各家不同：`internal/agents` 的 `AskMode` / `OpenMode` 指定要切到哪个模式（Cursor 是 `agent`，它的 `ask` 是只读问答）；不指定时 `node.pickMode` 按常见的名字猜。
+- 项目对话：`threads.project_id`（迁移 8）非空、`kind: project` 的线程。`store.Threads` 只列一般线程，`ProjectThreads` 列某个项目的，`AllThreads`（跟进用）列全部。主管在项目对话里把 `tool.Turn.ProjectID` 设成这个项目：提示词加“作用域”一节，`Engine.Environment` 只列这个项目和它的未关闭任务，任务工具用 `scopeOf` / `checkScope` 拒绝别的项目（`task_create` 不填项目时用它，`project_create` 和新登记项目直接拒绝）。新加任务工具时记得同样检查作用域。
 - M5（`work/specs/m5-workbench`，`docs/architecture/workbench.md`）：
   - 项目的身份是 `internal/project.Key(远端地址)`（纯函数，Hub 和 Node 共用）；内置项目 `misc`（`project.MiscID`）由 `task.Engine.Seed` 在启动时补上，内置岗位只在第一次启动时创建（`settings.personas_seeded`）。都走事件，不在迁移里插数据。
   - `project_nodes.source = scan` 的行由 `node.repos` 投影自动维护（`store/workbench.go` 的 `linkScans`），`project.put` 会重新整理；手填的（`manual`）不受扫描影响。扫描用 `git config --get remote.<名>.url`，不经过 insteadOf 改写。
@@ -56,6 +57,13 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
   - 运维任务（`kind: ops`）：router 只派到服务器（`Request.Role`），部署目标的目录通过 `Request.Path` + `NodePref` 指定；Node 用 `workspace.PrepareInPlace`，不建 worktree、不传 diff；引擎成功后直接完成，不验收。worktree 清理跳过 ops Run。
   - 新建 / clone 项目是 `purpose: create|clone` 的 Run（agent 为 `sous`，`prompt` 是项目 id），在 `node/workbench.go` 里执行写死的命令并逐条过策略；结束后 effects 队列的 `project.setup` 由 `task.Engine.Setup` 给项目加上位置并汇报。
   - 合并后自动部署：`task.Engine.CheckMerges`（启动 30 秒后一次，之后每 5 分钟）用 `node.request gh.pr_state` 查 PR，按 `settings` 的 `deploy:<任务 id>` 只触发一次。
+  - 项目归档：`project.archived` 事件只改 `projects.archived_at`（`project.put` 不碰它），`task.Engine.ArchiveProject` 拒绝 `misc` 和有排队 / 执行中 / 等审批任务的项目；`Create` 往已归档项目里建任务时先激活它。`Environment` 只详细列激活的项目。`store.Project.TouchedAt` 是项目和它的任务的 `updated_at` 的最大值。
   - 任务执行中 `next` 记着当前 Run 的用途（`keepNext`），前端据此画阶段。
   - `mock/verdict` 模型回固定的 JSON 结论（验收通过、审批交给用户），离线跑通完整闭环时把 reviewer、approver、inspector 设成它。
+- 项目终端（`docs/decisions/0015`）：Node 侧 `node/shell.go`（`shell.open` / `shell.list`，作业 `kind: shell`，`shell_unix.go` / `shell_windows.go` 选 shell），Hub 侧 `task/workbench_routes.go` 的 `/projects/{id}/shells`。终端属于登录会话：`auth.Owner` 从会话令牌推导 owner，Hub 在所有 `job.*` 请求里带上，Node 用 `job.ownedBy` 检查。打开终端要 `RequireFresh`（15 分钟内验证过 Passkey，否则 401 `reauth`）；已登录时再登录只调用 `store.RefreshSession`，不换会话。`internal/node/shell_e2e_test.go` 覆盖打开、输入、别的会话拿不到、输出不入库、关闭和拒绝的情形。
+- 安全约束（改动前先读 0015）：`/device/ws` 用 `httpapi.deviceEvent` 白名单过滤；新事件类型默认不发给设备令牌。`httpapi.secureHeaders` 给所有回答加 CSP 等头，页面不能有内联脚本（主题脚本在 `web/public/theme-init.js`）。请求体在 `ServeHTTP` 里统一限制 4 MB。`mergeNodeConfig` 里远程编辑 node.json 只能收紧安全设置，加新的安全开关时同样保留磁盘上的值。配对码连续 5 次错误作废全部（`nodehub.takeCode`）。`config.Validate` 拒绝没有 TLS 的非回环 `listen`（`tls_cert` / `tls_key` 或 `insecure_listen`）。
+- 代码任务的 worktree 从远端最新代码开始（`workspace.PrepareTaskOn` 的 `startPoint`：fetch origin，分支建在 `origin/<base>` 上，失败时退回本地 HEAD 并在 `Prepared.Note` 里说明）。测试里的仓库没有 origin 或 origin 为空时行为和以前一样；要测“机器落后远端”，参考 `TestTaskStartsFromRemoteLatest`。
+- 模型配置（`docs/decisions/0016`）：`internal/models`。供应商在 `model_providers`、Key 在 `model_keys`、角色在 settings 的 `models.roles`（`store/models.go`，不走事件日志，只追加不含密钥的 `models.changed`）。各角色的 provider 是 `Registry.For(角色)`，每次调用时解析（没单独选的跟主管），`models.Usable` 判断角色有没有模型；用量记录用 `provider.ModelOf(resp, …)` 取实际的模型。`hub.yaml` 的 providers / roles / efforts 只在第一次启动时由 `Registry.Seed` 导入。供应商的增删改要 `RequireFresh`，Key 永远不出现在回答里（`models_test.go` 检查）。
+- 多机同步（`work/specs/multi-machine-sync`）：位置状态 `workspace.State`（`git status --porcelain=v2 --branch`），扫描带上 `proto.Repo.Git`，Hub 存在 `repo_scans.git` 并在读项目时接到 `ProjectNode.Git`；daemon 的 `fetchLoop` 每 10 分钟 fetch（`auto_fetch: false` 关掉）；`repo.sync` / `repo.wip` 在 `workspace/repo.go`；并行任务改到同一文件时 `task/overlap.go` 在验收前给主管发一次提醒。`internal/node/repo_e2e_test.go`、`TestOverlappingTasksAreReported` 覆盖。
+- 模型的思考强度：`hub.yaml` 的 `efforts: {角色: low|medium|high|xhigh|max}`，`provider.WithEffort` 包在角色的 provider 外面；openai-chat 发 `reasoning_effort`，openai-responses 发 `reasoning.effort`（`max` 发成 `xhigh`），anthropic 发 `output_config.effort`（不改 `thinking`，工具循环没有回传 thinking 签名）。
 - 不要把 agent 的 ACP 适配器版本写成 `latest`：`internal/agents` 里固定了版本号，升级时要实测后再改。

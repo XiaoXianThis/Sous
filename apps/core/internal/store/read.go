@@ -44,16 +44,32 @@ type Thread struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Kind      string `json:"kind"`
+	ProjectID string `json:"project_id,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 	Archived  bool   `json:"archived"`
 }
 
-// Threads lists threads, the main thread first, then most recently updated.
+// Threads lists the general threads (not project chats), the main thread
+// first, then most recently updated.
 func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, kind, created_at, updated_at, archived FROM threads
-		 WHERE archived = 0 ORDER BY kind = 'main' DESC, updated_at DESC`)
+	return s.threads(ctx, `WHERE archived = 0 AND project_id = '' ORDER BY kind = 'main' DESC, updated_at DESC`)
+}
+
+// ProjectThreads lists a project's chats, most recently updated first.
+func (s *Store) ProjectThreads(ctx context.Context, projectID string) ([]Thread, error) {
+	return s.threads(ctx, `WHERE archived = 0 AND project_id = ? ORDER BY updated_at DESC`, projectID)
+}
+
+// AllThreads lists every open thread, project chats included.
+func (s *Store) AllThreads(ctx context.Context) ([]Thread, error) {
+	return s.threads(ctx, `WHERE archived = 0 ORDER BY updated_at DESC`)
+}
+
+const threadCols = `id, title, kind, project_id, created_at, updated_at, archived`
+
+func (s *Store) threads(ctx context.Context, where string, args ...any) ([]Thread, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+threadCols+` FROM threads `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +77,7 @@ func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
 	out := []Thread{}
 	for rows.Next() {
 		var t Thread
-		if err := rows.Scan(&t.ID, &t.Title, &t.Kind, &t.CreatedAt, &t.UpdatedAt, &t.Archived); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Kind, &t.ProjectID, &t.CreatedAt, &t.UpdatedAt, &t.Archived); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -72,8 +88,8 @@ func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
 func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 	var t Thread
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, title, kind, created_at, updated_at, archived FROM threads WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Kind, &t.CreatedAt, &t.UpdatedAt, &t.Archived)
+		`SELECT `+threadCols+` FROM threads WHERE id = ?`, id).
+		Scan(&t.ID, &t.Title, &t.Kind, &t.ProjectID, &t.CreatedAt, &t.UpdatedAt, &t.Archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}

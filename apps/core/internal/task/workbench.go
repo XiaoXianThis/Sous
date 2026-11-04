@@ -277,6 +277,40 @@ func (e *Engine) PutProject(ctx context.Context, in ProjectInput, actor string) 
 	return e.store().Project(ctx, in.ID)
 }
 
+// inflightStatuses are the task statuses that keep a project from being
+// archived: an agent is (or is about to be) working on it.
+var inflightStatuses = []string{event.TaskQueued, event.TaskRunning, event.TaskWaitingApproval}
+
+// ArchiveProject archives a project (archived) or makes it active again.
+// Archived projects leave the workbench and the supervisor's environment;
+// the built-in misc project and projects with work in flight stay active.
+func (e *Engine) ArchiveProject(ctx context.Context, id string, archived bool, actor string) (store.Project, error) {
+	p, err := e.store().Project(ctx, id)
+	if err != nil {
+		return store.Project{}, err
+	}
+	if p.Archived() == archived {
+		return p, nil
+	}
+	if archived {
+		if p.ID == projectkey.MiscID {
+			return store.Project{}, fmt.Errorf("%w: 内置的“杂项”项目不能归档", ErrConflict)
+		}
+		busy, err := e.store().Tasks(ctx, store.TaskFilter{ProjectID: p.ID, Statuses: inflightStatuses, Limit: 1})
+		if err != nil {
+			return store.Project{}, err
+		}
+		if len(busy) > 0 {
+			return store.Project{}, fmt.Errorf("%w: 项目「%s」还有正在执行的任务（%s），等它结束或取消后再归档", ErrConflict, p.Name, busy[0].Title)
+		}
+	}
+	if _, err := e.Log.Append(ctx, event.New(event.ProjectArchived, actor, "",
+		event.ProjectArchivedPayload{ProjectID: p.ID, Archived: archived})); err != nil {
+		return store.Project{}, err
+	}
+	return e.store().Project(ctx, p.ID)
+}
+
 // SetupInput asks for a project to be created or cloned on a machine.
 type SetupInput struct {
 	ProjectID string // clone: the project; create: empty (a new one is made)

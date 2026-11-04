@@ -331,3 +331,58 @@ func quoteArgs(args []string) []string {
 	}
 	return out
 }
+
+// fetchEvery is how often the repositories are fetched in the background.
+const fetchEvery = 10 * time.Minute
+
+// fetchLoop fetches every repository in the workspaces that has an origin,
+// one at a time, then reports the scan, so the Hub knows which checkouts
+// are behind. Fetching only updates remote-tracking branches.
+func (d *Daemon) fetchLoop(ctx context.Context) {
+	t := time.NewTimer(time.Minute) // not all at once with the first scan
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if c := d.conf(); c.AutoFetch == nil || *c.AutoFetch {
+			fetched := 0
+			for _, r := range workspace.Scan(ctx, c.WorkspaceDirs()) {
+				if r.Remote == "" || ctx.Err() != nil {
+					continue
+				}
+				if _, err := workspace.Fetch(ctx, r.Path); err == nil {
+					fetched++
+				}
+			}
+			if fetched > 0 {
+				d.rescan()
+			}
+		}
+		t.Reset(fetchEvery)
+	}
+}
+
+// repoOp syncs a project checkout with its upstream, or saves its
+// uncommitted work to a branch on the remote. The commands are fixed; the
+// directory follows the rules of the project file endpoints.
+func (a *admin) repoOp(ctx context.Context, op, root string) (any, error) {
+	dir, _, _, err := a.projectPath(proto.ProjectArgs{Root: root})
+	if err != nil {
+		return nil, err
+	}
+	var res proto.RepoResult
+	if op == proto.OpRepoSync {
+		res, err = workspace.Sync(ctx, dir)
+	} else {
+		res, err = workspace.WIP(ctx, dir, a.d.conf().Name)
+	}
+	if err != nil {
+		return nil, nodeErr(proto.ErrCodeFailed, "%v", err)
+	}
+	slog.Info("daemon: repository "+op, "dir", dir, "outcome", res.Outcome)
+	a.d.rescan()
+	return res, nil
+}

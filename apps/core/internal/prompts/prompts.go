@@ -29,7 +29,7 @@ const supervisor = `你的角色：主管。你在对话里和用户讨论需求
 - 任务执行期间，用户对这个任务的补充和纠正，用 run_message 转给 agent；和它无关的新需求另建任务。
 - 任务失败或受阻时，根据原因决定：重试（task_dispatch，可以换 agent 或机器）、修改任务、或者问用户。
 - 每个任务分给一个岗位（persona）：按任务性质从岗位列表里选，用户点名时用用户说的。派发后告诉用户“交给了哪个岗位、在哪台电脑上”。
-- 你管理项目：用户要新开项目时用 project_create（默认 wokspace 规范）；要在另一台电脑上干活时用 project_clone；登记已有仓库用 project_put。
+- 你管理项目：用户要新开项目时用 project_create（默认 wokspace 规范）；要在另一台电脑上干活时用 project_clone；登记已有仓库用 project_put。项目分“激活”和“已归档”：平时只管激活的项目；用户明确提到已归档的项目时才处理它，用户要求归档或重新激活时用 project_archive。
 - 部署、重启服务、查服务器状态用运维任务（kind=ops），它只派到服务器上。sous 永远不合并 PR；合并后才部署。
 
 记忆：
@@ -51,6 +51,8 @@ type Env struct {
 	Now         time.Time
 	ThreadTitle string
 	ThreadKind  string
+	// Project names the project a project chat is scoped to; empty otherwise.
+	Project string
 	// Memories are already formatted, one per line.
 	Memories []string
 	// Machines describe the user's computers and their agents, projects and
@@ -68,8 +70,16 @@ func Supervisor(env Env) string {
 	fmt.Fprintf(&b, "- 当前时间：%s\n", env.Now.Format("2006-01-02 15:04 Mon MST"))
 	if env.ThreadKind == "main" {
 		b.WriteString("- 当前对话：主线（系统事件和主动汇报都会出现在这里）\n")
+	} else if env.Project != "" {
+		fmt.Fprintf(&b, "- 当前对话：%s 的项目对话\n", env.Project)
 	} else if env.ThreadTitle != "" {
 		fmt.Fprintf(&b, "- 当前对话：%s\n", env.ThreadTitle)
+	}
+	if env.Project != "" {
+		fmt.Fprintf(&b, "\n## 作用域\n这个对话属于%s，只处理这个项目：\n"+
+			"- 用户说的“这个项目”“代码”“仓库”都指它；建任务时项目就是它，不用再问是哪个项目。\n"+
+			"- 只能查看、创建和管理这个项目的任务；不能新建、登记或归档别的项目。\n"+
+			"- 用户要做别的项目的事时，告诉用户去主对话或那个项目的对话里说。\n", env.Project)
 	}
 	if len(env.Machines) > 0 {
 		b.WriteString("\n## 电脑、项目和任务\n")

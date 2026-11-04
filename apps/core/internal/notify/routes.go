@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 
 // Routes serves push subscriptions and the settings page's data. Roles maps
 // each model role to its "provider/model", shown read-only.
-func (n *Notifier) Routes(roles map[string]string) func(*http.ServeMux, func(string, http.HandlerFunc)) {
+func (n *Notifier) Routes(roles func(context.Context) map[string]string) func(*http.ServeMux, func(string, http.HandlerFunc)) {
 	return func(mux *http.ServeMux, protect func(string, http.HandlerFunc)) {
 		protect("GET /api/v1/push/vapid-public-key", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"key": n.Sender.VAPID.Public})
@@ -98,7 +99,7 @@ type settingsView struct {
 	Devices      int               `json:"push_devices"`
 }
 
-func (n *Notifier) view(r *http.Request, roles map[string]string) settingsView {
+func (n *Notifier) view(r *http.Request, roles func(context.Context) map[string]string) settingsView {
 	ctx := r.Context()
 	st := n.Log.Store
 	mode, _ := st.Setting(ctx, task.SettingDefaultMode)
@@ -107,16 +108,16 @@ func (n *Notifier) view(r *http.Request, roles map[string]string) settingsView {
 	}
 	agent, _ := st.Setting(ctx, task.SettingDefaultAgent)
 	subs, _ := st.PushSubscriptions(ctx)
-	return settingsView{DefaultMode: mode, DefaultAgent: agent, Notify: Kinds(ctx, st), Quiet: QuietHours(ctx, st), Roles: roles, Devices: len(subs)}
+	return settingsView{DefaultMode: mode, DefaultAgent: agent, Notify: Kinds(ctx, st), Quiet: QuietHours(ctx, st), Roles: roles(ctx), Devices: len(subs)}
 }
 
-func (n *Notifier) getSettings(w http.ResponseWriter, r *http.Request, roles map[string]string) {
+func (n *Notifier) getSettings(w http.ResponseWriter, r *http.Request, roles func(context.Context) map[string]string) {
 	writeJSON(w, http.StatusOK, n.view(r, roles))
 }
 
 // patchSettings changes the fields present in the body. API keys are never
 // settings: they stay in the Hub's environment (requirements R9.2).
-func (n *Notifier) patchSettings(w http.ResponseWriter, r *http.Request, roles map[string]string) {
+func (n *Notifier) patchSettings(w http.ResponseWriter, r *http.Request, roles func(context.Context) map[string]string) {
 	var b struct {
 		DefaultMode  *string         `json:"default_mode"`
 		DefaultAgent *string         `json:"default_agent"`

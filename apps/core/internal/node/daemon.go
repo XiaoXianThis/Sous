@@ -217,6 +217,7 @@ func (d *Daemon) session(ctx context.Context) error {
 	d.reconcile(welcome.ResumeRuns)
 	go d.inventoryLoop(sctx)
 	go d.reposLoop(sctx)
+	go d.fetchLoop(sctx)
 	slog.Info("daemon: connected to Hub", "hub", cfg.HubURL, "node", welcome.NodeID, "pending", d.ob.pendingCount())
 	select {
 	case d.connected <- struct{}{}:

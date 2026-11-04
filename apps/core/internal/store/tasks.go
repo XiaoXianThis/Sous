@@ -9,6 +9,7 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 )
 
 // Effect kinds enqueued by projections.
@@ -171,6 +172,17 @@ func projectTask(w *Writer, ev event.Event) error {
 			return err
 		}
 		return exec(`DELETE FROM projects WHERE id = ?`, p.ProjectID)
+
+	case event.ProjectArchived:
+		var p event.ProjectArchivedPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		at := int64(0)
+		if p.Archived {
+			at = ev.TS
+		}
+		return exec(`UPDATE projects SET archived_at = ? WHERE id = ?`, at, p.ProjectID)
 	}
 	return nil
 }
@@ -334,12 +346,20 @@ type Project struct {
 	Notes          string        `json:"notes"`
 	Layout         string        `json:"layout"`
 	Deploy         *event.Deploy `json:"deploy"`
+	// ArchivedAt is when the project was archived; 0 means it is active.
+	ArchivedAt int64 `json:"archived_at"`
+	// TouchedAt is when the project or any of its tasks last changed.
+	TouchedAt int64 `json:"touched_at"`
 }
+
+// Archived reports whether the project is archived.
+func (p Project) Archived() bool { return p.ArchivedAt > 0 }
 
 // Projects lists projects by name, each with its machines in priority order.
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, repo_url, default_mode, default_agent, created_at, updated_at, remote_key, default_persona, notes, layout, deploy
+		`SELECT id, name, repo_url, default_mode, default_agent, created_at, updated_at, remote_key, default_persona, notes, layout, deploy,
+		   archived_at, MAX(updated_at, COALESCE((SELECT MAX(t.updated_at) FROM tasks t WHERE t.project_id = projects.id), 0))
 		 FROM projects ORDER BY id = 'misc', name`)
 	if err != nil {
 		return nil, err
@@ -350,7 +370,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 		var p Project
 		var deploy string
 		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultMode, &p.DefaultAgent, &p.CreatedAt, &p.UpdatedAt,
-			&p.RemoteKey, &p.DefaultPersona, &p.Notes, &p.Layout, &deploy); err != nil {
+			&p.RemoteKey, &p.DefaultPersona, &p.Notes, &p.Layout, &deploy, &p.ArchivedAt, &p.TouchedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -365,7 +385,8 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 		out = append(out, p)
 	}
 	rows.Close()
-	nodes, err := s.db.QueryContext(ctx, `SELECT project_id, node_id, path, priority, source FROM project_nodes ORDER BY priority, node_id`)
+	nodes, err := s.db.QueryContext(ctx, `SELECT pn.project_id, pn.node_id, pn.path, pn.priority, pn.source, COALESCE(s.git, '')
+		FROM project_nodes pn LEFT JOIN repo_scans s ON s.node_id = pn.node_id AND s.path = pn.path ORDER BY pn.priority, pn.node_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -373,8 +394,15 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	for nodes.Next() {
 		var pid string
 		var n event.ProjectNode
-		if err := nodes.Scan(&pid, &n.NodeID, &n.Path, &n.Priority, &n.Source); err != nil {
+		var gitState string
+		if err := nodes.Scan(&pid, &n.NodeID, &n.Path, &n.Priority, &n.Source, &gitState); err != nil {
 			return nil, err
+		}
+		if gitState != "" {
+			n.Git = &proto.GitState{}
+			if json.Unmarshal([]byte(gitState), n.Git) != nil {
+				n.Git = nil
+			}
 		}
 		if i, ok := idx[pid]; ok {
 			out[i].Nodes = append(out[i].Nodes, n)

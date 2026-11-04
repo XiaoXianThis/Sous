@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,10 @@ import (
 const (
 	pairingCodeTTL = 10 * time.Minute
 	sendBuffer     = 256
+	// maxPairFailures wrong codes in a row burn every outstanding code, so
+	// six digits cannot be guessed: an attacker gets this many tries out
+	// of a million per code the user creates.
+	maxPairFailures = 5
 )
 
 var (
@@ -42,10 +47,33 @@ type Hub struct {
 	log     *eventlog.Log
 	runsDir string
 
-	mu    sync.Mutex
-	conns map[string]*nodeConn // by node id
-	codes map[string]time.Time // pairing code -> expiry
+	mu       sync.Mutex
+	conns    map[string]*nodeConn // by node id
+	codes    map[string]time.Time // pairing code -> expiry
+	failures int                  // wrong pairing codes since the last good one
+
+	// Set by the Hub from its auth: the login session a request belongs to
+	// (Owner, for shells), and the check that it logged in recently
+	// (Fresh, answering 401 itself when not).
+	Owner func(*http.Request) string
+	Fresh func(http.ResponseWriter, *http.Request) bool
 }
+
+func (h *Hub) owner(r *http.Request) string {
+	if h.Owner == nil {
+		return ""
+	}
+	return h.Owner(r)
+}
+
+// RequireFresh reports whether the request may do something that needs a
+// recent passkey login, and answers it otherwise.
+func (h *Hub) RequireFresh(w http.ResponseWriter, r *http.Request) bool {
+	return h.Fresh == nil || h.Fresh(w, r)
+}
+
+// SessionOwner is the opaque id of the request's login session.
+func (h *Hub) SessionOwner(r *http.Request) string { return h.owner(r) }
 
 // New creates the node hub. Run logs and diffs go to dataDir/runs.
 func New(log *eventlog.Log, dataDir string) (*Hub, error) {
@@ -83,7 +111,16 @@ func (h *Hub) takeCode(code string) bool {
 	defer h.mu.Unlock()
 	exp, ok := h.codes[code]
 	delete(h.codes, code)
-	return ok && time.Now().Before(exp)
+	if ok && time.Now().Before(exp) {
+		h.failures = 0
+		return true
+	}
+	h.failures++
+	if h.failures >= maxPairFailures && len(h.codes) > 0 {
+		slog.Warn("nodehub: too many wrong pairing codes, every outstanding code is revoked", "failures", h.failures)
+		clear(h.codes)
+	}
+	return false
 }
 
 // Pair registers a new machine and returns its device token.

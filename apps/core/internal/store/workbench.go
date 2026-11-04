@@ -52,8 +52,13 @@ func projectWorkbench(w *Writer, ev event.Event) error {
 			return err
 		}
 		for _, r := range p.Repos {
-			if err := exec(`INSERT OR REPLACE INTO repo_scans(node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at) VALUES (?,?,?,?,?,?,?,?)`,
-				p.NodeID, r.Path, r.Remote, projectkey.Key(r.Remote), r.Branch, r.Dirty, r.Wokspace, ev.TS); err != nil {
+			gitState := ""
+			if r.Git != nil {
+				raw, _ := json.Marshal(r.Git)
+				gitState = string(raw)
+			}
+			if err := exec(`INSERT OR REPLACE INTO repo_scans(node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at, git) VALUES (?,?,?,?,?,?,?,?,?)`,
+				p.NodeID, r.Path, r.Remote, projectkey.Key(r.Remote), r.Branch, r.Dirty, r.Wokspace, ev.TS, gitState); err != nil {
 				return err
 			}
 		}

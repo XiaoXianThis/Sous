@@ -29,11 +29,46 @@ const (
 
 // Repo is one git repository found in a workspace.
 type Repo struct {
-	Path     string `json:"path"`
-	Remote   string `json:"remote,omitempty"` // origin, else the first remote
-	Branch   string `json:"branch,omitempty"`
-	Dirty    bool   `json:"dirty,omitempty"`
-	Wokspace bool   `json:"wokspace,omitempty"` // AGENTS.md plus apps/ build/ docs/ work/
+	Path     string    `json:"path"`
+	Remote   string    `json:"remote,omitempty"` // origin, else the first remote
+	Branch   string    `json:"branch,omitempty"`
+	Dirty    bool      `json:"dirty,omitempty"`
+	Wokspace bool      `json:"wokspace,omitempty"` // AGENTS.md plus apps/ build/ docs/ work/
+	Git      *GitState `json:"git,omitempty"`
+}
+
+// GitState is where a checkout stands against its upstream
+// (work/specs/multi-machine-sync, R2). Read without network access; Behind
+// is as of the last fetch (FetchedAt).
+type GitState struct {
+	Head      string `json:"head,omitempty"`
+	Upstream  string `json:"upstream,omitempty"` // origin/main; empty when the branch tracks nothing
+	Ahead     int    `json:"ahead"`              // commits not pushed
+	Behind    int    `json:"behind"`             // commits on the upstream not here
+	Changes   int    `json:"changes"`            // tracked files with uncommitted changes
+	Untracked int    `json:"untracked"`
+	FetchedAt int64  `json:"fetched_at,omitempty"` // unix ms of the last fetch
+}
+
+// Repository operations from the page (node.request).
+const (
+	OpRepoSync = "repo.sync" // {root} -> RepoResult
+	OpRepoWIP  = "repo.wip"  // {root} -> RepoResult
+)
+
+type RepoArgs struct {
+	Root string `json:"root"`
+}
+
+// RepoResult is what repo.sync or repo.wip did.
+type RepoResult struct {
+	// Outcome: up_to_date / fast_forwarded / dirty / diverged / no_upstream
+	// (sync); pushed / nothing (wip).
+	Outcome string    `json:"outcome"`
+	Message string    `json:"message"`          // for the user
+	Branch  string    `json:"branch,omitempty"` // wip: the branch pushed
+	Commit  string    `json:"commit,omitempty"`
+	Git     *GitState `json:"git,omitempty"` // the checkout afterwards
 }
 
 type NodeRepos struct {

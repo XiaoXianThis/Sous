@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // Routes registers the auth endpoints under /api/v1/auth and /api/v1/me.
@@ -38,8 +41,14 @@ func (a *Auth) handleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	_, loggedIn := a.Session(r)
-	if loggedIn != nil && !a.validSetupToken(r.Context(), body.SetupToken) {
+	switch {
+	case a.validSetupToken(r.Context(), body.SetupToken):
+	case loggedIn != nil:
 		writeError(w, http.StatusForbidden, "setup_token", "注册链接无效或已过期，请在服务器上执行 sous-hub admin passkey-reset")
+		return
+	case !a.RequireFresh(w, r):
+		// Adding a passkey while logged in needs a recent passkey login,
+		// so a stolen cookie cannot plant a passkey of its own.
 		return
 	}
 	o, err := a.owner(r.Context())
@@ -96,7 +105,7 @@ func (a *Auth) handleLoginBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "no_passkey", "还没有注册 Passkey")
 		return
 	}
-	opts, data, err := a.wa.BeginLogin(o)
+	opts, data, err := a.wa.BeginLogin(o, webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "webauthn", err.Error())
 		return
@@ -123,6 +132,14 @@ func (a *Auth) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, _ := json.Marshal(cred) // keeps the updated sign count
 	a.st.PutCredential(r.Context(), string(cred.ID), string(raw))
+	// Verifying again while logged in refreshes the session in place, so
+	// what belongs to it (open shells) stays reachable.
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		if a.st.RefreshSession(r.Context(), hash(c.Value)) == nil {
+			writeJSON(w, map[string]bool{"ok": true})
+			return
+		}
+	}
 	if err := a.login(w, r); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -140,6 +157,10 @@ func (a *Auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *Auth) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	if !a.cfg.Dev || !isLoopback(r) {
 		writeError(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" && a.st.RefreshSession(r.Context(), hash(c.Value)) == nil {
+		writeJSON(w, map[string]bool{"ok": true})
 		return
 	}
 	if err := a.login(w, r); err != nil {

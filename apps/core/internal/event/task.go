@@ -1,5 +1,7 @@
 package event
 
+import "github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+
 // Task and project events (milestone M3).
 const (
 	TaskCreated  Type = "task.created"
@@ -9,6 +11,9 @@ const (
 
 	ProjectPut     Type = "project.put"
 	ProjectDeleted Type = "project.deleted"
+	// ProjectArchived archives a project or makes it active again. It is its
+	// own event so that project.put never touches the archived state.
+	ProjectArchived Type = "project.archived"
 
 	NotifySent Type = "notify.sent"
 )
@@ -113,6 +118,9 @@ type ProjectNode struct {
 	// Source is "scan" for a place found in the machine's workspaces, else
 	// "manual" (M5). Scan places come back on the next scan.
 	Source string `json:"source,omitempty"`
+	// Git is where the checkout stands, from the machine's last scan.
+	// Read only: filled in when projects are read, never stored in events.
+	Git *proto.GitState `json:"git,omitempty"`
 }
 
 // Deploy is where and how a project is deployed (M5).
@@ -136,6 +144,12 @@ type ProjectPayload struct {
 	Notes          string  `json:"notes,omitempty"`
 	Layout         string  `json:"layout,omitempty"` // wokspace / empty
 	Deploy         *Deploy `json:"deploy,omitempty"`
+}
+
+// ProjectArchivedPayload archives a project (Archived) or activates it.
+type ProjectArchivedPayload struct {
+	ProjectID string `json:"project_id"`
+	Archived  bool   `json:"archived"`
 }
 
 // NotifySentPayload records a push notification sent to the user's devices.

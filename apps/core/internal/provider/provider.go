@@ -84,6 +84,33 @@ type Request struct {
 	// SessionID is a stable id for one conversation. Gateways such as
 	// OpenCode Go use it for routing and prompt caching. Optional.
 	SessionID string
+	// Effort is the reasoning effort: low / medium / high / xhigh / max.
+	// Empty leaves the model's default. Each kind maps it to its own
+	// parameter; a model that does not reason may reject it.
+	Effort string
+}
+
+// Efforts are the reasoning levels a role may set.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// WithEffort makes every request of p use effort unless it sets its own.
+func WithEffort(p Provider, effort string) Provider {
+	if effort == "" || p == nil {
+		return p
+	}
+	return effortProvider{Provider: p, effort: effort}
+}
+
+type effortProvider struct {
+	Provider
+	effort string
+}
+
+func (e effortProvider) Stream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error) {
+	if req.Effort == "" {
+		req.Effort = e.effort
+	}
+	return e.Provider.Stream(ctx, req, onDelta)
 }
 
 // Delta is streamed while a response is generated.
@@ -102,6 +129,9 @@ type Usage struct {
 type Response struct {
 	Message Message
 	Usage   Usage
+	// Model is the model that answered, when the provider knows better
+	// than the request (a role whose model was switched meanwhile).
+	Model string
 }
 
 // Provider streams one model response. onDelta may be nil.
@@ -189,4 +219,12 @@ func (e *APIError) Error() string {
 		msg = string(r[:300]) + "…"
 	}
 	return fmt.Sprintf("HTTP %d: %s", e.Status, msg)
+}
+
+// ModelOf is the model that answered resp, else the one asked for.
+func ModelOf(resp Response, asked string) string {
+	if resp.Model != "" {
+		return resp.Model
+	}
+	return asked
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
@@ -194,6 +195,9 @@ func (e *Engine) review(ctx context.Context, taskID string, r store.Run) error {
 	if err != nil {
 		return err
 	}
+	if r.Purpose == event.PurposeWork || r.Purpose == event.PurposeRebase {
+		e.checkOverlap(ctx, t, r)
+	}
 	verdict, err := e.verdict(ctx, t, r)
 	if err != nil {
 		return err // the effect retries
@@ -236,7 +240,7 @@ func (e *Engine) review(ctx context.Context, taskID string, r store.Run) error {
 
 // verdict runs the reviewer model on the task and the run's full diff.
 func (e *Engine) verdict(ctx context.Context, t store.Task, r store.Run) (event.TaskReviewedPayload, error) {
-	if e.Reviewer.Provider == nil {
+	if !models.Usable(ctx, e.Reviewer.Provider) {
 		return event.TaskReviewedPayload{Pass: true, Reason: "没有配置验收模型，自动通过。" + r.DiffStat}, nil
 	}
 	var b strings.Builder
@@ -311,7 +315,7 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 			}
 		}
 	}
-	if e.Approver.Provider == nil || allow == "" {
+	if !models.Usable(ctx, e.Approver.Provider) || allow == "" {
 		return e.Nodes.Escalate(ctx, a.ID, "没有配置审批模型，交给你决定")
 	}
 	t, _ := e.store().Task(ctx, a.TaskID)
@@ -345,7 +349,7 @@ func (e *Engine) askJSON(ctx context.Context, m Model, role string, t store.Task
 		return err
 	}
 	ev := event.New(event.UsageRecorded, role, t.OriginThreadID, event.UsagePayload{
-		Provider: m.Provider.Name(), Model: m.Name, Role: role,
+		Provider: m.Provider.Name(), Model: provider.ModelOf(resp, m.Name), Role: role,
 		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, CachedTokens: resp.Usage.CachedTokens,
 	})
 	ev.TaskID = t.ID

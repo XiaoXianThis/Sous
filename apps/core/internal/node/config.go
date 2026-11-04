@@ -39,6 +39,14 @@ type Config struct {
 	// (installing agents, logging in, editing config files). Only this
 	// file can turn it off or on again. Default on.
 	RemoteAdmin *bool `json:"remote_admin,omitempty"`
+	// RemoteShell false refuses shells opened from the page (a terminal in
+	// a project's directory). Needs remote administration too. Only this
+	// file can change it. Default on.
+	RemoteShell *bool `json:"remote_shell,omitempty"`
+	// AutoFetch false stops the background `git fetch` of the repositories
+	// in the workspaces (every 10 minutes, so the page can say a checkout
+	// is behind). It never changes a checkout. Default on.
+	AutoFetch *bool `json:"auto_fetch,omitempty"`
 	// Role is "dev" (default) or "server" (M5, docs/decisions/0014). The
 	// Hub may turn a dev machine into a server, never back: only this file
 	// can.
@@ -86,6 +94,11 @@ func ExpandPath(p string) string {
 
 // AdminEnabled reports whether the Hub may administer this machine.
 func (c Config) AdminEnabled() bool { return c.RemoteAdmin == nil || *c.RemoteAdmin }
+
+// ShellEnabled reports whether the page may open shells on this machine.
+func (c Config) ShellEnabled() bool {
+	return c.AdminEnabled() && (c.RemoteShell == nil || *c.RemoteShell)
+}
 
 // Root is ~/.sous, where the config, worktrees and scratch directories live.
 // SOUS_HOME overrides it.

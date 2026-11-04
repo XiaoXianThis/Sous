@@ -8,6 +8,7 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	projectkey "github.com/XiaoXianThis/Sous/apps/core/internal/project"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
@@ -16,7 +17,7 @@ import (
 // Tools returns the supervisor's task tools.
 func (e *Engine) Tools() []tool.Tool {
 	return []tool.Tool{createTool{e}, updateTool{e}, cancelTool{e}, dispatchTool{e}, listTool{e}, runMessageTool{e}, runCancelTool{e},
-		projectPutTool{e}, projectCreateTool{e}, projectCloneTool{e}}
+		projectPutTool{e}, projectCreateTool{e}, projectCloneTool{e}, projectArchiveTool{e}}
 }
 
 type createTool struct{ e *Engine }
@@ -73,6 +74,13 @@ func (t createTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 			return "", err
 		}
 		in.ProjectID = p.ID
+	} else if pid := scopeOf(ctx); pid != "" {
+		in.ProjectID = pid // a project chat's tasks belong to its project
+	}
+	if a.Parent != "" {
+		if err := t.e.checkScope(ctx, a.Parent); err != nil {
+			return "", err
+		}
 	}
 	if a.Machine != "" {
 		id, err := t.e.findNode(ctx, a.Machine)
@@ -121,6 +129,9 @@ func (t updateTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 	}
 	if a.ID == nil {
 		return "", fmt.Errorf("id is required")
+	}
+	if err := t.e.checkScope(ctx, *a.ID); err != nil {
+		return "", err
 	}
 	f := event.TaskFields{Title: a.Title, Detail: a.Detail, Priority: a.Priority, AgentPref: a.Agent, PermissionMode: a.PermissionMode}
 	if a.Persona != nil {
@@ -178,6 +189,9 @@ func (t cancelTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
 	}
+	if err := t.e.checkScope(ctx, a.ID); err != nil {
+		return "", err
+	}
 	if err := t.e.Cancel(ctx, a.ID, a.Reason, event.ActorSupervisor); err != nil {
 		return "", err
 	}
@@ -200,6 +214,9 @@ func (dispatchTool) Spec() provider.ToolSpec {
 func (t dispatchTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct{ ID, Agent, Machine string }
 	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", err
+	}
+	if err := t.e.checkScope(ctx, a.ID); err != nil {
 		return "", err
 	}
 	node := ""
@@ -232,7 +249,7 @@ func (t listTool) Call(ctx context.Context, raw json.RawMessage) (string, error)
 	if len(a.Status) == 0 {
 		a.Status = openStatuses
 	}
-	tasks, err := t.e.store().Tasks(ctx, store.TaskFilter{Statuses: a.Status, Limit: 50})
+	tasks, err := t.e.store().Tasks(ctx, store.TaskFilter{Statuses: a.Status, ProjectID: scopeOf(ctx), Limit: 50})
 	if err != nil {
 		return "", err
 	}
@@ -267,6 +284,9 @@ func (t runMessageTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
 	}
+	if err := t.e.checkScope(ctx, a.Task); err != nil {
+		return "", err
+	}
 	r, err := t.e.activeRun(ctx, a.Task)
 	if err != nil {
 		return "", err
@@ -292,6 +312,9 @@ func (t runCancelTool) Call(ctx context.Context, raw json.RawMessage) (string, e
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
 	}
+	if err := t.e.checkScope(ctx, a.Task); err != nil {
+		return "", err
+	}
 	r, err := t.e.activeRun(ctx, a.Task)
 	if err != nil {
 		return "", err
@@ -313,6 +336,28 @@ func (e *Engine) activeRun(ctx context.Context, taskID string) (store.Run, error
 	return runs[len(runs)-1], nil
 }
 
+// scopeOf is the project a project chat's turn is limited to, or "".
+func scopeOf(ctx context.Context) string { return tool.TurnFrom(ctx).ProjectID }
+
+// errOutOfScope refuses work on another project from a project chat.
+var errOutOfScope = fmt.Errorf("%w: 这是项目对话，只能处理这个项目；别的项目请用户去主对话或那个项目的对话里说", ErrInvalid)
+
+// checkScope refuses a task outside the project chat's project.
+func (e *Engine) checkScope(ctx context.Context, taskID string) error {
+	pid := scopeOf(ctx)
+	if pid == "" {
+		return nil
+	}
+	t, err := e.store().Task(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("%w: 没有任务 %s", ErrInvalid, taskID)
+	}
+	if t.ProjectID != pid {
+		return errOutOfScope
+	}
+	return nil
+}
+
 func (e *Engine) findProject(ctx context.Context, ref string) (store.Project, error) {
 	ps, err := e.store().Projects(ctx)
 	if err != nil {
@@ -320,6 +365,9 @@ func (e *Engine) findProject(ctx context.Context, ref string) (store.Project, er
 	}
 	for _, p := range ps {
 		if p.ID == ref || strings.EqualFold(p.Name, strings.TrimSpace(ref)) {
+			if pid := scopeOf(ctx); pid != "" && p.ID != pid {
+				return store.Project{}, errOutOfScope
+			}
 			return p, nil
 		}
 	}
@@ -354,6 +402,10 @@ func describe(t store.Task) string {
 // for the supervisor's prompt, one line each.
 func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 	var out []string
+	scope := ""
+	if th, err := e.store().Thread(ctx, threadID); err == nil {
+		scope = th.ProjectID
+	}
 	personas, _ := e.store().Personas(ctx)
 	pname := map[string]string{}
 	for _, p := range personas {
@@ -370,19 +422,32 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 	for _, n := range nodes {
 		name[n.ID] = n.Name
 	}
+	var archived []string
+	active := 0
 	for _, p := range ps {
-		if p.ID == projectkey.MiscID {
+		if scope != "" && p.ID != scope {
+			continue // a project chat sees only its project
+		}
+		if p.ID == projectkey.MiscID && scope == "" {
 			continue
 		}
+		if p.Archived() && scope == "" {
+			archived = append(archived, fmt.Sprintf("%s（id %s）", p.Name, p.ID))
+			continue
+		}
+		active++
 		var where []string
 		for _, n := range p.Nodes {
-			where = append(where, fmt.Sprintf("%s:%s", name[n.NodeID], n.Path))
+			where = append(where, fmt.Sprintf("%s:%s%s", name[n.NodeID], n.Path, GitNote(n.Git)))
 		}
 		loc := strings.Join(where, " > ")
 		if loc == "" {
 			loc = "还不在任何机器上（可以用 project_clone 放到一台开发机上）"
 		}
 		line := fmt.Sprintf("项目 %s（id %s）：%s", p.Name, p.ID, loc)
+		if scope != "" && p.Notes != "" {
+			line += "，说明：" + p.Notes
+		}
 		if p.Layout == projectkey.LayoutWokspace {
 			line += "，wokspace 结构"
 		}
@@ -400,7 +465,13 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		}
 		out = append(out, line)
 	}
-	if len(ps) <= 1 {
+	if scope != "" {
+		return append(out, e.scopedTasks(ctx, scope, name)...)
+	}
+	if len(archived) > 0 {
+		out = append(out, fmt.Sprintf("已归档的项目（用户没有明确提到时不要管它们，也不要往里派任务；在已归档的项目里建任务会让它重新激活）：%s", strings.Join(archived, "、")))
+	}
+	if active == 0 && len(archived) == 0 {
 		out = append(out, "还没有登记任何项目；可以用 project_put 登记已有的仓库，或者用 project_create 新建一个（默认 wokspace 结构）。")
 	}
 	out = append(out, "新建项目默认使用 wokspace 规范（https://github.com/XiaoXianThis/wokspace）：用 project_create，除非用户明确要别的结构。")
@@ -409,6 +480,23 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		line := "这个对话里的" + describe(t)
 		if r, err := e.activeRun(ctx, t.ID); err == nil {
 			line += fmt.Sprintf("，%s 正在 %s 上执行（用户对它的补充用 run_message 转给 agent）", r.Agent, name[r.NodeID])
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// scopedTasks lists a project's open tasks for a project chat.
+func (e *Engine) scopedTasks(ctx context.Context, projectID string, nodeName map[string]string) []string {
+	tasks, _ := e.store().Tasks(ctx, store.TaskFilter{ProjectID: projectID, Statuses: openStatuses, Limit: 30})
+	if len(tasks) == 0 {
+		return []string{"这个项目现在没有未关闭的任务"}
+	}
+	var out []string
+	for _, t := range tasks {
+		line := "这个项目里的" + describe(t)
+		if r, err := e.activeRun(ctx, t.ID); err == nil {
+			line += fmt.Sprintf("，%s 正在 %s 上执行（用户对它的补充用 run_message 转给 agent）", r.Agent, nodeName[r.NodeID])
 		}
 		out = append(out, line)
 	}
@@ -469,6 +557,8 @@ func (t projectPutTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 			return "", err
 		}
 		in.ID = p.ID
+	} else if scopeOf(ctx) != "" {
+		return "", errOutOfScope
 	} else if a.Name == nil {
 		return "", fmt.Errorf("%w: 新项目需要 name", ErrInvalid)
 	}
@@ -501,6 +591,41 @@ func (t projectPutTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 	return fmt.Sprintf("已保存项目 %s（id %s），在 %d 台机器上", p.Name, p.ID, len(p.Nodes)), nil
 }
 
+type projectArchiveTool struct{ e *Engine }
+
+func (projectArchiveTool) Spec() provider.ToolSpec {
+	return provider.ToolSpec{
+		Name: "project_archive",
+		Description: "归档一个项目，或者把已归档的项目重新激活（archived=false）。归档的项目不出现在工作台上，平时不用管；" +
+			"只在用户明确要求时使用。还有正在执行的任务的项目不能归档。",
+		Schema: json.RawMessage(`{"type":"object","properties":{
+			"project":{"type":"string","description":"项目名或 id"},
+			"archived":{"type":"boolean","description":"true 归档，false 激活"}
+		},"required":["project","archived"]}`),
+	}
+}
+
+func (t projectArchiveTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct {
+		Project  string `json:"project"`
+		Archived bool   `json:"archived"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", err
+	}
+	p, err := t.e.findProject(ctx, a.Project)
+	if err != nil {
+		return "", err
+	}
+	if p, err = t.e.ArchiveProject(ctx, p.ID, a.Archived, event.ActorSupervisor); err != nil {
+		return "", err
+	}
+	if a.Archived {
+		return fmt.Sprintf("已归档项目 %s（id %s）", p.Name, p.ID), nil
+	}
+	return fmt.Sprintf("已激活项目 %s（id %s），它回到了工作台上", p.Name, p.ID), nil
+}
+
 type projectCreateTool struct{ e *Engine }
 
 func (projectCreateTool) Spec() provider.ToolSpec {
@@ -525,6 +650,9 @@ func (t projectCreateTool) Call(ctx context.Context, raw json.RawMessage) (strin
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
+	}
+	if scopeOf(ctx) != "" {
+		return "", errOutOfScope
 	}
 	in := SetupInput{Name: a.Name, Layout: a.Layout, Owner: a.Owner, Private: a.Private == nil || *a.Private,
 		ThreadID: tool.TurnFrom(ctx).ThreadID, Actor: event.ActorSupervisor}
@@ -579,4 +707,26 @@ func (t projectCloneTool) Call(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	return fmt.Sprintf("正在把项目 %s clone 到机器上（Run %s）；git clone 要用户批准，完成后会自动汇报。", p.Name, r.ID), nil
+}
+
+// GitNote describes where a checkout stands, for the supervisor:
+// "（main，落后 3、2 个文件未提交）"; empty when nothing is notable.
+func GitNote(g *proto.GitState) string {
+	if g == nil {
+		return ""
+	}
+	var parts []string
+	if g.Behind > 0 {
+		parts = append(parts, fmt.Sprintf("落后远端 %d 个提交", g.Behind))
+	}
+	if g.Ahead > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个提交没推送", g.Ahead))
+	}
+	if n := g.Changes + g.Untracked; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个文件未提交", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "（" + strings.Join(parts, "、") + "）"
 }

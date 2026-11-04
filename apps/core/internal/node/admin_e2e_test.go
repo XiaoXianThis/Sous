@@ -200,6 +200,27 @@ func TestAdminOptionsAndFiles(t *testing.T) {
 	if err != nil || cfg.Token != e.cfg.Token || cfg.Concurrency != 3 || !cfg.AdminEnabled() || cfg.AgentEnv["fake"]["FAKE_KEY"] != "sekrit" {
 		t.Fatalf("node.json after write: %+v %v", cfg, err)
 	}
+
+	// From the Hub, safety settings only tighten.
+	e.cfg, _ = node.LoadConfig(e.root)
+	e.cfg.Role = "server"
+	e.cfg.Policy.ExtraFloor = []string{"mine"}
+	node.SaveConfig(e.root, e.cfg)
+	call("GET", base+"/files/sous/node", "", &nf)
+	m = map[string]any{}
+	json.Unmarshal([]byte(nf.Content), &m)
+	m["role"], m["remote_shell"] = "", false
+	m["policy"] = map[string]any{"floor_disabled": true, "floor": []string{"x"}, "extra_floor": []string{"theirs"}}
+	raw, _ = json.Marshal(m)
+	if code := call("PUT", base+"/files/sous/node", body(string(raw), nf.SHA256), nil); code != 200 {
+		t.Fatalf("write node.json: %d", code)
+	}
+	cfg, _ = node.LoadConfig(e.root)
+	if cfg.Role != "server" || cfg.Policy.FloorDisabled || len(cfg.Policy.Floor) != 0 || !cfg.ShellEnabled() ||
+		strings.Join(cfg.Policy.ExtraFloor, ",") != "theirs,mine" {
+		t.Fatalf("remote edit loosened safety settings: %+v", cfg)
+	}
+
 	m["bogus"] = 1
 	raw, _ = json.Marshal(m)
 	call("GET", base+"/files/sous/node", "", &nf)

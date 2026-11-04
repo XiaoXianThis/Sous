@@ -1,10 +1,17 @@
 # Production template. Copy to hub.yaml next to the binary and adjust.
 # Secrets never go in this file: set the API key in the named environment variable.
 listen: 127.0.0.1:8787            # put a TLS reverse proxy in front
+# Without a proxy, serve HTTPS directly; a non-loopback listen without TLS is refused.
+# tls_cert: /etc/sous/cert.pem
+# tls_key: /etc/sous/key.pem
+# insecure_listen: true           # only if the hop to the proxy is encrypted some other way
 public_url: https://agent.wxian.cc
 data_dir: data
 web_dir: web                      # the built PWA (build/web)
 
+# Models are managed on the page (Settings → Models) and kept in the database.
+# The providers and roles below are imported once, on the first start with an
+# empty database; after that the page is what counts.
 providers:
   - name: deepseek
     kind: openai-chat             # openai-chat / openai-responses / anthropic-messages
@@ -15,6 +22,12 @@ roles:
   supervisor: deepseek/deepseek-v4-pro # DeepSeek also offers deepseek-flash
   # reviewer, approver and inspector default to the supervisor's model.
   # inspector: deepseek/deepseek-flash   # a cheaper model is enough
+
+# Reasoning effort per role: low / medium / high / xhigh / max (omit for the model's default).
+# Sent as reasoning_effort (openai-chat), reasoning.effort (openai-responses), output_config.effort (anthropic).
+# efforts:
+#   supervisor: high
+#   inspector: low
 
 # Everything below is optional; these are the defaults.
 # triggers:                 # follow-ups the supervisor gets (design §9)

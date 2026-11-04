@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,7 +26,12 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 )
 
-const maxMessageRunes = 20000
+const (
+	maxMessageRunes = 20000
+	// maxBodyBytes caps every request body; the largest legitimate one is a
+	// file edited on the page (1 MB of content, JSON-escaped).
+	maxBodyBytes = 4 << 20
+)
 
 type Server struct {
 	cfg  *config.Hub
@@ -65,6 +71,10 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	s.secureHeaders(w.Header())
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	}
 	sw := &statusWriter{ResponseWriter: w, status: 200}
 	s.mux.ServeHTTP(sw, r)
 	if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -72,8 +82,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// secureHeaders is set on every answer. The PWA loads nothing from other
+// origins, runs no inline script and is never framed (approvals and the
+// terminal must not be clickjacked). HSTS once the Hub is served over TLS.
+func (s *Server) secureHeaders(h http.Header) {
+	connect := "'self'"
+	if u, err := url.Parse(s.cfg.PublicURL); err == nil && u.Host != "" {
+		ws := "wss://"
+		if u.Scheme == "http" {
+			ws = "ws://"
+		}
+		connect += " " + ws + u.Host // older Safari does not count ws: as 'self'
+	}
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+		"img-src 'self' data: blob:; font-src 'self' data:; connect-src "+connect+"; worker-src 'self'; manifest-src 'self'; "+
+		"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	if s.cfg.Secure() {
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+	}
+}
+
 func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
-	ts, err := s.log.Store.Threads(r.Context())
+	var ts []store.Thread
+	var err error
+	if pid := r.URL.Query().Get("project_id"); pid != "" {
+		ts, err = s.log.Store.ProjectThreads(r.Context(), pid)
+	} else {
+		ts, err = s.log.Store.Threads(r.Context())
+	}
 	if err != nil {
 		internal(w, err)
 		return
@@ -83,7 +125,8 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createThread(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title string `json:"title"`
+		Title     string `json:"title"`
+		ProjectID string `json:"project_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -93,7 +136,18 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "新对话"
 	}
-	ev := event.New(event.ThreadCreated, event.ActorUser, "", event.ThreadCreatedPayload{Title: title, Kind: "chat"})
+	payload := event.ThreadCreatedPayload{Title: title, Kind: "chat"}
+	if body.ProjectID != "" {
+		if _, err := s.log.Store.Project(r.Context(), body.ProjectID); errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "项目不存在")
+			return
+		} else if err != nil {
+			internal(w, err)
+			return
+		}
+		payload.Kind, payload.ProjectID = "project", body.ProjectID
+	}
+	ev := event.New(event.ThreadCreated, event.ActorUser, "", payload)
 	ev.ThreadID = ev.ID
 	if _, err := s.log.Append(r.Context(), ev); err != nil {
 		internal(w, err)
@@ -241,7 +295,7 @@ func (s *Server) DeviceRoutes(wrap func(http.HandlerFunc) http.HandlerFunc) {
 	s.mux.HandleFunc("POST /api/v1/device/threads", wrap(s.createThread))
 	s.mux.HandleFunc("GET /api/v1/device/threads/{id}/messages", wrap(s.listMessages))
 	s.mux.HandleFunc("POST /api/v1/device/threads/{id}/messages", wrap(s.postMessage))
-	s.mux.HandleFunc("GET /api/v1/device/ws", wrap(s.ws))
+	s.mux.HandleFunc("GET /api/v1/device/ws", wrap(s.deviceWS))
 }
 
 // Mux lets other packages add routes after New.

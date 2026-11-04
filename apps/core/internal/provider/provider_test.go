@@ -277,3 +277,39 @@ func TestUnknownKind(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestEffortReachesEachKind(t *testing.T) {
+	sse := "data: [DONE]\n\n"
+	cases := []struct {
+		kind  string
+		check func(body map[string]any) bool
+	}{
+		{"openai-chat", func(b map[string]any) bool { return b["reasoning_effort"] == "xhigh" }},
+		{"openai-responses", func(b map[string]any) bool {
+			r, _ := b["reasoning"].(map[string]any)
+			return r["effort"] == "xhigh"
+		}},
+		{"anthropic-messages", func(b map[string]any) bool {
+			o, _ := b["output_config"].(map[string]any)
+			return o["effort"] == "max" && b["thinking"] == nil
+		}},
+	}
+	for _, c := range cases {
+		f := newFake(t, 200, sse)
+		p, err := New(Config{Name: "x", Kind: c.kind, BaseURL: f.URL, APIKey: "k"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		WithEffort(p, "max").Stream(context.Background(), Request{Model: "m", Messages: []Message{Text(RoleUser, "hi")}}, func(Delta) {})
+		if !c.check(f.body) {
+			t.Errorf("%s: effort not sent: %v", c.kind, f.body)
+		}
+	}
+	// No effort configured: nothing is sent.
+	f := newFake(t, 200, sse)
+	p, _ := New(Config{Name: "x", Kind: "openai-chat", BaseURL: f.URL})
+	WithEffort(p, "").Stream(context.Background(), Request{Model: "m", Messages: []Message{Text(RoleUser, "hi")}}, func(Delta) {})
+	if _, ok := f.body["reasoning_effort"]; ok {
+		t.Errorf("effort sent without being set: %v", f.body)
+	}
+}

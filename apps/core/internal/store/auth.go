@@ -66,6 +66,33 @@ func (s *Store) Session(ctx context.Context, tokenHash string) (csrf string, err
 	return csrf, err
 }
 
+// SessionCreated returns when a live session logged in.
+func (s *Store) SessionCreated(ctx context.Context, tokenHash string) (time.Time, error) {
+	var ms int64
+	err := s.db.QueryRowContext(ctx, `SELECT created_at FROM sessions WHERE token_hash = ? AND expires_at > ?`,
+		tokenHash, time.Now().UnixMilli()).Scan(&ms)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, ErrNotFound
+	}
+	return time.UnixMilli(ms), err
+}
+
+// RefreshSession records a new passkey login on a live session: it keeps
+// its token (and so what belongs to it) and counts as just logged in.
+func (s *Store) RefreshSession(ctx context.Context, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions SET created_at = ? WHERE token_hash = ? AND expires_at > ?`,
+		time.Now().UnixMilli(), tokenHash, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

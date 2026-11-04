@@ -103,6 +103,9 @@ func (h *Hub) adminRoutes(protect func(string, http.HandlerFunc)) {
 	protect("PUT /api/v1/nodes/{id}/files/{agent}/{file}", h.adminWriteFile)
 }
 
+// WriteAdminError is adminError for other packages.
+func WriteAdminError(w http.ResponseWriter, err error) { adminError(w, err) }
+
 // adminError maps a request failure to an HTTP answer.
 func adminError(w http.ResponseWriter, err error) {
 	var ne *proto.NodeError
@@ -236,7 +239,7 @@ func (h *Hub) adminJobOp(op string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "too_large", "输入太长")
 			return
 		}
-		res, err := h.Request(r.Context(), r.PathValue("id"), op, proto.JobArgs{JobID: r.PathValue("job"), Data: body.Data, Cols: body.Cols, Rows: body.Rows}, requestTimeout)
+		res, err := h.Request(r.Context(), r.PathValue("id"), op, proto.JobArgs{JobID: r.PathValue("job"), Owner: h.owner(r), Data: body.Data, Cols: body.Cols, Rows: body.Rows}, requestTimeout)
 		if err != nil {
 			adminError(w, err)
 			return

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
@@ -192,6 +193,20 @@ func (a *admin) mergeNodeConfig(content []byte) (Config, error) {
 		return Config{}, err
 	}
 	next.HubURL, next.NodeID, next.Token, next.RemoteAdmin = cur.HubURL, cur.NodeID, cur.Token, cur.RemoteAdmin
+	next.RemoteShell = cur.RemoteShell
+	// From the Hub, safety settings only tighten: a server stays a server
+	// (as setRole), the floor rules cannot be turned off or replaced, and
+	// extra rules can be added but not removed. Loosening them takes an
+	// edit on this machine.
+	if cur.RoleName() == proto.RoleServer {
+		next.Role = cur.Role
+	}
+	next.Policy.FloorDisabled, next.Policy.Floor = cur.Policy.FloorDisabled, cur.Policy.Floor
+	for _, r := range cur.Policy.ExtraFloor {
+		if !slices.Contains(next.Policy.ExtraFloor, r) {
+			next.Policy.ExtraFloor = append(next.Policy.ExtraFloor, r)
+		}
+	}
 	// A masked key keeps its value; a new value replaces it.
 	for agent, env := range next.AgentEnv {
 		for k, v := range env {

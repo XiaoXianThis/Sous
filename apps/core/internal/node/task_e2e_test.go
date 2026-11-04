@@ -64,7 +64,7 @@ func newTaskEnv(t *testing.T, review ...string) *taskEnv {
 	if len(review) == 0 {
 		te.reviewer.answers = []string{`{"pass":true,"reason":"新增了 hello.txt"}`}
 	}
-	te.tasks = task.New(e.log, e.hub)
+	te.tasks = e.engine
 	te.tasks.Reviewer = task.Model{Provider: te.reviewer, Name: "r"}
 	te.tasks.Approver = task.Model{Provider: te.approver, Name: "a"}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -437,4 +437,110 @@ func TestEditingDetailReachesTheRunningAgent(t *testing.T) {
 		return strings.Contains(string(log), "收到追加指令")
 	})
 	te.hub.Decide(ctx, a.ID, "allow", "")
+}
+
+// A machine whose checkout is behind the remote still starts the task from
+// the remote's latest code (work/specs/multi-machine-sync, R1).
+func TestTaskStartsFromRemoteLatest(t *testing.T) {
+	te := newTaskEnv(t)
+	ctx := context.Background()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(te.repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+	git(te.origin, "symbolic-ref", "HEAD", "refs/heads/main")
+	// Another machine pushes a commit this checkout has not fetched.
+	other := filepath.Join(t.TempDir(), "other")
+	git(te.repo, "clone", "-q", te.origin, other)
+	os.WriteFile(filepath.Join(other, "upstream.txt"), []byte("from the other machine\n"), 0o644)
+	git(other, "add", "-A")
+	git(other, "commit", "-qm", "Upstream change")
+	git(other, "push", "-q", "origin", "main")
+	before := git(te.repo, "rev-parse", "HEAD")
+	defer te.startDaemon("write")()
+
+	tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true, Actor: event.ActorSupervisor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	te.approveNext(tk.ID)
+	te.approveNext(tk.ID) // push
+	done := te.waitStatus(tk.ID, event.TaskDone, event.TaskBlocked, event.TaskFailed)
+	if done.Status != event.TaskDone || done.BaseBranch != "main" {
+		t.Fatalf("task: %+v", done)
+	}
+	// The pushed branch is on top of the other machine's commit, and the
+	// review saw only the task's own change.
+	if log := git(te.origin, "log", "--format=%s", done.Branch); !strings.Contains(log, "Upstream change") || !strings.Contains(log, "Add hello") {
+		t.Fatalf("branch history: %s", log)
+	}
+	if reqs := te.reviewer.requests(); len(reqs) != 1 || strings.Contains(reqs[0].Messages[0].PlainText(), "upstream.txt") {
+		t.Fatalf("review saw other changes: %+v", reqs)
+	}
+	if gh, _ := os.ReadFile(te.ghLog); !strings.Contains(string(gh), "--base main") {
+		t.Fatalf("gh: %s", gh)
+	}
+	// The run said where it started; the user's checkout did not move.
+	var said bool
+	evs, _ := te.log.Store.EventsSince(ctx, 0, 5000)
+	for _, ev := range evs {
+		if ev.Type == event.RunUpdate && strings.Contains(string(ev.Payload), "origin/main") {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("the run did not say it started from origin/main")
+	}
+	if git(te.repo, "rev-parse", "HEAD") != before {
+		t.Error("the user's checkout moved")
+	}
+}
+
+// Two open tasks of a project that change the same file: the supervisor
+// hears about it once (multi-machine-sync, R5).
+func TestOverlappingTasksAreReported(t *testing.T) {
+	te := newTaskEnv(t, `{"pass":true,"reason":"ok"}`, `{"pass":true,"reason":"ok"}`)
+	defer te.startDaemon("write")()
+	ctx := context.Background()
+	mk := func(title string) store.Task {
+		tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: title, Detail: "创建 hello.txt", Dispatch: true, Actor: event.ActorSupervisor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		te.approveNext(tk.ID) // the shell command
+		return tk
+	}
+	a := mk("First")
+	// A waits for the push approval: still open, with its diff.
+	te.waitFor("A's push approval", func() bool {
+		as, _ := te.log.Store.Approvals(ctx, "pending", "")
+		for _, x := range as {
+			if x.TaskID == a.ID && x.Category == "git-remote" {
+				return true
+			}
+		}
+		return false
+	})
+	b := mk("Second")
+	notices := func() (n int, text string) {
+		evs, _ := te.log.Store.EventsSince(ctx, 0, 5000)
+		for _, ev := range evs {
+			var p event.TriggerPayload
+			if ev.Type == event.TriggerFired && ev.Decode(&p) == nil && strings.HasPrefix(p.Key, "overlap:") {
+				n++
+				text = p.Content
+			}
+		}
+		return
+	}
+	te.waitFor("the overlap notice", func() bool { n, _ := notices(); return n > 0 })
+	n, text := notices()
+	if n != 1 || !strings.Contains(text, "hello.txt") || !strings.Contains(text, a.ID) || !strings.Contains(text, b.ID) {
+		t.Fatalf("%d notices: %s", n, text)
+	}
 }

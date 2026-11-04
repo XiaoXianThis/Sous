@@ -97,6 +97,8 @@ func (e Event) Decode(v any) error {
 type ThreadCreatedPayload struct {
 	Title string `json:"title"`
 	Kind  string `json:"kind"` // main / chat / project
+	// ProjectID scopes a project chat (kind project) to one project.
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 type MessagePayload struct {

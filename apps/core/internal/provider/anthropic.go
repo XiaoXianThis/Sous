@@ -69,6 +69,11 @@ func (p *anthropicMessages) Stream(ctx context.Context, req Request, onDelta fun
 	if req.System != "" {
 		body["system"] = req.System
 	}
+	if req.Effort != "" {
+		// Thinking stays at the model's default (adaptive on current
+		// models); effort sets how deep it goes.
+		body["output_config"] = map[string]any{"effort": req.Effort}
+	}
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range req.Tools {

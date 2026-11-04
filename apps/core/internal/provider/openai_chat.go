@@ -89,6 +89,9 @@ func (p *openaiChat) Stream(ctx context.Context, req Request, onDelta func(Delta
 	if req.MaxTokens > 0 {
 		body["max_tokens"] = req.MaxTokens
 	}
+	if req.Effort != "" {
+		body["reasoning_effort"] = openaiEffort(req.Effort)
+	}
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range req.Tools {
@@ -192,4 +195,13 @@ func (p *openaiChat) Stream(ctx context.Context, req Request, onDelta func(Delta
 		out.Message.Parts = append(out.Message.Parts, Part{ToolCall: c})
 	}
 	return out, nil
+}
+
+// openaiEffort maps an effort to OpenAI's scale, which stops at high
+// (xhigh on newer models); max is sent as xhigh.
+func openaiEffort(e string) string {
+	if e == "max" {
+		return "xhigh"
+	}
+	return e
 }
