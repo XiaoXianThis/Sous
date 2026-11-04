@@ -19,13 +19,15 @@ export interface ChatState {
   inboxRev: number
   /** Bumped whenever a schedule changes or fires. */
   schedulesRev: number
+  /** Bumped when a Run starts, ends, pauses or resumes; drives the workbench. */
+  runsRev: number
   runs: Record<string, RunView>
   /** Installs and logins on machines, by job id. */
   jobs: Record<string, JobView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runs: {}, jobs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, runs: {}, jobs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -111,6 +113,11 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     return true
   }
   if (ev.type === 'run.ended' || ev.type === 'run.queued') state.tasksRev++
+  // The workbench reloads on any Run lifecycle change. Output does not bump:
+  // it is ephemeral and would reload the whole grid for every chunk.
+  if (ev.type === 'run.queued' || ev.type === 'run.started' || ev.type === 'run.ended' || ev.type === 'run.paused' || ev.type === 'run.resumed') {
+    state.runsRev++
+  }
   if (applyRunEvent(state.runs, ev)) return true
   switch (ev.type) {
     case 'thread.created': {

@@ -18,38 +18,8 @@ export const pushKindText: Record<string, string> = {
   report: '主管的主动提醒', inspector: '巡检发现的问题',
 }
 
-/** Board columns, left to right, and the statuses each one shows. */
-export const columns: { key: string; title: string; statuses: TaskStatus[] }[] = [
-  { key: 'todo', title: '待办', statuses: ['inbox', 'planned', 'queued'] },
-  { key: 'doing', title: '进行中', statuses: ['running', 'waiting_approval', 'review'] },
-  { key: 'attention', title: '要你处理', statuses: ['blocked', 'failed'] },
-  { key: 'closed', title: '已结束', statuses: ['done', 'cancelled'] },
-]
-
 export function isOpen(t: Task): boolean {
   return t.status !== 'done' && t.status !== 'cancelled'
-}
-
-/** Groups tasks into board columns, by priority then age within a column. */
-export function board(tasks: Task[]): Record<string, Task[]> {
-  const out: Record<string, Task[]> = {}
-  for (const c of columns) out[c.key] = []
-  for (const t of tasks) {
-    const c = columns.find((c) => c.statuses.includes(t.status))
-    if (c) out[c.key].push(t)
-  }
-  for (const k in out) {
-    out[k].sort((a, b) => (k === 'closed' ? b.updated_at - a.updated_at : b.priority - a.priority || a.created_at - b.created_at))
-  }
-  return out
-}
-
-/** The tone of a status, for color: running, attention, done or quiet. */
-export function tone(s: TaskStatus): 'active' | 'attention' | 'done' | 'quiet' {
-  if (s === 'running' || s === 'review' || s === 'waiting_approval') return 'active'
-  if (s === 'blocked' || s === 'failed') return 'attention'
-  if (s === 'done') return 'done'
-  return 'quiet'
 }
 
 /** The agents sous knows how to drive (core's internal/agents). */

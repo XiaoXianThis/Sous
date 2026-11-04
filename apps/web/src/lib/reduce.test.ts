@@ -107,6 +107,17 @@ describe('runs', () => {
     expect(s.runs.r1.approvals[0].status).toBe('expired')
   })
 
+  it('bumps runsRev for lifecycle events of runs it has not loaded', () => {
+    const s = emptyState()
+    applyEvent(s, run(1, 'run.started', { workdir: '/w' }))
+    applyEvent(s, run(2, 'run.paused', { reason: '用户暂停' }))
+    applyEvent(s, run(3, 'run.resumed', {}))
+    applyEvent(s, run(4, 'run.ended', { status: 'succeeded' }))
+    expect(s.runsRev).toBe(4)
+    applyEvent(s, run(0, 'run.output', { kind: 'text', text: 'x' }))
+    expect(s.runsRev).toBe(4)
+  })
+
   it('bumps nodesRev on machine events', () => {
     const s = emptyState()
     applyEvent(s, ev(1, 'node.online', { node_id: 'n' }))

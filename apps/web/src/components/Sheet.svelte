@@ -1,10 +1,31 @@
+<script module lang="ts">
+  // The sheets currently mounted, oldest first. Escape only closes the top
+  // one, so a nested sheet does not take its parent down with it.
+  const sheets: symbol[] = []
+</script>
+
 <script lang="ts">
   import type { Snippet } from 'svelte'
 
   let { title, onClose, wide = false, children }: { title: string; onClose: () => void; wide?: boolean; children: Snippet } = $props()
+
+  const me = Symbol('sheet')
+  $effect(() => {
+    const opener = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+    sheets.push(me)
+    return () => {
+      const i = sheets.lastIndexOf(me)
+      if (i >= 0) sheets.splice(i, 1)
+      if (opener && opener.isConnected && typeof opener.focus === 'function') requestAnimationFrame(() => opener.focus())
+    }
+  })
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && sheets[sheets.length - 1] === me) onClose()
+  }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && onClose()} />
+<svelte:window onkeydown={onKey} />
 
 <div class="backdrop" role="presentation" onclick={onClose}></div>
 <div class="sheet" class:wide role="dialog" aria-modal="true" aria-label={title}>

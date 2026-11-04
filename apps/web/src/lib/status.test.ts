@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { avatarOf, mostUrgent, progress, runLook, stages, taskLook } from './status'
+import { avatarOf, progress, runLook, stages, taskLook, taskState, taskStateDetail } from './status'
 
 const t = (status: string, extra: Record<string, unknown> = {}) =>
   ({ kind: 'code', status, pr_url: '', next: '', status_reason: '', ...extra }) as never
@@ -17,9 +17,32 @@ describe('looks', () => {
     expect(runLook({ status: 'running', paused: true })).toBe('paused')
     expect(runLook({ status: 'interrupted' })).toBe('failed')
   })
-  it('puts what needs the user first', () => {
-    expect(mostUrgent(['done', 'running', 'waiting'])).toBe('waiting')
-    expect(mostUrgent([])).toBeUndefined()
+})
+
+describe('task states', () => {
+  it('collapses every status into the four states', () => {
+    expect(taskState(t('inbox'))).toBe('todo')
+    expect(taskState(t('planned'))).toBe('todo')
+    expect(taskState(t('queued'))).toBe('active')
+    expect(taskState(t('queued', { status_reason: '等待机器：没有在线的开发机' }))).toBe('attention')
+    expect(taskState(t('running'))).toBe('active')
+    expect(taskState(t('running', { status_reason: '已暂停：重复调用' }))).toBe('attention')
+    expect(taskState(t('review'))).toBe('active')
+    expect(taskState(t('waiting_approval'))).toBe('attention')
+    expect(taskState(t('blocked'))).toBe('attention')
+    expect(taskState(t('failed'))).toBe('attention')
+    expect(taskState(t('done'))).toBe('closed')
+    expect(taskState(t('done', { pr_url: 'https://x/pull/1' }))).toBe('attention')
+    expect(taskState(t('done', { pr_url: 'https://x/pull/1', dismissed: true }))).toBe('closed')
+    expect(taskState(t('cancelled'))).toBe('closed')
+  })
+
+  it('keeps a readable detail for the badge', () => {
+    expect(taskStateDetail(t('queued'))).toBe('排队')
+    expect(taskStateDetail(t('running', { status_reason: '已暂停：重复调用' }))).toBe('已暂停')
+    expect(taskStateDetail(t('review'))).toBe('验收中')
+    expect(taskStateDetail(t('done', { pr_url: 'https://x/pull/1' }))).toBe('PR 待合并')
+    expect(taskStateDetail(t('failed'))).toBe('失败')
   })
 })
 

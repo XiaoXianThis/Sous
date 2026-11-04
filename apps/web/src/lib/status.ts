@@ -24,8 +24,79 @@ export const looks: Record<Look, LookInfo> = {
   cancelled: { icon: 'x', tone: 'neutral', text: '已取消' },
 }
 
-/** Legend order. */
-export const legend: Look[] = ['running', 'waiting', 'paused', 'queued', 'done', 'failed']
+/** The four states a task row shows on the workbench. */
+export type TaskState = 'todo' | 'active' | 'attention' | 'closed'
+
+export interface TaskStateInfo {
+  text: string
+  icon: string
+  tone: LookInfo['tone']
+}
+
+export const taskStates: Record<TaskState, TaskStateInfo> = {
+  todo: { text: '待办', icon: 'circle', tone: 'neutral' },
+  active: { text: '进行中', icon: 'play', tone: 'accent' },
+  attention: { text: '要你处理', icon: 'hand', tone: 'warning' },
+  closed: { text: '已结束', icon: 'check', tone: 'neutral' },
+}
+
+const stateRank: Record<TaskState, number> = { attention: 0, active: 1, todo: 2, closed: 3 }
+
+/** Orders tasks by attention, then activity, then todo, then closed. */
+export function taskStateRank(s: TaskState): number {
+  return stateRank[s]
+}
+
+/** Collapses a task's status into the four states the card shows. */
+export function taskState(t: Pick<Task, 'status' | 'status_reason' | 'pr_url' | 'dismissed'>): TaskState {
+  switch (t.status) {
+    case 'inbox':
+    case 'planned':
+      return 'todo'
+    case 'queued':
+      return t.status_reason.startsWith('等待机器') ? 'attention' : 'active'
+    case 'running':
+      return t.status_reason.startsWith('已暂停') ? 'attention' : 'active'
+    case 'review':
+      return 'active'
+    case 'waiting_approval':
+    case 'blocked':
+    case 'failed':
+      return 'attention'
+    case 'done':
+      return t.pr_url && !t.dismissed ? 'attention' : 'closed'
+    case 'cancelled':
+      return 'closed'
+  }
+  return 'todo'
+}
+
+/** The short detail after the state, such as 排队 or PR 待合并. */
+export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason' | 'pr_url' | 'dismissed'>): string {
+  switch (t.status) {
+    case 'inbox':
+      return '收件箱'
+    case 'planned':
+      return '待开始'
+    case 'queued':
+      return t.status_reason.startsWith('等待机器') ? '等待机器' : '排队'
+    case 'running':
+      return t.status_reason.startsWith('已暂停') ? '已暂停' : '执行中'
+    case 'review':
+      return '验收中'
+    case 'waiting_approval':
+      return '等你审批'
+    case 'blocked':
+      return '受阻'
+    case 'failed':
+      return '失败'
+    case 'done':
+      return t.pr_url && !t.dismissed ? 'PR 待合并' : '完成'
+    case 'cancelled':
+      return '已取消'
+  }
+  return ''
+}
 
 /** How a task looks, given its status (and whether its run is paused). */
 export function taskLook(t: Pick<Task, 'status' | 'status_reason'>): Look {
@@ -57,13 +128,6 @@ export function runLook(r: Pick<Run, 'status' | 'paused'>, waiting = false): Loo
   if (r.status === 'succeeded') return 'done'
   if (r.status === 'cancelled') return 'cancelled'
   return 'failed'
-}
-
-/** The order of attention: what most needs the user comes first. */
-const urgency: Record<Look, number> = { waiting: 0, failed: 1, paused: 2, running: 3, review: 4, queued: 5, planned: 6, done: 7, cancelled: 8 }
-
-export function mostUrgent(ls: Look[]): Look | undefined {
-  return [...ls].sort((a, b) => urgency[a] - urgency[b])[0]
 }
 
 /** A task's stages, by kind, and how far it got. */

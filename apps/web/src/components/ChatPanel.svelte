@@ -194,7 +194,7 @@
   .status-dot.online { background: var(--ok); }
   .status-dot.offline { background: var(--danger); }
   .sp { flex: 1; }
-  .messages { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+  .messages { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
   .inner { padding: 14px 14px 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .empty { text-align: center; color: var(--muted); padding: 14vh 8px 0; font-size: 14px; }
   .empty .big { font-size: 18px; color: var(--text); margin: 0 0 4px; font-weight: 600; }

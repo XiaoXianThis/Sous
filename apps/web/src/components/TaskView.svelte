@@ -14,7 +14,7 @@
   import StageBar from './StageBar.svelte'
   import TaskDetail from './TaskDetail.svelte'
 
-  let { id }: { id: string } = $props()
+  let { id, embedded = false }: { id: string; embedded?: boolean } = $props()
 
   let task = $state<Task | null>(null)
   let runs = $state<Run[]>([])
@@ -66,12 +66,14 @@
   }
 </script>
 
-<div class="page">
+<div class="page" class:embedded>
   {#if missing}
     <p class="muted">这个任务不存在，可能链接已经过期。</p>
   {:else if task}
     <header class="head">
-      <button class="icon-btn" aria-label="返回项目" onclick={() => go(project ? { view: 'project', id: project.id } : { view: 'overview', id: '' })}><Icon name="back" /></button>
+      {#if !embedded}
+        <button class="icon-btn" aria-label="返回项目" onclick={() => go(project ? { view: 'project', id: project.id } : { view: 'overview', id: '' })}><Icon name="back" /></button>
+      {/if}
       <Avatar glyph={a.glyph} color={a.color} title={a.title} size={34} ring={looks[look].tone === 'neutral' ? '' : looks[look].tone} />
       <div class="ht">
         <h1>{task.title}</h1>
@@ -121,6 +123,7 @@
 
 <style>
   .page { padding: 16px 22px 28px; display: grid; gap: 12px; align-content: start; max-width: 900px; }
+  .page.embedded { padding: 0; max-width: none; }
   .head { display: flex; align-items: center; gap: 10px; }
   .ht { min-width: 0; }
   h1 { margin: 0; font-size: 19px; line-height: 1.3; }

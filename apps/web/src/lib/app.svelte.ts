@@ -1,10 +1,11 @@
 // Application state, shared by the components.
 import { api } from './api'
+import { applyLive, seedLive, type Live } from './live'
 import { applyEvent, emptyState, mergeHistory, sortThreads } from './reduce'
 import { runFromHistory } from './runs'
 import { home, parseRoute, routeHash, type Route } from './route'
 import { EventStream, type StreamStatus } from './stream'
-import type { HubEvent, MessageContext, Overview } from './types'
+import type { HubEvent, Inbox, MessageContext, Overview, Run } from './types'
 
 export const chat = $state(emptyState())
 
@@ -13,20 +14,30 @@ export const ui = $state({
   current: '' as string,
   loaded: {} as Record<string, boolean>,
   error: '' as string,
-  /** M5: what the workbench shows. */
+  /** The workbench filter and the sheet on top of it. */
   route: { ...home } as Route,
   /** The chat panel is open (desktop) or the chat tab is shown (phone). */
   chatOpen: true,
   /** The settings tab open in the full-screen settings, or ''. */
   settings: '' as string,
   /** Phone: which bottom tab is shown. */
-  tab: 'chat' as 'chat' | 'work' | 'inbox',
+  tab: 'chat' as 'chat' | 'work',
   /** The workbench context sent with the next message; cleared by the user. */
   dropContext: false,
+  /** The Run whose detail sheet is open, '' when none. */
+  runSheet: '' as string,
+  /** The project a new task is being created in, '' when none. */
+  newTask: '' as string,
 })
 
 /** Everything the workbench draws; reloaded when tasks, machines or approvals change. */
-export const wb = $state({ data: null as Overview | null, error: '' })
+export const wb = $state({
+  data: null as Overview | null,
+  inbox: null as Inbox | null,
+  /** Live activities of running Runs, by id. */
+  live: {} as Live,
+  error: '' as string,
+})
 
 let overviewLoading: Promise<void> | null = null
 export function loadOverview(): Promise<void> {
@@ -35,6 +46,8 @@ export function loadOverview(): Promise<void> {
     .then((d) => {
       wb.data = d
       wb.error = ''
+      pruneLive(d.runs)
+      void seedLogs(d.runs)
     })
     .catch((e) => {
       wb.error = (e as Error).message
@@ -43,13 +56,76 @@ export function loadOverview(): Promise<void> {
   return overviewLoading
 }
 
+let inboxLoading: Promise<void> | null = null
+export function loadInbox(): Promise<void> {
+  inboxLoading ??= api
+    .inbox()
+    .then((d) => {
+      wb.inbox = d
+    })
+    .catch(() => {})
+    .finally(() => (inboxLoading = null))
+  return inboxLoading
+}
+
+/** Drops feeds for Runs that are no longer active, keeping the open one. */
+function pruneLive(runs: Run[]) {
+  const keep = new Set(runs.map((r) => r.id))
+  for (const id of Object.keys(wb.live)) {
+    if (!keep.has(id) && id !== ui.runSheet) delete wb.live[id]
+  }
+  const ids = Object.keys(wb.live)
+  for (const id of ids.slice(0, Math.max(0, ids.length - 50))) {
+    if (id !== ui.runSheet) delete wb.live[id]
+  }
+}
+
+const seeded = new Set<string>()
+
+/** Shows the last lines of a running Run after a reload; the log has no thinking. */
+async function seedLogs(runs: Run[]) {
+  for (const r of runs) {
+    if (r.status !== 'running' || seeded.has(r.id) || (wb.live[r.id]?.length ?? 0) > 0) continue
+    seeded.add(r.id)
+    try {
+      seedLive(wb.live, r.id, await api.runText(r.id, 'log'))
+    } catch {
+      // The live stream still fills the card; a missing log is not an error.
+    }
+  }
+}
+
 /** Shows a page of the workbench and records it in the URL. */
+let sheetFocus: HTMLElement | null = null
+
 export function go(r: Route) {
+  const wasSheet = ui.route.view === 'task' || ui.route.view === 'project'
+  const isSheet = r.view === 'task' || r.view === 'project'
+  if (!wasSheet && isSheet && typeof document !== 'undefined') sheetFocus = document.activeElement as HTMLElement
   ui.route = { ...r }
   ui.tab = 'work'
   ui.dropContext = false
   const h = routeHash(r)
-  if (location.hash !== h) history.pushState(null, '', h)
+  if (location.hash !== h) history.pushState(isSheet ? { sheet: true } : null, '', h)
+  if (wasSheet && !isSheet) restoreSheetFocus()
+}
+
+/** Closes the sheet on top: back when it was opened from the workbench. */
+export function closeSheet() {
+  if (history.state?.sheet) {
+    history.back()
+    return
+  }
+  ui.route = { ...home }
+  ui.tab = 'work'
+  history.replaceState(null, '', routeHash(ui.route))
+  restoreSheetFocus()
+}
+
+function restoreSheetFocus() {
+  const el = sheetFocus
+  sheetFocus = null
+  if (el && typeof el.focus === 'function') requestAnimationFrame(() => el.focus())
 }
 
 /** The project or task the user is looking at, sent with a message. */
@@ -70,9 +146,11 @@ export async function startSession(onLoggedOut: () => void) {
   }
   if (ui.current) await openThread(ui.current)
   stream?.stop()
+  const feed = liveFeed()
   stream = new EventStream(
     () => chat.lastSeq,
     (ev) => {
+      feed(ev)
       if (applyEvent(chat, ev)) maybeNotify(ev)
     },
     (s) => (ui.status = s),
@@ -81,12 +159,34 @@ export async function startSession(onLoggedOut: () => void) {
   stream.start()
 }
 
+/** Buffers streaming activity so token chunks do not re-render the grid. */
+function liveFeed() {
+  let buf: HubEvent[] = []
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const flush = () => {
+    timer = null
+    const events = buf
+    buf = []
+    for (const ev of events) applyLive(wb.live, ev)
+  }
+  return (ev: HubEvent) => {
+    if (ev.type !== 'run.output' && ev.type !== 'run.update') return
+    buf.push(ev)
+    if (!timer) timer = setTimeout(flush, 100)
+  }
+}
+
 export function stopSession() {
   stream?.stop()
   stream = null
   Object.assign(chat, emptyState())
   ui.loaded = {}
   ui.current = ''
+  ui.runSheet = ''
+  ui.newTask = ''
+  wb.live = {}
+  wb.inbox = null
+  seeded.clear()
 }
 
 export async function openThread(id: string) {
@@ -133,6 +233,8 @@ function maybeNotify(ev: HubEvent) {
 
 /** Follows the URL hash: workbench routes and links from push notifications. */
 export async function followHash(hash: string) {
+  ui.runSheet = ''
+  ui.newTask = ''
   const r = parseRoute(hash)
   if (r.thread && chat.threads.some((t) => t.id === r.thread)) {
     await openThread(r.thread)
@@ -141,8 +243,11 @@ export async function followHash(hash: string) {
     history.replaceState(null, '', routeHash(ui.route))
     return
   }
+  const wasSheet = ui.route.view === 'task' || ui.route.view === 'project'
   ui.route = { view: r.view, id: r.id }
-  if (r.view !== 'overview') ui.tab = r.view === 'inbox' ? 'inbox' : 'work'
+  // The workbench is always the page; inbox is just its attention filter.
+  ui.tab = 'work'
+  if (wasSheet && r.view !== 'task' && r.view !== 'project') restoreSheetFocus()
   // Old push links (#approvals, #task=) become workbench routes.
   if (!hash.startsWith('#/') && hash !== '') history.replaceState(null, '', routeHash(ui.route))
 }

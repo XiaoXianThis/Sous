@@ -13,4 +13,4 @@ Assets shared by several apps, and asset sources (design files, vector sources, 
 
 | asset | source | license |
 |---|---|---|
-| `design/ui-redesign/*.png` | 新梦 GPT Image 2（high）生成的界面参考图（2026-11-04） | 自有生成，仅作设计参考 |
+| `design/ui-redesign/*.png` | 界面参考图：`overview/project/task/chat-*.png` 是早期稿；`workbench-*.png` 是 2026-11-04 用新梦 GPT Image 2.5 Flare（high）生成的工作台风格稿，`workbench-v2-*.png` 按真实三栏布局和状态语义收紧约束后重绘；`single-page-*.png` 是工作台单页实现后的浏览器验收截图（桌面、深色、手机、Run 详情） | 自有生成，仅作设计参考 |

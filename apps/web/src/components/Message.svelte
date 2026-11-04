@@ -81,7 +81,7 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   time { font-size: 12px; color: var(--muted); padding: 0 4px; }
-  .trigger { display: grid; gap: 4px; justify-items: center; }
+  .trigger { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; justify-items: center; }
   .trigger-head {
     display: flex; align-items: baseline; gap: 8px; max-width: 100%; border: 1px dashed var(--line);
     background: transparent; border-radius: 999px; padding: 3px 12px; color: var(--muted); font-size: 13px;
@@ -102,7 +102,7 @@
     font-size: 12px; padding: 3px 10px; border-radius: 999px;
   }
   .thinking {
-    white-space: pre-wrap; font-size: 13px; color: var(--muted);
+    white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; color: var(--muted);
     border-left: 2px solid var(--line); padding: 2px 0 2px 10px;
   }
 </style>
