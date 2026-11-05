@@ -14,3 +14,4 @@ Reusable tool scripts that serve more than one app. Scripts for a single app liv
 
 | script | purpose | usage |
 |---|---|---|
+| install-sous.sh / install-sous.ps1 | 安装或更新 sous 客户端（下载 Release、校验、替换、重启服务） | `sh install-sous.sh [sous 的参数]`；Windows 用 `.ps1` |
