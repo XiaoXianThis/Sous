@@ -202,7 +202,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         </div>
       </div>
 
-      <form className="px-3 pt-1 pb-[calc(12px+env(safe-area-inset-bottom))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
+      <form className="chat-composer px-3 pt-1 pb-[calc(12px+env(safe-area-inset-bottom))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
         {sendError && <p className="text-danger text-[12.5px] m-0 ml-2 flex items-center gap-1" role="alert"><Icon name="alert" size={13} />{sendError}</p>}
         <div
           className="grid gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text"

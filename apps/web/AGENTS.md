@@ -41,4 +41,5 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 - 模型：设置的“模型”页是 `Models.tsx`（角色的模型 / 思考强度、供应商增删改、读取模型列表、测试）；聊天标题旁的 `ModelSwitch.tsx` 直接切主管的模型和思考强度。选项值是 `provider_id + \u0000 + model`（`choiceValue` / `parseChoice`）。改供应商可能 401 `reauth`，按钮里调 `reauthenticate()` 再重试。显示成“跟主管一样”的角色（`inherited`）不要把主管的值当成自己的。
 - 项目位置：`Locations.tsx` 的机器标签显示 `gitMark`（↓落后 ↑未推送 ●未提交），点开是状态和“同步”“存成 WIP 分支”（`api.repoSync` / `repoWip`）。`node.repos` 事件让 `nodesRev` 增加，总览会重拉。
 - Hub 的 CSP 禁止内联脚本和外部资源：不要在 `index.html` 里写 `<script>` 内容，也不要引用其他域名的脚本、样式、字体。
+- 手机布局（≤760px，`src/lib/phone.ts` 的 `PHONE_QUERY` / `usePhone()`，和 `app.css` 的断点一致）走 iOS 风格：灰色分组背景（`--chrome`）上放无描边的白卡片，顶部是 `PhoneHeader.tsx`（半透明吸顶栏 + 大标题，大标题滚走后栏里显示小标题，尾部操作用 `.phone-bar-btn`），底部是半透明标签栏。手机上的弹出层用 `.backdrop` + `.sheet`（自动变成底部抽屉），不用桌面的 popover。全屏弹窗要自己留 `env(safe-area-inset-top/bottom)`。数据和业务组件两端共用，只有页面外壳按 `usePhone()` 分开。
 - 在内置浏览器面板里验收时，只改哈希的导航不会重新加载页面；要看新构建，用 `location.reload()`。

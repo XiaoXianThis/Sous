@@ -9,7 +9,9 @@ import ProjectCardComponent, { type ProjectTab } from './ProjectCard'
 import ProjectModal from './ProjectModal'
 import ProjectSetupSheet from './ProjectSetupSheet'
 import ProjectTile from './ProjectTile'
+import PhoneHeader from './PhoneHeader'
 import TaskRow from './TaskRow'
+import { usePhone } from '../lib/phone'
 
 function Stat({ icon, value, label, tone, onClick, expanded }: {
   icon: string
@@ -37,7 +39,25 @@ function Stat({ icon, value, label, tone, onClick, expanded }: {
   )
 }
 
+/** A summary tile on the phone header: icon, a big number and a label, after iOS Reminders' smart lists. */
+function Tile({ icon, value, label, tone, onClick }: { icon: string; value: string | number; label: string; tone: string; onClick?: () => void }) {
+  return (
+    <button
+      className={`grid gap-1 content-start text-left p-2.5 rounded-[14px] border-0 bg-panel shadow-soft min-w-0 transition-transform ${onClick ? 'active:scale-[.97]' : 'cursor-default'}`}
+      onClick={onClick}
+      aria-label={`${label} ${value}`}
+    >
+      <span className="flex items-center justify-between gap-1">
+        <span className={`grid place-items-center w-7 h-7 rounded-full tone-${tone} bg-[color-mix(in_srgb,currentColor_14%,transparent)]`}><Icon name={icon} size={16} /></span>
+        <span className="text-[20px] font-semibold tabular-nums leading-none tracking-tight">{value}</span>
+      </span>
+      <span className="text-[11.5px] font-medium text-muted truncate">{label}</span>
+    </button>
+  )
+}
+
 export default function Workbench() {
+  const phone = usePhone()
   const wbState = useWb()
   const uiState = useUi()
   const [setup, setSetup] = useState(false)
@@ -94,13 +114,39 @@ export default function Workbench() {
 
   useEffect(() => {
     if (!attention) return
-    const down = (e: MouseEvent) => { if (!popRef.current?.contains(e.target as Node)) setAttention(false) }
+    // On a phone the list is a sheet with its own backdrop.
+    const down = (e: MouseEvent) => { if (!phone && !popRef.current?.contains(e.target as Node)) setAttention(false) }
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setAttention(false) }
     document.addEventListener('mousedown', down)
     window.addEventListener('keydown', key)
     return () => { document.removeEventListener('mousedown', down); window.removeEventListener('keydown', key) }
-  }, [attention])
+  }, [attention, phone])
   useEffect(() => { if (pending === 0) setAttention(false) }, [pending])
+
+  const attentionBody = (
+    <>
+    <h2 className="m-0 flex items-center gap-1.5 text-[12px] font-semibold text-muted">
+      <Icon name="hand" size={14} className="text-warm" />要你处理<span className="tabular-nums text-faint">{pending}</span>
+    </h2>
+    {approvals.map((a) => <ApprovalCard key={a.id} approval={a} context={taskTitle(a.task_id)} />)}
+    {attentionRows.length > 0 && (
+      <div className="grid gap-0.5">
+        {attentionRows.map((t) => {
+          const p = projectOf(t.task.project_id)
+          return (
+            <div key={t.task.id} className="flex items-center gap-1 pl-1 min-w-0">
+              {p && <span title={p.name}><ProjectTile name={p.name} id={p.id} size={22} misc={p.id === 'misc'} /></span>}
+              <div className="flex-1 min-w-0">
+                <TaskRow task={t} onOpen={() => { setAttention(false); go({ view: 'task', id: t.task.id }) }} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )}
+    </>
+  )
+  const openMachines = () => { ui.state.settings = 'machines'; ui.emit() }
 
   const renderCard = (card: ProjectCard) => (
     <ProjectCardComponent
@@ -124,54 +170,59 @@ export default function Workbench() {
 
   return (
     <>
-      <div className="px-7 pt-5 pb-10 grid gap-6 content-start max-w-[1480px] max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-6 max-[760px]:gap-4">
-        <header className="flex items-center gap-2.5 min-h-9">
-          <img src="/icon.svg" alt="" width={28} height={28} className="rounded-[10px] hidden max-[760px]:block" />
-          <h1 className="text-[18px] font-semibold tracking-tight m-0">工作台</h1>
+      {phone && (
+        <PhoneHeader
+          title="工作台"
+          actions={
+            <>
+              <button className="phone-bar-btn" aria-label={`打开已归档的项目（${archivedCount} 个）`} onClick={() => setArchive(true)}>
+                <Icon name="folder-open" size={22} />
+              </button>
+              <button className="phone-bar-btn" aria-label="新建或登记项目" onClick={() => setSetup(true)}>
+                <Icon name="plus" size={24} />
+              </button>
+            </>
+          }
+        >
+          {data && (
+            <div className="grid grid-cols-4 gap-2 px-4 pb-1" aria-label="概况">
+              <Tile icon="play" value={running} label="执行中" tone="accent" />
+              <Tile icon="hand" value={pending} label="要你处理" tone="warning" onClick={pending ? () => setAttention(true) : undefined} />
+              <Tile icon="circle-dashed" value={todo} label="待办" tone="neutral" />
+              <Tile icon="laptop" value={`${online}/${data.nodes.length}`} label="机器在线" tone="success" onClick={openMachines} />
+            </div>
+          )}
+        </PhoneHeader>
+      )}
+      <div className="px-7 pt-5 pb-10 grid gap-6 content-start max-w-[1480px] min-w-0 max-[760px]:px-4 max-[760px]:pt-4 max-[760px]:pb-8 max-[760px]:gap-4">
+        <header className="flex items-center flex-wrap gap-2.5 min-h-9 max-[760px]:hidden">
+          <h1 className="text-[18px] font-semibold tracking-tight m-0 whitespace-nowrap">工作台</h1>
           <span className="flex-1"></span>
           {data && (
-            <div className="flex items-center gap-2" aria-label="概况">
+            <div className="flex items-center flex-wrap gap-2" aria-label="概况">
               <Stat icon="play" value={running} label="正在执行" tone="accent" />
               <div className="relative" ref={popRef}>
                 <Stat icon="hand" value={pending} label="要你处理" tone="warning" expanded={attention} onClick={pending ? () => setAttention((v) => !v) : undefined} />
-                {attention && pending > 0 && (
+                {attention && pending > 0 && !phone && (
                   <div
                     id="attention"
                     role="dialog"
                     aria-label="要你处理"
-                    className="absolute right-0 top-full mt-2 z-20 w-[min(440px,calc(100vw-28px))] max-h-[70vh] overflow-y-auto card shadow-pop p-3 grid gap-2.5 rise max-[760px]:fixed max-[760px]:left-3.5 max-[760px]:right-3.5 max-[760px]:top-14 max-[760px]:w-auto"
+                    className="absolute right-0 top-full mt-2 z-20 w-[min(440px,calc(100vw-28px))] max-h-[70vh] overflow-y-auto card shadow-pop p-3 grid gap-2.5 rise"
                   >
-                    <h2 className="m-0 flex items-center gap-1.5 text-[12px] font-semibold text-muted">
-                      <Icon name="hand" size={14} className="text-warm" />要你处理<span className="tabular-nums text-faint">{pending}</span>
-                    </h2>
-                    {approvals.map((a) => <ApprovalCard key={a.id} approval={a} context={taskTitle(a.task_id)} />)}
-                    {attentionRows.length > 0 && (
-                      <div className="grid gap-0.5">
-                        {attentionRows.map((t) => {
-                          const p = projectOf(t.task.project_id)
-                          return (
-                            <div key={t.task.id} className="flex items-center gap-1 pl-1 min-w-0">
-                              {p && <span title={p.name}><ProjectTile name={p.name} id={p.id} size={22} misc={p.id === 'misc'} /></span>}
-                              <div className="flex-1 min-w-0">
-                                <TaskRow task={t} onOpen={() => { setAttention(false); go({ view: 'task', id: t.task.id }) }} />
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
+                    {attentionBody}
                   </div>
                 )}
               </div>
               <Stat icon="circle-dashed" value={todo} label="待办" tone="neutral" />
-              <Stat icon="laptop" value={`${online}/${data.nodes.length}`} label="机器在线" tone="success" onClick={() => { ui.state.settings = 'machines'; ui.emit() }} />
+              <Stat icon="laptop" value={`${online}/${data.nodes.length}`} label="机器在线" tone="success" onClick={openMachines} />
             </div>
           )}
           <button className="btn small ghost" aria-label="打开已归档的项目" data-tip={`已归档 ${archivedCount} 个`} data-tip-pos="bottom" onClick={() => setArchive(true)}>
-            <Icon name="folder-open" size={16} /><span className="max-[760px]:hidden">打开</span>
+            <Icon name="folder-open" size={16} />打开
           </button>
           <button className="btn small" aria-label="新建或登记项目" onClick={() => setSetup(true)}>
-            <Icon name="plus" size={16} /><span className="max-[760px]:hidden">项目</span>
+            <Icon name="plus" size={16} />项目
           </button>
         </header>
 
@@ -191,12 +242,20 @@ export default function Workbench() {
           </div>
         ) : (
           <section aria-label="项目">
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] auto-rows-fr gap-4 max-[760px]:grid-cols-1">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] auto-rows-fr gap-4 max-[760px]:grid-cols-1 max-[760px]:auto-rows-auto max-[760px]:gap-3.5">
               {cards.map(renderCard)}
             </div>
           </section>
         )}
       </div>
+      {phone && attention && pending > 0 && (
+        <>
+          <div className="backdrop" onClick={() => setAttention(false)}></div>
+          <div className="sheet !gap-2.5" role="dialog" aria-label="要你处理">
+            <div className="grid gap-2.5 overflow-y-auto -mx-1 px-1">{attentionBody}</div>
+          </div>
+        </>
+      )}
       {archive && <ArchiveModal cards={allCards} renderCard={renderCard} onClose={closeArchive} />}
       {modalCard && (
         <ProjectModal

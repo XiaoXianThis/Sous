@@ -340,19 +340,52 @@
 .shell .side { position: relative; background: var(--chrome); box-shadow: -1px 0 0 var(--line); }
 .shell .tabs { display: none; }
 @media (max-width: 760px) {
-  .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: 1fr auto; background: var(--bg); }
+  /* Phones get an iOS-style grouped look: gray page, white cards, a translucent tab bar. */
+  .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; background: var(--chrome); }
   .shell .rail { display: none; }
   .shell .work, .shell .side { grid-row: 1; grid-column: 1; border-radius: 0; box-shadow: none; }
+  .shell .work { background: var(--chrome); padding-top: 0; -webkit-overflow-scrolling: touch; }
   .shell .side { display: block; background: var(--bg); }
   .shell[data-tab='chat'] .work { display: none; }
   .shell:not([data-tab='chat']) .side { display: none; }
   .shell .side .collapse-chat { display: none; }
   .shell .tabs {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    background: color-mix(in srgb, var(--panel) 86%, transparent);
-    backdrop-filter: saturate(1.6) blur(18px); -webkit-backdrop-filter: saturate(1.6) blur(18px);
-    box-shadow: 0 -1px 0 var(--line); padding-bottom: env(safe-area-inset-bottom);
+    display: grid; grid-template-columns: repeat(3, 1fr); position: relative; z-index: 10;
+    background: color-mix(in srgb, var(--panel) 78%, transparent);
+    backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
+    box-shadow: 0 -.5px 0 var(--line-strong); padding-bottom: env(safe-area-inset-bottom);
   }
+  /* Cards sit on the gray page without an outline, like iOS inset groups. */
+  .shell .work .card[data-project-card] { box-shadow: none; border-radius: 16px; }
+  /* The tab bar under the chat column already clears the home indicator. */
+  .shell .side .chat-composer { padding-bottom: 10px; }
+  /* iOS zooms into a focused field under 16px. */
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* The phone page bar (PhoneHeader): clear over the large title, solid once it scrolls away. */
+.phone-bar {
+  position: sticky; top: 0; z-index: 9; padding-top: env(safe-area-inset-top);
+  background: transparent; box-shadow: 0 .5px 0 transparent;
+  transition: background-color .2s, box-shadow .2s;
+}
+.phone-bar.is-collapsed {
+  background: color-mix(in srgb, var(--chrome) 80%, transparent);
+  backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
+  box-shadow: 0 .5px 0 var(--line-strong);
+}
+.phone-bar-title { opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; }
+.phone-bar.is-collapsed .phone-bar-title { opacity: 1; transform: none; }
+.phone-bar-btn {
+  display: inline-grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 12px;
+  background: transparent; color: var(--accent); transition: opacity .1s;
+}
+.phone-bar-btn:active { opacity: .45; }
+
+/* Touch feedback: buttons dim while pressed instead of relying on hover. */
+@media (hover: none) {
+  .icon-btn:active:not(:disabled), .link:active:not(:disabled) { opacity: .5; }
+  .press:active { background: var(--hover); }
 }
 
 /*

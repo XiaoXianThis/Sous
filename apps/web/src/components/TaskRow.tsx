@@ -23,7 +23,7 @@ export default function TaskRow({ task, onOpen, selected = false }: { task: Card
 
   return (
     <button
-      className={`flex items-center gap-2.5 w-full text-left border-0 bg-transparent px-2.5 py-2.5 min-h-[64px] rounded-[12px] min-w-0 transition-colors ${selected ? 'bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]' : 'hover:bg-hover'}`}
+      className={`flex items-center gap-2.5 w-full text-left border-0 bg-transparent px-2.5 py-2.5 min-h-[64px] rounded-[12px] min-w-0 transition-colors ${selected ? 'bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]' : 'hover:bg-hover active:bg-hover'}`}
       aria-label={label}
       aria-current={selected || undefined}
       title={task.summary}

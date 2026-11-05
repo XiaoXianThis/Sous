@@ -167,15 +167,14 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           ] as const).map((t) => (
             <button
               key={t.key}
-              className={`relative border-0 bg-transparent grid justify-items-center gap-0.5 pt-2 pb-1.5 text-[10.5px] font-semibold ${t.on ? 'text-accent' : 'text-muted'}`}
+              className={`relative border-0 bg-transparent grid justify-items-center content-start gap-[3px] h-[50px] pt-[7px] text-[10px] font-medium tracking-[.01em] transition-colors active:opacity-60 ${t.on ? 'text-accent' : 'text-faint'}`}
               aria-label={t.text}
+              aria-current={t.on ? 'page' : undefined}
               onClick={t.act}
             >
-              <span className={`grid place-items-center w-14 h-7 rounded-full transition-colors ${t.on ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)]' : ''}`}>
-                <Icon name={t.icon} size={21} />
-              </span>
+              <Icon name={t.icon} size={24} />
               <span>{t.text}</span>
-              {t.count > 0 && <span className={`${badge} top-1 left-[calc(50%+6px)] shadow-[0_0_0_2px_var(--panel)]`}>{t.count}</span>}
+              {t.count > 0 && <span className={`${badge} top-[3px] left-[calc(50%+5px)] shadow-none`}>{t.count > 99 ? '99+' : t.count}</span>}
             </button>
           ))}
         </nav>

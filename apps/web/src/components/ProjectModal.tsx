@@ -105,7 +105,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         role="dialog"
         aria-modal="true"
         aria-label={`项目 ${p.name}`}
-        className="fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5vh] h-[90vh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none"
+        className="fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5vh] h-[90vh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:pt-[env(safe-area-inset-top)] max-[760px]:pb-[env(safe-area-inset-bottom)]"
         style={{
           visibility: shown ? 'visible' : 'hidden',
           gridTemplateColumns: docked ? `minmax(0,1fr) clamp(300px, ${chatWidth}px, 50%)` : 'minmax(0,1fr)',
@@ -113,7 +113,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         } as React.CSSProperties}
       >
         <div className="grid grid-rows-[auto_minmax(0,1fr)] min-w-0 min-h-0">
-        <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap">
+        <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap max-[760px]:gap-x-2 max-[760px]:gap-y-3 max-[760px]:px-3 max-[760px]:pt-2">
           <ProjectTile name={p.name} id={p.id} size={40} misc={p.id === 'misc'} />
           <div className="grid gap-1 min-w-0 flex-1">
             <div className="flex items-center gap-2 min-w-0">
@@ -157,7 +157,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         )}
         {shell ? null : files ? (
           <div className="grid grid-cols-[272px_minmax(0,1fr)] min-h-0 border-t border-line max-[760px]:grid-cols-1">
-            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 ${file ? 'max-[760px]:hidden' : ''}`}>
+            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 ${file ? 'max-[760px]:hidden' : ''}`}>
               <FileTree projectId={p.id} selected={file} onSelect={onFile} />
             </div>
             <div className="min-h-0">
@@ -172,7 +172,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
           </div>
         ) : (
           <div className="grid grid-cols-[340px_minmax(0,1fr)] min-h-0 border-t border-line max-[760px]:grid-cols-1">
-            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 grid gap-2 content-start ${taskId ? 'max-[760px]:hidden' : ''}`}>
+            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 grid gap-2 content-start ${taskId ? 'max-[760px]:hidden' : ''}`}>
               <button
                 className="flex items-center justify-center gap-1.5 h-10 rounded-[12px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
                 onClick={() => { ui.state.newTask = p.id; ui.emit() }}
