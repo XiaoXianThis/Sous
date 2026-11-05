@@ -39,9 +39,9 @@ export default function ArchiveModal({ cards, renderCard, onClose }: {
         role="dialog"
         aria-modal="true"
         aria-label="已归档的项目"
-        className="fixed z-[31] overflow-hidden bg-page shadow-pop grid grid-rows-[auto_minmax(0,1fr)] left-[max(16px,calc((100vw-1180px)/2))] top-[5vh] h-[90vh] w-[min(1180px,calc(100vw-32px))] rounded-[18px] rise max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none"
+        className="fixed z-[31] overflow-hidden bg-page shadow-pop grid grid-rows-[auto_minmax(0,1fr)] left-[max(16px,calc((100vw-1180px)/2))] top-[5dvh] h-[90dvh] w-[min(1180px,calc(100vw-32px))] rounded-[18px] rise max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none"
       >
-        <header className="flex items-center gap-3 px-5 pt-4 pb-3 bg-panel border-b border-line min-w-0 flex-wrap max-[760px]:px-3.5">
+        <header className="flex items-center gap-3 px-5 pt-4 pb-3 bg-panel border-b border-line min-w-0 flex-wrap max-[760px]:px-3.5 max-[760px]:pt-[calc(var(--safe-t)+10px)]">
           <span className="grid place-items-center w-9 h-9 rounded-[12px] bg-sunken text-muted flex-none">
             <Icon name="archive" size={18} />
           </span>
@@ -64,13 +64,13 @@ export default function ArchiveModal({ cards, renderCard, onClose }: {
           <button className="icon-btn bg-sunken rounded-full" aria-label="关闭" onClick={onClose}><Icon name="x" size={16} /></button>
         </header>
 
-        <div className="overflow-y-auto p-5 min-h-0 max-[760px]:p-3.5">
+        <div className="overflow-y-auto p-5 min-h-0 max-[760px]:p-3.5 max-[760px]:pb-[calc(16px+var(--safe-b))]">
           {shown.length ? (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] auto-rows-fr gap-4 max-[760px]:grid-cols-1">
               {shown.map(renderCard)}
             </div>
           ) : (
-            <div className="grid justify-items-center gap-2 pt-[12vh] px-4 text-muted text-center">
+            <div className="grid justify-items-center gap-2 pt-[12dvh] px-4 text-muted text-center">
               <span className="grid place-items-center w-14 h-14 rounded-[16px] bg-sunken text-muted">
                 <Icon name={total ? 'search' : 'archive'} size={26} />
               </span>

@@ -9,8 +9,10 @@ import Icon from './Icon'
 import Locations from './Locations'
 import ProjectChat from './ProjectChat'
 import ResizeHandle from './ResizeHandle'
+import { usePhone } from '../lib/phone'
 import { useStoredWidth } from '../lib/resize'
 import { ArchivedBadge, ProjectTabs, type ProjectTab } from './ProjectCard'
+import { BackButton } from './PhoneHeader'
 import ProjectTile from './ProjectTile'
 import ShellPanel from './ShellPanel'
 import TaskRow from './TaskRow'
@@ -40,7 +42,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
   const closing = useRef(false)
   const [shown, setShown] = useState(false)
   const p = card.project
-  const phone = typeof matchMedia !== 'undefined' && matchMedia('(max-width: 760px)').matches
+  const phone = usePhone()
   // The project chat is docked on the right; remembered open or closed (closed on phones).
   const [chatOpen, setChatOpenState] = useState(() => {
     if (phone) return false
@@ -65,7 +67,8 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
 
   useLayoutEffect(() => {
     const el = panel.current
-    if (el && from && motion()) {
+    // On a phone it is a pushed page (.push-in), not a card growing.
+    if (el && from && motion() && !phone) {
       const to = el.getBoundingClientRect()
       el.animate([rectOf(from), rectOf(to)], { duration: 260, easing: 'cubic-bezier(.2,.85,.25,1)' })
     }
@@ -76,6 +79,17 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
     const el = panel.current
     if (closing.current) return
     closing.current = true
+    if (phone) {
+      // Slide out to the right, from wherever an edge swipe left it.
+      if (!el || !motion()) return onClose()
+      const now = getComputedStyle(el).transform
+      const a = el.animate([{ transform: now === 'none' ? 'translateX(0)' : now }, { transform: 'translateX(100%)' }], {
+        duration: 260, easing: 'cubic-bezier(.3,.7,.4,1)', fill: 'forwards',
+      })
+      el.parentElement?.querySelector('.backdrop')?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, fill: 'forwards' })
+      a.onfinish = onClose
+      return
+    }
     const cardEl = document.querySelector<HTMLElement>(`[data-project-card="${CSS.escape(p.id)}"]`)
     if (!el || !cardEl || !motion()) return onClose()
     const a = el.animate([rectOf(el.getBoundingClientRect()), rectOf(cardEl.getBoundingClientRect())], {
@@ -86,12 +100,21 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    // On a phone Escape (and the edge swipe, through it) steps back one level, like the bar's back button.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') (phone ? back.go : close)() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
 
   const files = tab === 'details' && p.id !== 'misc'
+  // Phone: the bar's back button steps back one level at a time, like a navigation stack.
+  const back = chatOpen
+    ? { label: '收起项目对话', go: () => setChatOpen(false) }
+    : tab === 'tasks' && taskId
+      ? { label: '返回任务列表', go: () => onTask('') }
+      : files && file
+        ? { label: '返回文件列表', go: () => onFile('') }
+        : { label: '返回工作台', go: close }
   const shell = tab === 'shell' && p.id !== 'misc'
   // Once opened, the terminals stay mounted while other tabs show, so their screens survive.
   const [shellSeen, setShellSeen] = useState(shell)
@@ -105,7 +128,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         role="dialog"
         aria-modal="true"
         aria-label={`项目 ${p.name}`}
-        className="fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5vh] h-[90vh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:pt-[env(safe-area-inset-top)] max-[760px]:pb-[env(safe-area-inset-bottom)]"
+        className={`fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5dvh] h-[90dvh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:shadow-none ${phone ? 'push-in' : ''}`}
         style={{
           visibility: shown ? 'visible' : 'hidden',
           gridTemplateColumns: docked ? `minmax(0,1fr) clamp(300px, ${chatWidth}px, 50%)` : 'minmax(0,1fr)',
@@ -113,42 +136,68 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         } as React.CSSProperties}
       >
         <div className="grid grid-rows-[auto_minmax(0,1fr)] min-w-0 min-h-0">
-        <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap max-[760px]:gap-x-2 max-[760px]:gap-y-3 max-[760px]:px-3 max-[760px]:pt-2">
-          <ProjectTile name={p.name} id={p.id} size={40} misc={p.id === 'misc'} />
-          <div className="grid gap-1 min-w-0 flex-1">
+        {phone ? (
+          <header className="grid gap-3 px-3 pt-[calc(var(--safe-t)+6px)] pb-3 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-              <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</h2>
-              {card.archived && <ArchivedBadge />}
+              <BackButton label={back.label} onClick={back.go} />
+              <div className="flex-1 min-w-0 flex items-center justify-center gap-2">
+                <ProjectTile name={p.name} id={p.id} size={26} misc={p.id === 'misc'} />
+                <h2 className="m-0 text-[17px] font-semibold tracking-tight truncate">{p.name}</h2>
+                {card.archived && <ArchivedBadge />}
+              </div>
+              <div className="glass-group glass">
+                <button className={`phone-bar-btn ${chatOpen ? '!text-accent' : ''}`} aria-label={chatOpen ? '收起项目对话' : '和 sous 聊这个项目'} aria-pressed={chatOpen} onClick={() => setChatOpen(!chatOpen)}>
+                  <Icon name="chat" size={20} />
+                </button>
+                {p.id !== 'misc' && (card.archived ? (
+                  <button className="phone-bar-btn" aria-label="激活项目" onClick={() => void setArchived(p, false)}><Icon name="unarchive" size={20} /></button>
+                ) : (
+                  <button className="phone-bar-btn" aria-label="归档项目" onClick={() => { close(); void setArchived(p, true) }}><Icon name="archive" size={20} /></button>
+                ))}
+                <button className="phone-bar-btn" aria-label="项目详情" onClick={() => { close(); go({ view: 'project', id: p.id }) }}><Icon name="more" size={22} /></button>
+              </div>
             </div>
-            {p.id !== 'misc' && <Locations locations={card.locations} compact />}
-          </div>
-          <div className={`${p.id === 'misc' ? 'w-[220px]' : 'w-[300px]'} max-[760px]:order-last max-[760px]:w-full`}>
+            {p.id !== 'misc' && <div className="flex justify-center min-w-0"><Locations locations={card.locations} compact /></div>}
             <ProjectTabs tab={tab} onTab={onTab} tasks={card.allTasks.length + card.allAgents.length} shell={p.id !== 'misc'} />
-          </div>
-          {p.id !== 'misc' && (card.archived ? (
-            <button className="icon-btn" aria-label="激活项目" data-tip="激活，放回工作台" data-tip-pos="bottom" onClick={() => void setArchived(p, false)}>
-              <Icon name="unarchive" size={18} />
+          </header>
+        ) : (
+          <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap max-[760px]:gap-x-2 max-[760px]:gap-y-3 max-[760px]:px-3 max-[760px]:pt-2">
+            <ProjectTile name={p.name} id={p.id} size={40} misc={p.id === 'misc'} />
+            <div className="grid gap-1 min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</h2>
+                {card.archived && <ArchivedBadge />}
+              </div>
+              {p.id !== 'misc' && <Locations locations={card.locations} compact />}
+            </div>
+            <div className={`${p.id === 'misc' ? 'w-[220px]' : 'w-[300px]'} max-[760px]:order-last max-[760px]:w-full`}>
+              <ProjectTabs tab={tab} onTab={onTab} tasks={card.allTasks.length + card.allAgents.length} shell={p.id !== 'misc'} />
+            </div>
+            {p.id !== 'misc' && (card.archived ? (
+              <button className="icon-btn" aria-label="激活项目" data-tip="激活，放回工作台" data-tip-pos="bottom" onClick={() => void setArchived(p, false)}>
+                <Icon name="unarchive" size={18} />
+              </button>
+            ) : (
+              <button className="icon-btn" aria-label="归档项目" data-tip="归档" data-tip-pos="bottom" onClick={() => { close(); void setArchived(p, true) }}>
+                <Icon name="archive" size={18} />
+              </button>
+            ))}
+            <button
+              className={`icon-btn ${chatOpen ? 'text-accent' : ''}`}
+              aria-label={chatOpen ? '收起项目对话' : '和 sous 聊这个项目'}
+              aria-pressed={chatOpen}
+              data-tip={chatOpen ? '收起对话' : '和 sous 聊这个项目'}
+              data-tip-pos="bottom"
+              onClick={() => setChatOpen(!chatOpen)}
+            >
+              <Icon name="chat" size={18} />
             </button>
-          ) : (
-            <button className="icon-btn" aria-label="归档项目" data-tip="归档" data-tip-pos="bottom" onClick={() => { close(); void setArchived(p, true) }}>
-              <Icon name="archive" size={18} />
+            <button className="icon-btn" aria-label="项目详情" data-tip="项目详情" data-tip-pos="bottom" onClick={() => { close(); go({ view: 'project', id: p.id }) }}>
+              <Icon name="more" size={20} />
             </button>
-          ))}
-          <button
-            className={`icon-btn ${chatOpen ? 'text-accent' : ''}`}
-            aria-label={chatOpen ? '收起项目对话' : '和 sous 聊这个项目'}
-            aria-pressed={chatOpen}
-            data-tip={chatOpen ? '收起对话' : '和 sous 聊这个项目'}
-            data-tip-pos="bottom"
-            onClick={() => setChatOpen(!chatOpen)}
-          >
-            <Icon name="chat" size={18} />
-          </button>
-          <button className="icon-btn" aria-label="项目详情" data-tip="项目详情" data-tip-pos="bottom" onClick={() => { close(); go({ view: 'project', id: p.id }) }}>
-            <Icon name="more" size={20} />
-          </button>
-          <button className="icon-btn bg-sunken rounded-full" aria-label="关闭" onClick={close}><Icon name="x" size={16} /></button>
-        </header>
+            <button className="icon-btn bg-sunken rounded-full" aria-label="关闭" onClick={close}><Icon name="x" size={16} /></button>
+          </header>
+        )}
 
         {shellSeen && (
           <div className={shell ? 'min-h-0' : 'hidden'}>
@@ -157,12 +206,15 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         )}
         {shell ? null : files ? (
           <div className="grid grid-cols-[272px_minmax(0,1fr)] min-h-0 border-t border-line max-[760px]:grid-cols-1">
-            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 ${file ? 'max-[760px]:hidden' : ''}`}>
+            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 max-[760px]:pb-[calc(16px+var(--safe-b))] ${file ? 'max-[760px]:hidden' : ''}`}>
               <FileTree projectId={p.id} selected={file} onSelect={onFile} />
             </div>
-            <div className="min-h-0">
+            <div className="min-h-0" data-page={phone && file ? '' : undefined}>
               {file ? (
-                <FileEditor projectId={p.id} path={file} onBack={() => onFile('')} />
+                <>
+                  {phone && <button className="sr-only" tabIndex={-1} aria-hidden="true" data-back onClick={() => onFile('')}></button>}
+                  <FileEditor projectId={p.id} path={file} />
+                </>
               ) : (
                 <div className="grid place-items-center h-full text-muted text-[13px] max-[760px]:hidden">
                   <span className="grid justify-items-center gap-2"><Icon name="file" size={28} />选一个文件来查看或编辑</span>
@@ -172,7 +224,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
           </div>
         ) : (
           <div className="grid grid-cols-[340px_minmax(0,1fr)] min-h-0 border-t border-line max-[760px]:grid-cols-1">
-            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 grid gap-2 content-start ${taskId ? 'max-[760px]:hidden' : ''}`}>
+            <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 max-[760px]:px-3 max-[760px]:pb-[calc(16px+var(--safe-b))] grid gap-2 content-start ${taskId ? 'max-[760px]:hidden' : ''}`}>
               <button
                 className="flex items-center justify-center gap-1.5 h-10 rounded-[12px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
                 onClick={() => { ui.state.newTask = p.id; ui.emit() }}
@@ -186,10 +238,11 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
                 {card.listTasks.map((t) => <TaskRow key={t.task.id} task={t} selected={t.task.id === taskId} onOpen={() => onTask(t.task.id)} />)}
               </div>
             </div>
-            <div className="overflow-y-auto p-5 min-h-0">
+            <div className="overflow-y-auto p-5 min-h-0 max-[760px]:px-4 max-[760px]:pb-[calc(20px+var(--safe-b))]" data-page={phone && taskId ? '' : undefined}>
               {taskId ? (
                 <>
-                  <button className="btn small ghost mb-3 min-[761px]:hidden" onClick={() => onTask('')}><Icon name="back" size={14} />任务列表</button>
+                  {/* For the edge swipe: it slides just this page back to the list. */}
+                  {phone && <button className="sr-only" tabIndex={-1} aria-hidden="true" data-back onClick={() => onTask('')}></button>}
                   <TaskView key={taskId} id={taskId} embedded />
                 </>
               ) : (
@@ -203,8 +256,9 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         </div>
         {chatOpen && (
           <aside
-            className="relative min-w-0 min-h-0 bg-chrome border-l border-line max-[760px]:absolute max-[760px]:inset-0 max-[760px]:z-10 max-[760px]:border-l-0"
+            className={`relative min-w-0 min-h-0 bg-chrome border-l border-line max-[760px]:absolute max-[760px]:inset-0 max-[760px]:z-10 max-[760px]:border-l-0 max-[760px]:bg-page ${phone ? 'push-in' : ''}`}
             aria-label="项目对话"
+            data-page={phone ? '' : undefined}
           >
             {docked && (
               <ResizeHandle

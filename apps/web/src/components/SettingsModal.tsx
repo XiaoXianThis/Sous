@@ -1,25 +1,28 @@
 import { useEffect } from 'react'
 import { ui, useUi } from '../lib/app'
+import { usePhone } from '../lib/phone'
 import { setTheme, useTheme, type ThemePref } from '../lib/theme'
 import Icon from './Icon'
 import Machines from './Machines'
 import Memories from './Memories'
 import Models from './Models'
 import Personas from './Personas'
+import PhoneHeader, { BackButton } from './PhoneHeader'
 import Schedules from './Schedules'
 import Settings from './Settings'
 import Usage from './Usage'
 
+// color and group are for the phone's grouped list, after iOS Settings.
 const tabs = [
-  { key: 'machines', text: '机器', icon: 'laptop' },
-  { key: 'models', text: '模型', icon: 'cpu' },
-  { key: 'personas', text: '岗位', icon: 'users' },
-  { key: 'schedules', text: '定时任务', icon: 'calendar' },
-  { key: 'memories', text: '记忆', icon: 'brain' },
-  { key: 'usage', text: '用量', icon: 'chart' },
-  { key: 'settings', text: '通知与默认', icon: 'bell' },
-  { key: 'appearance', text: '外观', icon: 'moon' },
-  { key: 'account', text: '账号', icon: 'key' },
+  { key: 'machines', text: '机器', icon: 'laptop', color: '#0a84ff', group: 0 },
+  { key: 'models', text: '模型', icon: 'cpu', color: '#5e5ce6', group: 0 },
+  { key: 'personas', text: '岗位', icon: 'users', color: '#ff9f0a', group: 0 },
+  { key: 'schedules', text: '定时任务', icon: 'calendar', color: '#ff453a', group: 1 },
+  { key: 'memories', text: '记忆', icon: 'brain', color: '#ff375f', group: 1 },
+  { key: 'usage', text: '用量', icon: 'chart', color: '#30b158', group: 1 },
+  { key: 'settings', text: '通知与默认', icon: 'bell', color: '#ff3b30', group: 2 },
+  { key: 'appearance', text: '外观', icon: 'moon', color: '#3a3a3c', group: 2 },
+  { key: 'account', text: '账号', icon: 'key', color: '#8e8e93', group: 3 },
 ]
 const statusText = { connecting: '连接中', online: '已连接', offline: '离线，正在重连' }
 
@@ -72,6 +75,7 @@ function Appearance() {
 
 export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
   const uiState = useUi()
+  const phone = usePhone()
   const close = () => {
     ui.state.settings = ''
     ui.emit()
@@ -79,26 +83,111 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('.embed > .backdrop:not(:first-child)')) close()
+      if (e.key !== 'Escape' || document.querySelector('.embed > .backdrop:not(:first-child)')) return
+      // On a phone a settings page goes back to the list first.
+      if (phone && uiState.settings !== 'home') {
+        ui.state.settings = 'home'
+        ui.emit()
+      } else close()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
 
   const current = tabs.find((t) => t.key === uiState.settings) ?? tabs[0]
+  const page = (key: string) => (
+    key === 'machines' ? (
+      <Machines onClose={close} />
+    ) : key === 'models' ? (
+      <Models />
+    ) : key === 'personas' ? (
+      <Personas onClose={close} />
+    ) : key === 'schedules' ? (
+      <Schedules onClose={close} />
+    ) : key === 'memories' ? (
+      <Memories onClose={close} />
+    ) : key === 'usage' ? (
+      <Usage onClose={close} />
+    ) : key === 'settings' ? (
+      <Settings onClose={close} />
+    ) : key === 'appearance' ? (
+      <Appearance />
+    ) : (
+      <div className="card p-4 grid gap-4 justify-items-start">
+        <div className="flex items-center gap-3">
+          <img src="/icon.svg" alt="" width={40} height={40} className="rounded-[12px]" />
+          <div className="grid leading-tight">
+            <strong className="text-[15px]">sous</strong>
+            <span className="flex gap-1.5 items-center text-[12.5px] text-muted mt-1">
+              <span className={`w-2 h-2 rounded-full ${uiState.status === 'online' ? 'bg-ok' : uiState.status === 'offline' ? 'bg-danger' : 'bg-faint'}`}></span>
+              {statusText[uiState.status]}
+            </span>
+          </div>
+        </div>
+        <button className="btn ghost hover:!text-danger" onClick={onLogout}><Icon name="logout" size={15} />退出登录</button>
+      </div>
+    )
+  )
+
+  if (phone) {
+    const open = tabs.find((t) => t.key === uiState.settings)
+    const home = () => {
+      ui.state.settings = 'home'
+      ui.emit()
+    }
+    return (
+      // Settings are the third tab on a phone: a grouped list that pushes each page in from the right.
+      // The tab bar stays on top (Shell), so there is no close button.
+      <div className="fixed inset-0 z-[27] bg-chrome" role="dialog" aria-label="设置">
+        <div className="absolute inset-0 overflow-y-auto" aria-hidden={open ? true : undefined}>
+          <PhoneHeader title="设置" />
+          <div className="grid gap-6 px-4 pb-[var(--tabbar-space)]">
+            <div className="ios-group flex items-center gap-3.5 p-4">
+              <img src="/icon.svg" alt="" width={56} height={56} className="rounded-[16px]" />
+              <div className="grid leading-tight min-w-0">
+                <strong className="text-[19px] font-semibold">sous</strong>
+                <span className="flex gap-1.5 items-center text-[13px] text-muted mt-1">
+                  <span className={`w-2 h-2 rounded-full ${uiState.status === 'online' ? 'bg-ok' : uiState.status === 'offline' ? 'bg-danger' : 'bg-faint'}`}></span>
+                  {statusText[uiState.status]}
+                </span>
+              </div>
+            </div>
+            {[0, 1, 2, 3].map((g) => (
+              <div key={g} className="ios-group">
+                {tabs.filter((t) => t.group === g).map((t) => (
+                  <button key={t.key} className="ios-row" onClick={() => { ui.state.settings = t.key; ui.emit() }}>
+                    <span className="ios-icon" style={{ background: t.color }}><Icon name={t.icon} size={18} stroke={2} /></span>
+                    <span className="flex-1 min-w-0 truncate">{t.text}</span>
+                    <Icon name="chevron" size={16} className="-rotate-90 text-faint" stroke={2.4} />
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* A page goes over the list, which shows through as an edge swipe pulls the page away. */}
+        {open && (
+          <div key={open.key} className="absolute inset-0 overflow-y-auto bg-chrome push-in settings-page" data-page>
+            <PhoneHeader title={open.text} leading={<BackButton label="返回设置" onClick={home} />} />
+            <div className="embed px-4 pb-[var(--tabbar-space)]">{page(open.key)}</div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <>
       {/* Clicking outside does not close settings: only the close button and Escape do. */}
       <div className="backdrop z-[28]" role="presentation"></div>
       <div
-        className="fixed z-[29] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100vh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:inset-0 max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
+        className="fixed z-[29] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100dvh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:inset-0 max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
         role="dialog"
         aria-modal="true"
         aria-label="设置"
       >
         <nav
-          className="bg-chrome px-2 pt-3 pb-3 grid content-start gap-px shadow-[inset_-1px_0_0_var(--line)] max-[760px]:flex max-[760px]:flex-nowrap max-[760px]:overflow-x-auto max-[760px]:gap-1 max-[760px]:px-2 max-[760px]:pt-[calc(8px+env(safe-area-inset-top))] max-[760px]:pb-2 max-[760px]:shadow-[inset_0_-1px_0_var(--line)] max-[760px]:items-center"
+          className="bg-chrome px-2 pt-3 pb-3 grid content-start gap-px shadow-[inset_-1px_0_0_var(--line)] max-[760px]:flex max-[760px]:flex-nowrap max-[760px]:overflow-x-auto max-[760px]:gap-1 max-[760px]:px-2 max-[760px]:pt-[calc(8px+var(--safe-t))] max-[760px]:pb-2 max-[760px]:shadow-[inset_0_-1px_0_var(--line)] max-[760px]:items-center"
           aria-label="设置分类"
         >
           <h2 className="m-0 px-2.5 pt-1 pb-3 text-[12px] font-semibold text-muted uppercase tracking-wider max-[760px]:hidden">设置</h2>
@@ -129,39 +218,9 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
             <h2 className="m-0 text-[15px] font-semibold flex-1">{current.text}</h2>
             <button className="icon-btn max-[760px]:hidden" aria-label="关闭设置" data-tip="关闭（Esc）" data-tip-pos="bottom" onClick={close}><Icon name="x" size={17} /></button>
           </header>
-          <div className="overflow-y-auto px-6 pt-5 pb-10 max-[760px]:px-4 max-[760px]:pt-4 max-[760px]:pb-[calc(24px+env(safe-area-inset-bottom))]">
+          <div className="overflow-y-auto px-6 pt-5 pb-10 max-[760px]:px-4 max-[760px]:pt-4 max-[760px]:pb-[calc(24px+var(--safe-b))]">
             <div className="embed max-w-[760px]">
-              {current.key === 'machines' ? (
-                <Machines onClose={close} />
-              ) : current.key === 'models' ? (
-                <Models />
-              ) : current.key === 'personas' ? (
-                <Personas onClose={close} />
-              ) : current.key === 'schedules' ? (
-                <Schedules onClose={close} />
-              ) : current.key === 'memories' ? (
-                <Memories onClose={close} />
-              ) : current.key === 'usage' ? (
-                <Usage onClose={close} />
-              ) : current.key === 'settings' ? (
-                <Settings onClose={close} />
-              ) : current.key === 'appearance' ? (
-                <Appearance />
-              ) : (
-                <div className="card p-4 grid gap-4 justify-items-start">
-                  <div className="flex items-center gap-3">
-                    <img src="/icon.svg" alt="" width={40} height={40} className="rounded-[12px]" />
-                    <div className="grid leading-tight">
-                      <strong className="text-[15px]">sous</strong>
-                      <span className="flex gap-1.5 items-center text-[12.5px] text-muted mt-1">
-                        <span className={`w-2 h-2 rounded-full ${uiState.status === 'online' ? 'bg-ok' : uiState.status === 'offline' ? 'bg-danger' : 'bg-faint'}`}></span>
-                        {statusText[uiState.status]}
-                      </span>
-                    </div>
-                  </div>
-                  <button className="btn ghost hover:!text-danger" onClick={onLogout}><Icon name="logout" size={15} />退出登录</button>
-                </div>
-              )}
+              {page(current.key)}
             </div>
           </div>
         </div>

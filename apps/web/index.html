@@ -2,14 +2,19 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- No pinch or double-tap zoom: the app sizes itself for touch. resizes-content shrinks the layout when Android's keyboard opens; iOS is handled in src/lib/ios.ts. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#f3f3f3" />
-    <script src="/theme-init.js"></script>
+    <meta name="color-scheme" content="light dark" />
+    <meta name="format-detection" content="telephone=no, email=no, address=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="sous" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <script src="/theme-init.js"></script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>sous</title>
   </head>
   <body>

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { useChat, useUi, useWb } from '../lib/app'
+import { usePhone } from '../lib/phone'
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
 import type { Message, Thread } from '../lib/types'
@@ -52,6 +53,21 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const scroller = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const stick = useRef(true)
+  const phone = usePhone()
+  const section = useRef<HTMLElement>(null)
+  const composer = useRef<HTMLFormElement>(null)
+
+  // Phone: the composer floats over the timeline, which scrolls under it; keep its height as padding.
+  useEffect(() => {
+    const el = composer.current
+    if (!phone || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      section.current?.style.setProperty('--composer-h', `${el.offsetHeight}px`)
+      if (stick.current && scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [phone])
 
   const nodeName = (id: string) => wbState.data?.nodes.find((n) => n.id === id)?.name ?? '机器'
   const messages = chatState.messages[threadId] ?? []
@@ -133,11 +149,11 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const dot = uiState.status === 'online' ? 'bg-ok' : uiState.status === 'offline' ? 'bg-danger' : 'bg-faint'
 
   return (
-    <section className="flex flex-col min-h-0 h-full min-w-0" aria-label={label}>
-      <header className="flex items-center gap-1 pt-[calc(10px+env(safe-area-inset-top))] pr-2.5 pb-2 pl-3 border-b border-line">
+    <section ref={section} className={`flex flex-col min-h-0 h-full min-w-0 ${phone ? 'chat-phone' : ''}`} aria-label={label}>
+      <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
         <div className="relative picker min-w-0">
           <button
-            className="flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover"
+            className={phone ? 'glass-pill glass max-w-full' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
             onClick={() => setPicking(!picking)}
             aria-expanded={picking}
             aria-haspopup="listbox"
@@ -150,7 +166,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             <Icon name="chevron" size={12} className="text-faint flex-none" />
           </button>
           {picking && (
-            <div className="absolute top-full left-0 z-[25] mt-1 w-[272px] max-h-[55vh] overflow-y-auto bg-raised rounded-[12px] p-1 grid gap-0.5 shadow-pop rise" role="listbox" aria-label="对话">
+            <div className="absolute top-full left-0 z-[25] mt-1 w-[272px] max-h-[55dvh] overflow-y-auto bg-raised rounded-[12px] p-1 grid gap-0.5 shadow-pop rise" role="listbox" aria-label="对话">
               {threads.length === 0 && <p className="m-0 px-2.5 py-2 text-[12.5px] text-muted">还没有对话，发一条消息就会开始</p>}
               {threads.map((t) => (
                 <button
@@ -169,14 +185,16 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
           )}
         </div>
         <span className="flex-1"></span>
-        <ModelSwitch />
-        <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
-        {actions}
+        <div className={phone ? 'glass-group glass gap-0.5 px-1.5' : 'contents'}>
+          <ModelSwitch />
+          <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
+          {actions}
+        </div>
       </header>
 
-      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
+      <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
         <div className="mx-auto max-w-[820px] px-4 pt-4 pb-4 grid grid-cols-[minmax(0,1fr)] gap-5">
-          {timeline.length === 0 && !answering && <div className="grid justify-items-center gap-3 text-center pt-[14vh] px-2 rise">{empty}</div>}
+          {timeline.length === 0 && !answering && <div className="grid justify-items-center gap-3 text-center pt-[14dvh] px-2 rise">{empty}</div>}
           {timeline.map((item) =>
             item.kind === 'message' ? (
               <MessageView key={item.message.id} message={item.message} />
@@ -202,10 +220,12 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         </div>
       </div>
 
-      <form className="chat-composer px-3 pt-1 pb-[calc(12px+env(safe-area-inset-bottom))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
+      <form ref={composer} className="chat-composer px-3 pt-1 pb-[calc(12px+var(--safe-b))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
         {sendError && <p className="text-danger text-[12.5px] m-0 ml-2 flex items-center gap-1" role="alert"><Icon name="alert" size={13} />{sendError}</p>}
         <div
-          className="grid gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text"
+          className={phone
+            ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
+            : 'grid gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
           onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) input.current?.focus() }}
         >
           <textarea
@@ -218,9 +238,9 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             onInput={resize}
             onKeyDown={onKey}
             aria-label="消息"
-            className="w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
+            className="w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] max-[760px]:min-h-[36px] max-[760px]:max-h-[160px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
           ></textarea>
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="composer-row flex items-center gap-2 min-w-0">
             {context ? (
               <span className="inline-flex gap-1 items-center text-[12px] text-muted bg-sunken rounded-[8px] h-7 pl-2 pr-0.5 max-w-full min-w-0" title="sous 会知道你在看这个">
                 <Icon name={context.icon} size={13} className="flex-none" /><span className="overflow-hidden text-ellipsis whitespace-nowrap">{context.text}</span>
@@ -240,7 +260,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             )}
             <span className="flex-1"></span>
             <button
-              className="w-8 h-8 rounded-full border-0 flex-none bg-ink text-page grid place-items-center transition-transform active:scale-95 disabled:bg-sunken disabled:text-faint disabled:opacity-100"
+              className="w-8 h-8 rounded-full border-0 flex-none bg-ink text-page grid place-items-center transition-transform active:scale-95 disabled:bg-sunken disabled:text-faint disabled:opacity-100 max-[760px]:w-9 max-[760px]:h-9 max-[760px]:bg-accent max-[760px]:text-accent-text"
               type="submit"
               disabled={!draft.trim() || sending}
               aria-label="发送"

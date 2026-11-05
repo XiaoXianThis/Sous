@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { resolved, setTheme, useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
+import { barAfterScroll } from '../lib/gesture'
 import { useStoredWidth } from '../lib/resize'
 import ChatPanel from './ChatPanel'
 import Icon from './Icon'
@@ -84,8 +85,24 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
   }
   const setTab = (tab: 'chat' | 'work') => {
     ui.state.tab = tab
+    ui.state.settings = ''
     ui.emit()
   }
+  // Phone: the tab bar shrinks while the workbench scrolls down.
+  const [barMin, setBarMin] = useState(false)
+  const lastY = useRef(0)
+  const onWorkScroll = (e: React.UIEvent<HTMLElement>) => {
+    const y = e.currentTarget.scrollTop
+    setBarMin((m) => barAfterScroll(m, lastY.current, y))
+    lastY.current = y
+  }
+  useEffect(() => setBarMin(false), [uiState.tab, uiState.settings])
+  const tabs = [
+    { key: 'work', icon: 'grid', text: '工作台', count: pending, on: uiState.tab === 'work' && !uiState.settings, act: () => setTab('work') },
+    { key: 'chat', icon: 'chat', text: '对话', count: 0, on: uiState.tab === 'chat' && !uiState.settings, act: () => setTab('chat') },
+    { key: 'settings', icon: 'settings', text: '设置', count: 0, on: !!uiState.settings, act: () => openSettings('home') },
+  ]
+  const tabIndex = Math.max(0, tabs.findIndex((t) => t.on))
   const closeTask = () => {
     ui.state.newTask = ''
     ui.emit()
@@ -93,8 +110,13 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
 
   return (
     <>
-      <div className={`shell ${uiState.chatOpen ? '' : 'chat-closed'}`} data-tab={uiState.tab} style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
-        <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+env(safe-area-inset-top))] pb-[calc(14px+env(safe-area-inset-bottom))]" aria-label="主导航">
+      <div
+        className={`shell ${uiState.chatOpen ? '' : 'chat-closed'}`}
+        data-tab={uiState.tab}
+        data-bar={barMin ? 'min' : undefined}
+        data-settings={uiState.settings ? '' : undefined}
+        style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
+        <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+var(--safe-t))] pb-[calc(14px+var(--safe-b))]" aria-label="主导航">
           <img src="/icon.svg" alt="sous" width={32} height={32} className="rounded-[10px] mb-3" />
           <RailButton tip="工作台" active count={pending} onClick={() => go({ view: 'overview', id: '' })}>
             <Icon name="grid" size={20} />
@@ -138,7 +160,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           </RailButton>
         </nav>
 
-        <main className="work overflow-y-auto min-w-0 min-h-0 pt-[env(safe-area-inset-top)]" aria-label="工作台">
+        <main className="work overflow-y-auto min-w-0 min-h-0 pt-[var(--safe-t)]" aria-label="工作台" onScroll={onWorkScroll}>
           <Workbench />
         </main>
 
@@ -159,22 +181,28 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           />
         </aside>
 
-        <nav className="tabs" aria-label="主导航">
-          {([
-            { key: 'work', icon: 'grid', text: '工作台', count: pending, on: uiState.tab === 'work', act: () => setTab('work') },
-            { key: 'chat', icon: 'chat', text: '对话', count: 0, on: uiState.tab === 'chat', act: () => setTab('chat') },
-            { key: 'settings', icon: 'settings', text: '设置', count: 0, on: false, act: () => openSettings('machines') },
-          ] as const).map((t) => (
+        <nav
+          className="tabbar glass"
+          aria-label="主导航"
+          style={{ '--tabs': tabs.length, '--tab-i': tabIndex } as React.CSSProperties}
+          onClick={() => barMin && setBarMin(false)}
+        >
+          <span className="tabbar-lens" aria-hidden="true"></span>
+          {tabs.map((t) => (
             <button
               key={t.key}
-              className={`relative border-0 bg-transparent grid justify-items-center content-start gap-[3px] h-[50px] pt-[7px] text-[10px] font-medium tracking-[.01em] transition-colors active:opacity-60 ${t.on ? 'text-accent' : 'text-faint'}`}
+              className="tabbar-item"
               aria-label={t.text}
               aria-current={t.on ? 'page' : undefined}
-              onClick={t.act}
+              onClick={(e) => {
+                // A tap on the shrunk bar only brings it back.
+                if (barMin) return e.stopPropagation(), setBarMin(false)
+                t.act()
+              }}
             >
               <Icon name={t.icon} size={24} />
               <span>{t.text}</span>
-              {t.count > 0 && <span className={`${badge} top-[3px] left-[calc(50%+5px)] shadow-none`}>{t.count > 99 ? '99+' : t.count}</span>}
+              {t.count > 0 && <span className={`badge ${badge} top-[5px] left-[calc(50%+6px)] shadow-none`}>{t.count > 99 ? '99+' : t.count}</span>}
             </button>
           ))}
         </nav>

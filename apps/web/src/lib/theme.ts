@@ -32,6 +32,8 @@ export function applyTheme() {
   const t = resolved()
   document.documentElement.dataset.theme = t
   for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.setAttribute('content', t === 'dark' ? '#141414' : '#f3f3f3')
+  // A home-screen app reads this at launch: white status-bar text over the dark theme.
+  document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.setAttribute('content', t === 'dark' ? 'black-translucent' : 'default')
 }
 
 export function setTheme(p: ThemePref) {

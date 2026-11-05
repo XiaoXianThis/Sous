@@ -47,7 +47,7 @@ export default function FileEditor({ projectId, path, onBack }: { projectId: str
   return (
     <div className="grid grid-rows-[auto_minmax(0,1fr)] min-h-0 h-full">
       <div className="flex items-center gap-2 min-h-11 px-3 min-w-0">
-        {onBack && <button className="icon-btn min-[761px]:hidden" aria-label="返回文件列表" onClick={onBack}><Icon name="back" size={18} /></button>}
+        {onBack && <button className="icon-btn min-[761px]:hidden" data-back aria-label="返回文件列表" onClick={onBack}><Icon name="back" size={18} /></button>}
         <Icon name="file" size={16} className="text-muted" />
         <span className="flex-1 min-w-0 text-[13px] font-medium overflow-hidden text-ellipsis whitespace-nowrap" title={path}>
           {name}{dirty && <span className="text-warm" title="有未保存的修改"> ●</span>}

@@ -29,3 +29,5 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0014](0014-server-role-and-ops-tasks.md) | 服务器作为机器接入，部署和维护走运维任务 | Accepted |
 | [0015](0015-project-shells-and-hardening.md) | 页面上的项目终端，以及配套的安全收紧 | Accepted |
 | [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted |
+| [0017](0017-web-search-and-fetch.md) | 主管可以联网：web_search 和 web_fetch | Accepted |
+| [0018](0018-phone-liquid-glass.md) | 手机端按原生 App 做：WebView 行为 + Liquid Glass 外观 | Accepted |

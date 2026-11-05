@@ -50,7 +50,7 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
       }
       actions={
         onClose && (
-          <button className="icon-btn" aria-label="收起项目对话" data-tip="收起对话" data-tip-pos="bottom" onClick={onClose}><Icon name="panel" size={18} /></button>
+          <button className="icon-btn" data-back aria-label="收起项目对话" data-tip="收起对话" data-tip-pos="bottom" onClick={onClose}><Icon name="panel" size={18} /></button>
         )
       }
     />

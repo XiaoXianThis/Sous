@@ -29,7 +29,7 @@ export default function TextViewer({ title, text, diff = false, onClose }: {
     <>
       <div className="backdrop z-40" role="presentation" onClick={onClose}></div>
       <div
-        className="sheet z-[41] top-[5vh] w-[min(900px,calc(100vw-32px))] max-h-[90vh] rounded-[18px] px-4 py-[14px] max-[760px]:w-full max-[760px]:max-h-[92vh] max-[760px]:rounded-t-[16px] max-[760px]:rounded-b-none max-[760px]:pb-[14px]"
+        className="sheet z-[41] top-[5dvh] w-[min(900px,calc(100vw-32px))] max-h-[90dvh] rounded-[18px] px-4 py-[14px] max-[760px]:top-auto max-[760px]:w-auto max-[760px]:max-h-[calc(var(--vv-h,100dvh)-var(--safe-t)-24px)] max-[760px]:rounded-[34px] max-[760px]:pt-7"
         role="dialog"
         aria-modal="true"
         aria-label={title}

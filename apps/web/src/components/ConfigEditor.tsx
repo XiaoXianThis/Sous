@@ -85,7 +85,7 @@ export default function ConfigEditor({ nodeId, agent, file, title, onClose }: {
             </p>
           )}
           <textarea
-            className="w-full min-h-[50vh] resize-y box-border font-mono text-[13px] leading-[1.5] [tab-size:2] border border-line rounded-[12px] bg-sunken text-ink p-2.5"
+            className="w-full min-h-[50dvh] resize-y box-border font-mono text-[13px] leading-[1.5] [tab-size:2] border border-line rounded-[12px] bg-sunken text-ink p-2.5"
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
             spellCheck={false}

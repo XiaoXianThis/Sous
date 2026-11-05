@@ -39,8 +39,25 @@
   --r-lg: 16px;
   --item-h: 44px;
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  /*
+   * Liquid Glass (phones): a translucent layer that floats over the content.
+   * --glass is its tint, --glass-hi the lit rim, --glass-lo the sheen on top,
+   * --glass-sel the lens behind a selected item inside a glass bar.
+   */
+  --glass: rgb(255 255 255 / .6);
+  --glass-thick: rgb(250 250 250 / .84);
+  --glass-hi: rgb(255 255 255 / .95);
+  --glass-lo: rgb(255 255 255 / .35);
+  --glass-rim: rgb(20 20 20 / .08);
+  --glass-shadow: 0 12px 32px -12px rgb(20 20 20 / .24), 0 2px 8px -3px rgb(20 20 20 / .1);
+  --glass-sel: rgb(20 20 20 / .07);
+  --glass-filter: blur(16px) saturate(1.9) brightness(1.05);
+  /* The bottom safe area; 0 while the keyboard covers it (html.kb-open). */
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
   color-scheme: light;
 }
+:root.kb-open { --safe-b: 0px; }
 /* Dark, after Cursor Dark. The theme is set on <html data-theme> by src/lib/theme.ts. */
 :root[data-theme='dark'] {
   --rail: #141414;
@@ -70,6 +87,14 @@
   --shadow-sm: 0 0 0 1px var(--line);
   --shadow: 0 0 0 1px var(--line);
   --shadow-lg: 0 0 0 1px var(--line-strong), 0 30px 70px -10px rgb(0 0 0 / .7);
+  --glass: rgb(44 44 46 / .52);
+  --glass-thick: rgb(30 30 32 / .86);
+  --glass-hi: rgb(255 255 255 / .3);
+  --glass-lo: rgb(255 255 255 / .07);
+  --glass-rim: rgb(0 0 0 / .55);
+  --glass-shadow: 0 12px 32px -10px rgb(0 0 0 / .65), 0 2px 8px -3px rgb(0 0 0 / .45);
+  --glass-sel: rgb(255 255 255 / .12);
+  --glass-filter: blur(16px) saturate(1.6) brightness(.92);
   color-scheme: dark;
 }
 
@@ -107,6 +132,8 @@
 
 @layer base {
   html, body, #root { height: 100%; margin: 0; }
+  /* No double-tap zoom and no font boosting; pinch zoom is cancelled in src/lib/ios.ts. */
+  html { touch-action: manipulation; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
@@ -201,28 +228,45 @@
     animation: fade-in .18s ease-out;
   }
   .sheet {
-    position: fixed; z-index: 31; top: 6vh; left: 50%; transform: translateX(-50%);
-    width: min(640px, calc(100vw - 32px)); max-height: 88vh; display: flex; flex-direction: column;
+    position: fixed; z-index: 31; top: 6dvh; left: 50%; transform: translateX(-50%);
+    width: min(640px, calc(100vw - 32px)); max-height: 88dvh; display: flex; flex-direction: column;
     background: var(--panel); border-radius: 18px; padding: 20px 22px; box-shadow: var(--shadow-lg);
     animation: sheet-in .22s cubic-bezier(.2, .9, .3, 1.1);
   }
   .sheet.wide { width: min(780px, calc(100vw - 32px)); }
   @media (max-width: 760px) {
+    /*
+     * A Liquid Glass sheet: it floats 8px off the screen edges with corners
+     * concentric to the display, sits above the keyboard (--kb), and can be
+     * dragged down by its grabber to close (src/lib/ios.ts).
+     */
     .sheet, .sheet.wide {
-      top: auto; bottom: 0; left: 0; transform: none; width: 100%; max-height: 92vh;
-      border-radius: 18px 18px 0 0; padding: 26px 18px calc(16px + env(safe-area-inset-bottom));
-      animation: sheet-up .26s cubic-bezier(.2, .9, .3, 1);
+      top: auto; left: 8px; right: 8px; bottom: calc(8px + var(--kb, 0px)); transform: none; width: auto;
+      max-height: calc(var(--vv-h, 100dvh) - var(--safe-t) - 24px);
+      border-radius: 34px; padding: 28px 18px calc(18px + max(0px, var(--safe-b) - 12px));
+      background: transparent;
+      box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 .5px var(--glass-rim), 0 20px 60px -10px rgb(0 0 0 / .35);
+      animation: sheet-up .42s cubic-bezier(.2, 1.1, .3, 1);
+    }
+    /* The material sits on a pseudo-element: backdrop-filter on the sheet itself would trap its fixed children. */
+    .sheet::after {
+      content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+      background: var(--glass-thick);
+      -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
     }
     .sheet::before {
-      content: ''; position: absolute; top: 8px; left: 50%; width: 38px; height: 5px; margin-left: -19px;
+      content: ''; position: absolute; top: 9px; left: 50%; width: 38px; height: 5px; margin-left: -19px;
       border-radius: 99px; background: var(--line-strong);
     }
+    .backdrop { background: rgb(0 0 0 / .22); -webkit-backdrop-filter: none; backdrop-filter: none; }
   }
 }
 
 @keyframes fade-in { from { opacity: 0 } }
 @keyframes sheet-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.98) } }
-@keyframes sheet-up { from { transform: translateY(40px); opacity: .4 } }
+@keyframes sheet-up { from { transform: translateY(60%); opacity: .5 } }
+@keyframes push-in { from { transform: translateX(100%) } }
+@keyframes glass-in { from { transform: scale(.92); opacity: 0 } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px) } }
 .rise { animation: rise .25s ease-out both; }
 
@@ -284,7 +328,7 @@
   border: 0 !important; padding: 0 !important; background: transparent !important; z-index: auto !important;
   box-shadow: none !important; animation: none !important;
 }
-.embed > .backdrop:first-child + .sheet::before { display: none; }
+.embed > .backdrop:first-child + .sheet::before, .embed > .backdrop:first-child + .sheet::after { display: none; }
 .embed > .backdrop:first-child + .sheet > header { display: none !important; }
 /* Settings pages: their lists become cards. */
 .settings-page .embed > .sheet > ul > li,
@@ -311,7 +355,7 @@
   background-size: 200% 100%; animation: shimmer 2.2s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .stage-current, .live-dot::after, .spin, .shimmer, .rise, .sheet, .backdrop { animation: none; }
+  .stage-current, .live-dot::after, .spin, .shimmer, .rise, .sheet, .backdrop, .push-in, .tabbar { animation: none; }
 }
 
 /* Reveal the chevron's direction on a collapsed section toggle. */
@@ -338,54 +382,179 @@
 .shell .rail { box-shadow: inset -1px 0 0 var(--line); }
 .shell .work { background: var(--bg); }
 .shell .side { position: relative; background: var(--chrome); box-shadow: -1px 0 0 var(--line); }
-.shell .tabs { display: none; }
 @media (max-width: 760px) {
-  /* Phones get an iOS-style grouped look: gray page, white cards, a translucent tab bar. */
-  .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; background: var(--chrome); }
+  /*
+   * Phones, after iOS 26/27 Liquid Glass: content runs edge to edge on the
+   * gray grouped background and the controls float over it as glass. The tab
+   * bar is a capsule above the home indicator that shrinks while you scroll.
+   */
+  .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); background: var(--chrome); position: relative; }
   .shell .rail { display: none; }
   .shell .work, .shell .side { grid-row: 1; grid-column: 1; border-radius: 0; box-shadow: none; }
-  .shell .work { background: var(--chrome); padding-top: 0; -webkit-overflow-scrolling: touch; }
+  .shell .work { background: var(--chrome); padding-top: 0; padding-bottom: var(--tabbar-space); }
   .shell .side { display: block; background: var(--bg); }
   .shell[data-tab='chat'] .work { display: none; }
   .shell:not([data-tab='chat']) .side { display: none; }
   .shell .side .collapse-chat { display: none; }
-  .shell .tabs {
-    display: grid; grid-template-columns: repeat(3, 1fr); position: relative; z-index: 10;
-    background: color-mix(in srgb, var(--panel) 78%, transparent);
-    backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
-    box-shadow: 0 -.5px 0 var(--line-strong); padding-bottom: env(safe-area-inset-bottom);
-  }
   /* Cards sit on the gray page without an outline, like iOS inset groups. */
-  .shell .work .card[data-project-card] { box-shadow: none; border-radius: 16px; }
-  /* The tab bar under the chat column already clears the home indicator. */
-  .shell .side .chat-composer { padding-bottom: 10px; }
+  .shell .work .card[data-project-card] { box-shadow: none; border-radius: 22px; }
+  /* The composer floats above the tab bar; with the keyboard up the bar hides. */
+  .shell .side .chat-composer { padding-bottom: calc(var(--tabbar-space) - 6px); }
+  :root.kb-open .shell .side .chat-composer { padding-bottom: 8px; }
   /* iOS zooms into a focused field under 16px. */
   input, select, textarea { font-size: 16px !important; }
 }
+:root {
+  --tabbar-h: 62px;
+  --tabbar-bottom: max(10px, calc(var(--safe-b) - 10px));
+  --tabbar-space: calc(var(--tabbar-h) + var(--tabbar-bottom) + 14px);
+}
 
-/* The phone page bar (PhoneHeader): clear over the large title, solid once it scrolls away. */
-.phone-bar {
-  position: sticky; top: 0; z-index: 9; padding-top: env(safe-area-inset-top);
-  background: transparent; box-shadow: 0 .5px 0 transparent;
-  transition: background-color .2s, box-shadow .2s;
+/* The floating tab bar (Shell). The lens slides to the current tab. */
+.tabbar {
+  position: absolute; z-index: 10; left: 18px; right: 18px; bottom: var(--tabbar-bottom); height: var(--tabbar-h);
+  display: grid; grid-template-columns: repeat(var(--tabs, 3), minmax(0, 1fr)); padding: 4px; border-radius: 999px;
+  transition: right .5s cubic-bezier(.3, 1.2, .4, 1), transform .35s cubic-bezier(.3, .8, .3, 1), opacity .25s;
+  animation: glass-in .4s cubic-bezier(.2, 1.2, .3, 1);
 }
-.phone-bar.is-collapsed {
-  background: color-mix(in srgb, var(--chrome) 80%, transparent);
-  backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
-  box-shadow: 0 .5px 0 var(--line-strong);
+.tabbar-lens {
+  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / var(--tabs, 3)); border-radius: 999px;
+  background: var(--glass-sel); transform: translateX(calc(100% * var(--tab-i, 0)));
+  transition: transform .45s cubic-bezier(.3, 1.35, .4, 1), opacity .2s;
 }
+.tabbar-item {
+  position: relative; z-index: 1; border: 0; background: transparent; border-radius: 999px; min-width: 0;
+  display: grid; justify-items: center; align-content: center; gap: 2px; padding: 0;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .01em; color: var(--text);
+  transition: color .2s, transform .35s cubic-bezier(.3, 1.6, .5, 1);
+}
+.tabbar-item[aria-current='page'] { color: var(--accent); }
+.tabbar-item:active { transform: scale(1.1); }
+/* Shrunk while scrolling down: only the current tab, as a glass circle. */
+.shell[data-bar='min'] .tabbar { right: calc(100% - 18px - var(--tabbar-h)); grid-template-columns: 1fr; }
+.shell[data-bar='min'] .tabbar-item:not([aria-current='page']), .shell[data-bar='min'] .tabbar-lens { display: none; }
+.shell[data-bar='min'] .tabbar-item span:not(.badge) { display: none; }
+/* Over the full-screen settings, which act as the third tab on a phone. */
+.shell[data-settings] .tabbar { z-index: 30; }
+:root.kb-open .tabbar { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+@media (min-width: 761px) { .tabbar { display: none; } }
+
+/*
+ * Glass: a translucent, blurred layer with a lit rim, bright at the top left
+ * and bottom right like light bending through its edge. The element needs a
+ * position. The material is on ::after and the rim on ::before, never on the
+ * element: backdrop-filter there would trap fixed children (popovers).
+ */
+.glass { isolation: isolate; box-shadow: 0 0 0 .5px var(--glass-rim), var(--glass-shadow); }
+.glass::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, var(--glass-lo), transparent 60%), var(--glass);
+  -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
+}
+.glass::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 2;
+  background: linear-gradient(135deg, var(--glass-hi), transparent 32%, transparent 68%, color-mix(in srgb, var(--glass-hi) 70%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.glass.thick::after { background: linear-gradient(180deg, var(--glass-lo), transparent 60%), var(--glass-thick); }
+
+/* A round glass button (44pt, the iOS touch target); it swells while pressed. */
+.glass-btn {
+  position: relative; display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0;
+  border: 0; border-radius: 999px; color: var(--text);
+  transition: transform .4s cubic-bezier(.3, 1.6, .5, 1), filter .2s;
+}
+.glass-btn:active:not(:disabled) { transform: scale(1.12); filter: brightness(1.1); }
+.glass-btn.tint { color: var(--accent-text); }
+.glass-btn.tint::after { background: linear-gradient(180deg, rgb(255 255 255 / .22), transparent 60%), var(--accent); }
+/* Several actions in one capsule; each is a .phone-bar-btn. */
+.glass-group { position: relative; display: inline-flex; align-items: center; height: 44px; padding: 0 2px; border-radius: 999px; }
+.glass-pill {
+  position: relative; display: inline-flex; align-items: center; gap: 4px; height: 44px; padding: 0 14px 0 10px; border: 0;
+  border-radius: 999px; color: var(--text); font-size: 15px; font-weight: 600; min-width: 0;
+  transition: transform .4s cubic-bezier(.3, 1.6, .5, 1);
+}
+.glass-pill:active { transform: scale(1.06); }
+
+/* The phone page bar (PhoneHeader): glass buttons over the content; a soft fade once the large title scrolls away. */
+.phone-bar { position: sticky; top: 0; z-index: 9; padding-top: var(--safe-t); --fade: var(--chrome); }
+.phone-bar::before {
+  content: ''; position: absolute; inset: 0 0 -28px; z-index: -1; pointer-events: none; opacity: 0; transition: opacity .25s;
+  background: linear-gradient(var(--fade), color-mix(in srgb, var(--fade) 75%, transparent) 60%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  -webkit-mask: linear-gradient(#000 55%, transparent); mask: linear-gradient(#000 55%, transparent);
+}
+.phone-bar.is-collapsed::before { opacity: 1; }
 .phone-bar-title { opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; }
 .phone-bar.is-collapsed .phone-bar-title { opacity: 1; transform: none; }
 .phone-bar-btn {
-  display: inline-grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 12px;
-  background: transparent; color: var(--accent); transition: opacity .1s;
+  display: inline-grid; place-items: center; width: 42px; height: 44px; border: 0; border-radius: 999px; padding: 0;
+  background: transparent; color: var(--text); transition: opacity .1s;
 }
 .phone-bar-btn:active { opacity: .45; }
+
+/*
+ * The chat on a phone (ChatView .chat-phone): the timeline runs the full
+ * height and scrolls under a glass header and a floating glass composer.
+ */
+.chat-phone { position: relative; }
+.chat-phone > .chat-head {
+  position: absolute; inset: 0 0 auto; z-index: 6; border: 0; gap: 8px;
+  padding: calc(var(--safe-t) + 6px) 12px 6px;
+}
+.chat-phone > .chat-head::before {
+  content: ''; position: absolute; inset: 0 0 -24px; z-index: -1; pointer-events: none;
+  background: linear-gradient(var(--bg) 0 50%, color-mix(in srgb, var(--bg) 60%, transparent) 75%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  -webkit-mask: linear-gradient(#000 60%, transparent); mask: linear-gradient(#000 60%, transparent);
+}
+.chat-phone > .chat-scroll { padding-top: calc(var(--safe-t) + 58px); padding-bottom: var(--composer-h, 96px); }
+.chat-phone > .chat-composer { position: absolute; inset: auto 0 0; z-index: 6; max-width: none; }
+/* One row like iOS Messages: the field and the send button side by side, the context chip above. */
+.chat-phone .composer-box { grid-template-columns: minmax(0, 1fr) auto; align-items: end; column-gap: 8px; row-gap: 0; }
+.chat-phone .composer-box > textarea { grid-row: 2; grid-column: 1; min-height: 36px; padding-top: 6px; }
+.chat-phone .composer-row { display: contents; }
+.chat-phone .composer-row > :first-child { grid-row: 1; grid-column: 1 / -1; justify-self: start; margin: 2px 0 4px; }
+.chat-phone .composer-row > .flex-1 { display: none; }
+.chat-phone .composer-row > [type='submit'] { grid-row: 2; grid-column: 2; margin-bottom: 1px; }
+
+/* A pushed phone page (settings detail, project): it slides in from the right. */
+.push-in { animation: push-in .42s cubic-bezier(.2, .9, .25, 1); }
+[data-page].push-in { box-shadow: -10px 0 30px -6px rgb(0 0 0 / .12); }
+
+/* iOS grouped list (settings on a phone). */
+.ios-group { background: var(--panel); border-radius: 22px; overflow: hidden; }
+.ios-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 14px; border: 0;
+  background: transparent; text-align: left; font-size: 16px; color: var(--text); position: relative;
+}
+.ios-row + .ios-row::before { content: ''; position: absolute; top: 0; left: 56px; right: 0; height: .5px; background: var(--line-strong); }
+.ios-row:active { background: var(--hover); }
+.ios-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; color: #fff; flex: none; }
 
 /* Touch feedback: buttons dim while pressed instead of relying on hover. */
 @media (hover: none) {
   .icon-btn:active:not(:disabled), .link:active:not(:disabled) { opacity: .5; }
   .press:active { background: var(--hover); }
+}
+
+/*
+ * Touch screens: behave like an app, not a page. The page itself never moves
+ * or rubber-bands, scroll areas do not bounce, the app follows the visible
+ * part of the screen above the keyboard (--vv-* from src/lib/ios.ts), and a
+ * long press does not select the interface or pop up a callout. Text you may
+ * want to copy (messages, Markdown, code, fields, terminals) stays selectable.
+ */
+@media (hover: none) and (pointer: coarse) {
+  html, body { position: fixed; inset: 0; overflow: hidden; }
+  html, body, * { overscroll-behavior: none; }
+  #root { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100%); }
+  body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  input, textarea, [contenteditable='true'], .md, .selectable, pre, code, .xterm {
+    -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
+  }
+  img, svg, a { -webkit-user-drag: none; }
 }
 
 /*

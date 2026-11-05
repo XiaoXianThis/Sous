@@ -1,7 +1,7 @@
 // sous service worker: keeps the app shell available offline and shows
 // Web Push notifications. The API and the event stream are never cached.
-const CACHE = 'sous-shell-v3'
-const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/theme-init.js']
+const CACHE = 'sous-shell-v4'
+const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/apple-touch-icon.png', '/theme-init.js']
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()))
@@ -61,7 +61,7 @@ self.addEventListener('push', (e) => {
     self.registration.showNotification(m.title || 'sous', {
       body: m.body || '',
       tag: m.tag || undefined,
-      icon: '/icon.svg',
+      icon: '/icon-192.png',
       badge: '/icon.svg',
       data: { url: m.url || '/' },
       requireInteraction: m.kind === 'approval',

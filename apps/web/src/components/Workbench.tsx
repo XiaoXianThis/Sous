@@ -208,7 +208,7 @@ export default function Workbench() {
                     id="attention"
                     role="dialog"
                     aria-label="要你处理"
-                    className="absolute right-0 top-full mt-2 z-20 w-[min(440px,calc(100vw-28px))] max-h-[70vh] overflow-y-auto card shadow-pop p-3 grid gap-2.5 rise"
+                    className="absolute right-0 top-full mt-2 z-20 w-[min(440px,calc(100vw-28px))] max-h-[70dvh] overflow-y-auto card shadow-pop p-3 grid gap-2.5 rise"
                   >
                     {attentionBody}
                   </div>
@@ -233,7 +233,7 @@ export default function Workbench() {
             {[0, 1, 2].map((i) => <div key={i} className="h-44 rounded-[14px] bg-panel shadow-soft opacity-60 animate-pulse"></div>)}
           </div>
         ) : !cards.length ? (
-          <div className="grid justify-items-center gap-2 pt-[10vh] px-4 text-muted text-center rise">
+          <div className="grid justify-items-center gap-2 pt-[10dvh] px-4 text-muted text-center rise">
             <span className="grid place-items-center w-14 h-14 rounded-[16px] bg-sunken text-muted">
               <Icon name="folders" size={26} />
             </span>

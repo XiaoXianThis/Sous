@@ -68,7 +68,7 @@ export default function MessageView({ message }: { message: Message }) {
   if (user) {
     return (
       <article className="grid gap-1 justify-items-end group" data-testid={`message-${message.kind ?? message.role}`}>
-        <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
+        <div className="selectable whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
           {linkify(message.content).map((part, i) =>
             part.url ? (
               <a key={i} href={part.url} target="_blank" rel="noreferrer" className="md-link">{part.text}</a>
@@ -117,7 +117,7 @@ export default function MessageView({ message }: { message: Message }) {
       {message.error ? (
         <div className="flex gap-2 items-start text-[13.5px] text-danger rounded-[12px] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-3 py-2.5">
           <Icon name="alert" size={15} className="mt-[3px] flex-none" />
-          <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</span>
+          <span className="selectable whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</span>
         </div>
       ) : (
         (message.content || message.streaming) && <Markdown text={message.content} streaming={message.streaming} />
