@@ -166,7 +166,7 @@ settings(key, value)
 
 | 分组 | 类型 |
 |---|---|
-| 对话 | `message.user` `message.assistant` `thread.created`（流式片段 `message.assistant.delta` 只实时推送给在线客户端，**不写入事件表**） |
+| 对话 | `message.user` `message.assistant` `thread.created` `thread.compacted`（对话的上下文换段，见 long-main-thread）（流式片段 `message.assistant.delta` 只实时推送给在线客户端，**不写入事件表**） |
 | 任务 | `task.created` `task.updated` `task.status` `task.reviewed` |
 | 执行 | `run.queued` `run.started` `run.update`（进度、工具调用、输出） `run.ended` |
 | 审批 | `approval.requested` `approval.decided` |

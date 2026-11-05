@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/attach"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -31,6 +33,8 @@ const (
 	// maxBodyBytes caps every request body; the largest legitimate one is a
 	// file edited on the page (1 MB of content, JSON-escaped).
 	maxBodyBytes = 4 << 20
+	// maxUploadBytes caps an attachment upload (attach.MaxSize plus slack).
+	maxUploadBytes = attach.MaxSize + 1<<20
 )
 
 type Server struct {
@@ -38,6 +42,8 @@ type Server struct {
 	log  *eventlog.Log
 	auth *auth.Auth
 	mux  *http.ServeMux
+	// files holds the attachments of messages.
+	files *attach.Store
 }
 
 // Routes lets other packages add endpoints. protect wraps a handler so it
@@ -45,7 +51,7 @@ type Server struct {
 type Routes func(mux *http.ServeMux, protect func(pattern string, h http.HandlerFunc))
 
 func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Server {
-	s := &Server{cfg: cfg, log: log, auth: a, mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, log: log, auth: a, mux: http.NewServeMux(), files: attach.Open(filepath.Join(cfg.DataDir, "attachments"))}
 	a.Routes(s.mux)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version.Version})
@@ -56,6 +62,8 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 	protect("GET /api/v1/threads/{id}", s.getThread)
 	protect("GET /api/v1/threads/{id}/messages", s.listMessages)
 	protect("POST /api/v1/threads/{id}/messages", s.postMessage)
+	protect("POST /api/v1/attachments", s.uploadAttachment)
+	protect("GET /api/v1/attachments/{id}", s.getAttachment)
 	protect("GET /api/v1/usage", s.usage)
 	s.memoryRoutes(protect)
 	for _, r := range extra {
@@ -73,7 +81,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	s.secureHeaders(w.Header())
 	if r.Body != nil {
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		limit := int64(maxBodyBytes)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/attachments" {
+			limit = maxUploadBytes
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 	}
 	sw := &statusWriter{ResponseWriter: w, status: 200}
 	s.mux.ServeHTTP(sw, r)
@@ -200,15 +212,21 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content string                `json:"content"`
-		Context *event.MessageContext `json:"context"`
+		Content     string                `json:"content"`
+		Context     *event.MessageContext `json:"context"`
+		Attachments []string              `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 	content := strings.TrimSpace(body.Content)
-	if content == "" {
+	atts, err := s.files.Resolve(body.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_attachment", err.Error())
+		return
+	}
+	if content == "" && len(atts) == 0 {
 		writeError(w, http.StatusBadRequest, "empty", "消息不能为空")
 		return
 	}
@@ -218,12 +236,56 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msgID := ids.New()
 	evs, err := s.log.Append(r.Context(), event.New(event.MessageUser, event.ActorUser, id,
-		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context}))
+		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts}))
 	if err != nil {
 		internal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq})
+}
+
+// uploadAttachment stores the request body as an attachment; the name comes
+// in ?name=. A message refers to the returned id.
+func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	a, err := s.files.Save(r.Body, r.URL.Query().Get("name"))
+	switch {
+	case errors.Is(err, attach.ErrTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "too_large", "文件太大，最多 20 MB")
+	case err != nil:
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "文件太大，最多 20 MB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "bad_file", err.Error())
+	default:
+		writeJSON(w, http.StatusCreated, a)
+	}
+}
+
+// getAttachment serves a stored file. Pictures show inline; everything else
+// downloads, so a file can never run as a page.
+func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request) {
+	a, err := s.files.Meta(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "附件不存在")
+		return
+	}
+	f, err := s.files.Open(a.ID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "附件不存在")
+		return
+	}
+	defer f.Close()
+	if attach.IsImage(a.Mime) {
+		w.Header().Set("Content-Type", a.Mime)
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": a.Name}))
+	}
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {

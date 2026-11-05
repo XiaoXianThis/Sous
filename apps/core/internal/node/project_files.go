@@ -167,6 +167,10 @@ func readProjectFile(abs, rel string) (proto.ProjectFile, error) {
 	out.SHA256 = digest(raw)
 	if bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw) {
 		out.Binary = true
+		switch strings.ToLower(filepath.Ext(rel)) {
+		case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif":
+			out.Data = raw
+		}
 		return out, nil
 	}
 	out.Content = string(raw)

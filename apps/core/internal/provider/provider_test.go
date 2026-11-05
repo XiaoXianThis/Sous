@@ -195,6 +195,43 @@ data: {"type":"message_stop"}
 	}
 }
 
+// CacheAt puts cache breakpoints on the system prompt and on the last block
+// of the marked messages (at most three), and cache writes count as input.
+func TestAnthropicCacheBreakpoints(t *testing.T) {
+	f := newFake(t, 200, `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":2,"cache_read_input_tokens":30,"cache_creation_input_tokens":5}}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)
+	p, _ := New(Config{Name: "an", Kind: "anthropic-messages", BaseURL: f.URL, APIKey: "k"})
+	req := conversation()
+	req.Messages = append([]Message{Text(RoleUser, "摘要"), Text(RoleAssistant, "好")}, req.Messages...)
+	req.CacheAt = []int{0, 1, 2, 4}
+	resp, _ := collect(t, p, req)
+	sys, ok := f.body["system"].([]any)
+	if !ok || sys[0].(map[string]any)["cache_control"] == nil {
+		t.Fatalf("system: %v", f.body["system"])
+	}
+	marked := 0
+	for _, m := range f.body["messages"].([]any) {
+		for _, b := range m.(map[string]any)["content"].([]any) {
+			if b.(map[string]any)["cache_control"] != nil {
+				marked++
+			}
+		}
+	}
+	msgs := f.body["messages"].([]any)
+	first := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if marked != 3 || first["cache_control"] != nil {
+		t.Fatalf("want the newest 3 breakpoints, got %d: %v", marked, msgs)
+	}
+	if resp.Usage.InputTokens != 37 || resp.Usage.CachedTokens != 30 {
+		t.Fatalf("usage: %+v", resp.Usage)
+	}
+}
+
 func TestAPIErrorAndTransient(t *testing.T) {
 	f := newFake(t, 429, "")
 	p, _ := New(Config{Name: "ds", Kind: "openai-chat", BaseURL: f.URL})
@@ -311,5 +348,30 @@ func TestEffortReachesEachKind(t *testing.T) {
 	WithEffort(p, "").Stream(context.Background(), Request{Model: "m", Messages: []Message{Text(RoleUser, "hi")}}, func(Delta) {})
 	if _, ok := f.body["reasoning_effort"]; ok {
 		t.Errorf("effort sent without being set: %v", f.body)
+	}
+}
+
+func TestImagesReachEachKind(t *testing.T) {
+	img := &Image{Mime: "image/png", Data: []byte("PNG")}
+	req := Request{Model: "m", Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "看图"}, {Image: img}}}}}
+	b64 := "UE5H"
+
+	chat, _ := json.Marshal(ocMessages(req))
+	if !strings.Contains(string(chat), `"image_url":{"url":"data:image/png;base64,`+b64+`"}`) || !strings.Contains(string(chat), `"text":"看图"`) {
+		t.Errorf("openai-chat: %s", chat)
+	}
+	resp, _ := json.Marshal(orInput(req))
+	if !strings.Contains(string(resp), `{"image_url":"data:image/png;base64,`+b64+`","type":"input_image"}`) {
+		t.Errorf("openai-responses: %s", resp)
+	}
+	an, _ := json.Marshal(anMessages(req))
+	if !strings.Contains(string(an), `"source":{"data":"`+b64+`","media_type":"image/png","type":"base64"}`) {
+		t.Errorf("anthropic: %s", an)
+	}
+
+	// Text-only messages keep the plain string form.
+	plain, _ := json.Marshal(ocMessages(Request{Messages: []Message{Text(RoleUser, "hi")}}))
+	if string(plain) != `[{"role":"user","content":"hi"}]` {
+		t.Errorf("plain chat message: %s", plain)
 	}
 }

@@ -1,8 +1,23 @@
 // REST client for docs/api/core-hub-http.md.
 import type {
-  AgentInfo, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
-  Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, Settings, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext,
+  AgentInfo, Attachment, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
+  Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, McpView, Settings, ThreadContext, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext,
 } from './types'
+
+export interface McpInput {
+  name?: string
+  transport?: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  url?: string
+  /** Values to set; a name already saved with an empty value keeps its value. */
+  env?: Record<string, string>
+  remove_env?: string[]
+  headers?: Record<string, string>
+  remove_headers?: string[]
+  enabled?: boolean
+  disabled_tools?: string[]
+}
 
 export interface ProviderInput {
   name?: string
@@ -43,6 +58,18 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   return data as T
 }
 
+async function upload(file: Blob, name: string): Promise<Attachment> {
+  const res = await fetch(`/api/v1/attachments?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-CSRF-Token': csrf() },
+    body: file,
+    credentials: 'same-origin',
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new ApiError(res.status, data?.error?.code ?? 'http', data?.error?.message ?? `HTTP ${res.status}`)
+  return data as Attachment
+}
+
 export const api = {
   me: () => request<Me>('GET', '/api/v1/me'),
   devLogin: () => request<{ ok: boolean }>('POST', '/api/v1/auth/dev-login'),
@@ -52,6 +79,10 @@ export const api = {
   thread: (id: string) => request<Thread>('GET', `/api/v1/threads/${id}`),
   createThread: (title: string, projectId = '') =>
     request<Thread>('POST', '/api/v1/threads', { title, ...(projectId && { project_id: projectId }) }),
+  threadContext: (id: string) => request<ThreadContext>('GET', `/api/v1/threads/${id}/context`),
+  /** Folds the older messages into the summary now (runs after any turn in progress). */
+  compactThread: (id: string) => request<{ queued: boolean }>('POST', `/api/v1/threads/${id}/compact`),
+  putSummary: (id: string, summary: string) => request<{ queued: boolean }>('PUT', `/api/v1/threads/${id}/summary`, { summary }),
   messages: (threadId: string, before = 0) =>
     request<{ messages: Message[]; last_seq: number }>(
       'GET',
@@ -131,6 +162,13 @@ export const api = {
   repoSync: (projectId: string, nodeId: string) => request<RepoResult>('POST', `/api/v1/projects/${projectId}/locations/${nodeId}/sync`),
   repoWip: (projectId: string, nodeId: string) => request<RepoResult>('POST', `/api/v1/projects/${projectId}/locations/${nodeId}/wip`),
   models: () => request<ModelsView>('GET', '/api/v1/models'),
+  mcp: () => request<McpView>('GET', '/api/v1/mcp'),
+  /** Create, edit (except switching on/off) and approve need a recent login ("reauth"). */
+  createMcp: (b: McpInput) => request<McpView>('POST', '/api/v1/mcp/servers', b),
+  updateMcp: (id: string, b: McpInput) => request<McpView>('PATCH', `/api/v1/mcp/servers/${id}`, b),
+  approveMcp: (id: string) => request<McpView>('POST', `/api/v1/mcp/servers/${id}/approve`),
+  reconnectMcp: (id: string) => request<McpView>('POST', `/api/v1/mcp/servers/${id}/reconnect`),
+  deleteMcp: (id: string) => request<McpView>('DELETE', `/api/v1/mcp/servers/${id}`),
   /** Creating, changing and deleting providers need a recent login ("reauth"). */
   createProvider: (p: ProviderInput) => request<ModelsView>('POST', '/api/v1/models/providers', p),
   updateProvider: (id: string, p: ProviderInput) => request<ModelsView>('PATCH', `/api/v1/models/providers/${id}`, p),
@@ -139,7 +177,7 @@ export const api = {
   testModel: (providerId: string, model: string, effort = '') =>
     request<{ ok: boolean; reply?: string; error?: string; ms: number }>('POST', '/api/v1/models/test', { provider_id: providerId, model, effort }),
   /** A role with model "" falls back on the supervisor's. */
-  putRoles: (roles: Record<string, { provider_id: string; model: string; effort?: string } | null>) =>
+  putRoles: (roles: Record<string, { provider_id: string; model: string; effort?: string; context_window?: number } | null>) =>
     request<ModelsView>('PUT', '/api/v1/models/roles', roles),
   shells: (projectId: string) => request<{ shells: Shell[] }>('GET', `/api/v1/projects/${projectId}/shells`),
   /** Needs a recent passkey login: fails with code "reauth" otherwise. */
@@ -148,8 +186,10 @@ export const api = {
   readFile: (id: string, agent: string, file: string) => request<ConfigFile>('GET', `/api/v1/nodes/${id}/files/${agent}/${file}`),
   writeFile: (id: string, agent: string, file: string, content: string, base: string) =>
     request<ConfigFile>('PUT', `/api/v1/nodes/${id}/files/${agent}/${file}`, { content, base_sha256: base }),
-  send: (threadId: string, content: string, context?: MessageContext) =>
-    request<{ message_id: string; seq: number }>('POST', `/api/v1/threads/${threadId}/messages`, { content, context }),
+  send: (threadId: string, content: string, context?: MessageContext, attachments?: string[]) =>
+    request<{ message_id: string; seq: number }>('POST', `/api/v1/threads/${threadId}/messages`, { content, context, attachments }),
+  /** Stores a file for a message to refer to; the Hub decides its type from the bytes. */
+  upload: (file: Blob, name: string) => upload(file, name),
 
   // M5 workbench
   overview: () => request<Overview>('GET', '/api/v1/overview'),
@@ -175,4 +215,4 @@ export const api = {
 
 export interface ProjectEntry { name: string; dir: boolean; size: number }
 export interface ProjectDir { rel: string; entries: ProjectEntry[] }
-export interface ProjectFile { rel: string; size: number; binary: boolean; content: string; sha256: string }
+export interface ProjectFile { rel: string; size: number; binary: boolean; content: string; sha256: string; data?: string }

@@ -37,12 +37,32 @@ func project(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Context)
 			mctx = string(raw)
 		}
+		atts := ""
+		if len(p.Attachments) > 0 {
+			raw, _ := json.Marshal(p.Attachments)
+			atts = string(raw)
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx); err != nil {
+			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx, atts); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE id = ?`, ev.TS, ev.ThreadID)
+		return err
+
+	case event.ThreadCompacted:
+		var p event.CompactedPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		profile, _ := json.Marshal(nonNilSlice(p.Profile))
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO thread_segments(thread_id, segment, covers_up_to, summary, profile, reason, model, input_tokens, event_seq, created_at)
+			 VALUES (?,?,?,?,?,?,?,?,?,?)
+			 ON CONFLICT(thread_id, segment) DO UPDATE SET covers_up_to = excluded.covers_up_to, summary = excluded.summary,
+			   profile = excluded.profile, reason = excluded.reason, model = excluded.model,
+			   input_tokens = excluded.input_tokens, event_seq = excluded.event_seq, created_at = excluded.created_at`,
+			ev.ThreadID, p.Segment, p.CoversUpTo, p.Summary, string(profile), p.Reason, p.Model, p.InputTokens, ev.Seq, ev.TS)
 		return err
 
 	case event.MemoryPut:

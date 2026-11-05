@@ -7,7 +7,6 @@ import ApprovalCard from './ApprovalCard'
 import Icon from './Icon'
 import Locations from './Locations'
 import ProjectEditor from './ProjectEditor'
-import ProjectTile from './ProjectTile'
 import Sheet from './Sheet'
 import TaskRow from './TaskRow'
 
@@ -65,7 +64,6 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
 
   const head = project ? (
     <div className="flex items-center gap-3 min-w-0">
-      <ProjectTile name={project.name} id={project.id} size={46} misc={project.id === 'misc'} />
       <div className="grid gap-1 min-w-0">
         <h2 className="m-0 text-[19px] font-bold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{project.name}</h2>
         {project.id !== 'misc' && <Locations locations={card?.locations ?? []} />}
@@ -142,7 +140,7 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
               </div>
             ) : (
               <button
-                className="flex items-center justify-center gap-1.5 h-12 rounded-[14px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
+                className="flex items-center justify-center gap-1.5 h-12 rounded-[14px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-muted hover:border-accent"
                 onClick={() => { ui.state.newTask = project.id; ui.emit() }}
               >
                 <Icon name="plus" size={16} />新任务

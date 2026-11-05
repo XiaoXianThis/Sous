@@ -28,7 +28,12 @@ func (p *mock) Stream(ctx context.Context, req Request, onDelta func(Delta)) (Re
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
-			lastUser, lastResult = m.PlainText(), nil
+			// The first part is what was said; the supervisor appends the
+			// turn's environment as a later part.
+			lastUser, lastResult = "", nil
+			if len(m.Parts) > 0 {
+				lastUser = m.Parts[0].Text
+			}
 		case RoleTool:
 			for _, part := range m.Parts {
 				if part.ToolResult != nil {

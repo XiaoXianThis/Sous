@@ -1,10 +1,14 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { api } from '../lib/api'
 import { useChat, useUi, useWb } from '../lib/app'
+import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
 import { usePhone } from '../lib/phone'
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
 import type { Message, Thread } from '../lib/types'
 import ApprovalCard from './ApprovalCard'
+import { ContextPanel, ContextRing, useThreadContext } from './ContextMeter'
+import { dividerAt } from '../lib/context'
 import ModelSwitch from './ModelSwitch'
 import Icon from './Icon'
 import MessageView from './Message'
@@ -35,7 +39,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   threadIcon: (t: Thread) => string
   onPick: (id: string) => void | Promise<void>
   onNew: () => void | Promise<unknown>
-  onSend: (text: string) => Promise<void>
+  onSend: (text: string, attachments: string[]) => Promise<void>
   context?: ChatContext | null
   onDropContext?: () => void
   placeholder: string
@@ -50,12 +54,17 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [picking, setPicking] = useState(false)
+  const [pending, setPending] = useState<Pending[]>([])
+  const [dragging, setDragging] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const stick = useRef(true)
   const phone = usePhone()
   const section = useRef<HTMLElement>(null)
   const composer = useRef<HTMLFormElement>(null)
+  const [ctxView, reloadContext] = useThreadContext(threadId)
+  const [contextOpen, setContextOpen] = useState(false)
 
   // Phone: the composer floats over the timeline, which scrolls under it; keep its height as padding.
   useEffect(() => {
@@ -78,6 +87,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     if (threadId && r.run.thread_id === threadId) timeline.push({ kind: 'run', seq: r.seq || r.run.created_at, run: r })
   }
   timeline.sort((a, b) => a.seq - b.seq)
+  const divider = ctxView ? dividerAt(timeline.map((i) => i.seq), ctxView.covers_up_to) : -1
   const last = messages[messages.length - 1]
   const lastLength =
     (last ? last.content.length + (last.thinking?.length ?? 0) : 0) +
@@ -116,14 +126,70 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     input.current?.focus()
   }
 
+  // Files are uploaded as soon as they are added; the message refers to them by id.
+  function addFiles(files: File[]) {
+    if (files.length === 0) return
+    const room = MAX_FILES - pending.length
+    if (files.length > room) setSendError(`一条消息最多 ${MAX_FILES} 个附件`)
+    else setSendError('')
+    for (const original of files.slice(0, Math.max(room, 0))) {
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const name = nameOf(original)
+      if (original.size > MAX_FILE) {
+        setPending((l) => [...l, { key, name, size: original.size, status: 'error', error: '超过 20 MB' }])
+        continue
+      }
+      const preview = isImage(original.type) ? URL.createObjectURL(original) : undefined
+      setPending((l) => [...l, { key, name, size: original.size, preview, status: 'uploading' }])
+      void (async () => {
+        try {
+          const file = await shrinkImage(original)
+          const attachment = await api.upload(file, file === original ? name : file.name)
+          setPending((l) => l.map((p) => (p.key === key ? { ...p, status: 'ready', attachment, size: attachment.size } : p)))
+        } catch (e) {
+          setPending((l) => l.map((p) => (p.key === key ? { ...p, status: 'error', error: (e as Error).message } : p)))
+        }
+      })()
+    }
+  }
+
+  function removeFile(key: string) {
+    setPending((l) => {
+      const gone = l.find((p) => p.key === key)
+      if (gone?.preview) URL.revokeObjectURL(gone.preview)
+      return l.filter((p) => p.key !== key)
+    })
+  }
+
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = filesOf(e.clipboardData, { paste: true })
+    if (files.length === 0) return
+    e.preventDefault()
+    addFiles(files)
+  }
+
+  function onDrop(e: DragEvent) {
+    setDragging(false)
+    const files = filesOf(e.dataTransfer)
+    if (files.length === 0) return
+    e.preventDefault()
+    addFiles(files)
+  }
+
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  const ids = readyIds(pending)
+  const canSend = (draft.trim() !== '' || ids.length > 0) && !uploading(pending) && !sending
+
   async function submit() {
     const text = draft.trim()
-    if (!text || sending) return
+    if ((!text && ids.length === 0) || uploading(pending) || sending) return
     setSending(true)
     setSendError('')
     try {
-      await onSend(text)
+      await onSend(text, ids)
       setDraft('')
+      for (const p of pending) if (p.preview) URL.revokeObjectURL(p.preview)
+      setPending([])
       stick.current = true
     } catch (e) {
       setSendError((e as Error).message)
@@ -151,7 +217,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   return (
     <section ref={section} className={`flex flex-col min-h-0 h-full min-w-0 ${phone ? 'chat-phone' : ''}`} aria-label={label}>
       <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
-        <div className="relative picker min-w-0">
+        <div className={`relative picker ${phone ? 'shrink-0 max-w-[50%]' : 'min-w-0'}`}>
           <button
             className={phone ? 'glass-pill glass max-w-full' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
             onClick={() => setPicking(!picking)}
@@ -185,8 +251,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
           )}
         </div>
         <span className="flex-1"></span>
-        <div className={phone ? 'glass-group glass gap-0.5 px-1.5' : 'contents'}>
-          <ModelSwitch />
+        <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
+          {ctxView && ctxView.segment > 0 && <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />}
           <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
           {actions}
         </div>
@@ -195,18 +261,30 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
         <div className="mx-auto max-w-[820px] px-4 pt-4 pb-4 grid grid-cols-[minmax(0,1fr)] gap-5">
           {timeline.length === 0 && !answering && <div className="grid justify-items-center gap-3 text-center pt-[14dvh] px-2 rise">{empty}</div>}
-          {timeline.map((item) =>
-            item.kind === 'message' ? (
-              <MessageView key={item.message.id} message={item.message} />
+          {timeline.map((item, i) => (
+            <Fragment key={item.kind === 'message' ? item.message.id : item.run.run.id}>
+              {i === divider && (
+                <button
+                  className="flex items-center gap-3 border-0 bg-transparent text-[12px] text-faint hover:text-muted p-0 w-full"
+                  onClick={() => setContextOpen(true)}
+                >
+                  <span className="h-px bg-line flex-1"></span>
+                  <Icon name="layers" size={13} />以上内容已整理进摘要
+                  <span className="h-px bg-line flex-1"></span>
+                </button>
+              )}
+              {item.kind === 'message' ? (
+              <MessageView message={item.message} />
             ) : (
-              <Fragment key={item.run.run.id}>
+              <>
                 <RunChip view={item.run} nodeName={nodeName} />
                 {item.run.approvals.filter((a) => a.status === 'pending').map((a) => (
                   <ApprovalCard key={a.id} approval={a} context={item.run.run.title} />
                 ))}
-              </Fragment>
-            ),
-          )}
+              </>
+            )}
+            </Fragment>
+          ))}
           {answering && !messages.some((m) => m.streaming) && (
             <div className="flex items-center gap-2 text-[13px] text-muted h-6" aria-label="正在思考">
               <span className="flex gap-1">
@@ -225,9 +303,52 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         <div
           className={phone
             ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
-            : 'grid gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
+            : 'grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
           onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) input.current?.focus() }}
+          onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); setDragging(true) } }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false) }}
+          onDrop={onDrop}
         >
+          {dragging && (
+            <div className="absolute inset-0 z-10 grid place-items-center rounded-[inherit] border-2 border-dashed border-accent bg-[color-mix(in_srgb,var(--accent)_8%,var(--panel))] text-[13px] text-accent pointer-events-none">
+              松开以添加图片或文件
+            </div>
+          )}
+          {pending.length > 0 && (
+            <ul className="composer-tray col-span-2 m-0 p-0 list-none flex gap-2 flex-wrap pt-0.5" aria-label="附件">
+              {pending.map((p) => (
+                <li key={p.key} className="relative group/att" title={p.error ? `${p.name}：${p.error}` : `${p.name}（${formatSize(p.size)}）`}>
+                  {p.preview ? (
+                    <img src={p.preview} alt={p.name} className={`block w-14 h-14 rounded-[10px] object-cover bg-sunken ${p.status === 'error' ? 'opacity-40' : ''}`} />
+                  ) : (
+                    <span className={`flex items-center gap-1.5 h-14 max-w-[190px] px-2.5 rounded-[10px] bg-sunken text-[12px] ${p.status === 'error' ? 'text-danger' : 'text-muted'}`}>
+                      <Icon name="file" size={16} className="flex-none" />
+                      <span className="grid min-w-0">
+                        <span className="overflow-hidden text-ellipsis whitespace-nowrap text-ink">{p.name}</span>
+                        <span className="text-faint">{p.error ?? formatSize(p.size)}</span>
+                      </span>
+                    </span>
+                  )}
+                  {p.status === 'uploading' && (
+                    <span className="absolute inset-0 grid place-items-center rounded-[10px] bg-[color-mix(in_srgb,var(--panel)_55%,transparent)]" aria-label="正在上传">
+                      <Icon name="refresh" size={16} className="spin text-muted" />
+                    </span>
+                  )}
+                  {p.status === 'error' && p.preview && (
+                    <span className="absolute inset-0 grid place-items-center text-danger" aria-label={p.error}><Icon name="alert" size={16} /></span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`移除 ${p.name}`}
+                    className="absolute -top-1.5 -right-1.5 w-[18px] h-[18px] rounded-full border-0 grid place-items-center bg-ink text-page shadow-soft"
+                    onClick={() => removeFile(p.key)}
+                  >
+                    <Icon name="x" size={10} stroke={3} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
             ref={input}
             value={draft}
@@ -237,10 +358,29 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             onChange={(e) => setDraft(e.target.value)}
             onInput={resize}
             onKeyDown={onKey}
+            onPaste={onPaste}
             aria-label="消息"
-            className="w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] max-[760px]:min-h-[36px] max-[760px]:max-h-[160px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
+            className="col-span-2 w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] max-[760px]:min-h-[36px] max-[760px]:max-h-[160px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
           ></textarea>
-          <div className="composer-row flex items-center gap-2 min-w-0">
+          <div className="composer-tools flex items-center gap-1 min-w-0">
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => { addFiles(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = '' }}
+            />
+            <button
+              type="button"
+              className="icon-btn flex-none"
+              aria-label="添加图片或文件"
+              data-tip="添加图片或文件（也可以直接粘贴、拖进来）"
+              onClick={() => fileInput.current?.click()}
+            >
+              <Icon name="paperclip" size={17} />
+            </button>
+            <ModelSwitch />
+            <span className="w-1 flex-none"></span>
             {context ? (
               <span className="inline-flex gap-1 items-center text-[12px] text-muted bg-sunken rounded-[8px] h-7 pl-2 pr-0.5 max-w-full min-w-0" title="sous 会知道你在看这个">
                 <Icon name={context.icon} size={13} className="flex-none" /><span className="overflow-hidden text-ellipsis whitespace-nowrap">{context.text}</span>
@@ -255,21 +395,22 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
                   </button>
                 )}
               </span>
-            ) : (
-              <span className="text-[11.5px] text-faint max-[760px]:hidden">{touch ? '' : 'Enter 发送 · Shift+Enter 换行'}</span>
-            )}
+            ) : null}
             <span className="flex-1"></span>
+          </div>
             <button
-              className="w-8 h-8 rounded-full border-0 flex-none bg-ink text-page grid place-items-center transition-transform active:scale-95 disabled:bg-sunken disabled:text-faint disabled:opacity-100 max-[760px]:w-9 max-[760px]:h-9 max-[760px]:bg-accent max-[760px]:text-accent-text"
+              className="composer-send self-end w-8 h-8 rounded-full border-0 flex-none bg-ink text-page grid place-items-center transition-transform active:scale-95 disabled:bg-sunken disabled:text-faint disabled:opacity-100 max-[760px]:w-9 max-[760px]:h-9 max-[760px]:bg-accent max-[760px]:text-accent-text"
               type="submit"
-              disabled={!draft.trim() || sending}
+              disabled={!canSend}
               aria-label="发送"
             >
               <Icon name={sending ? 'refresh' : 'send'} size={16} stroke={2.2} className={sending ? 'spin' : ''} />
             </button>
-          </div>
         </div>
       </form>
+      {contextOpen && ctxView && (
+        <ContextPanel threadId={threadId} view={ctxView} onClose={() => setContextOpen(false)} onChanged={reloadContext} />
+      )}
     </section>
   )
 }

@@ -1,34 +1,8 @@
 import { memo, useState, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import hljs from 'highlight.js/lib/core'
-import bash from 'highlight.js/lib/languages/bash'
-import css from 'highlight.js/lib/languages/css'
-import diff from 'highlight.js/lib/languages/diff'
-import go from 'highlight.js/lib/languages/go'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import markdown from 'highlight.js/lib/languages/markdown'
-import python from 'highlight.js/lib/languages/python'
-import rust from 'highlight.js/lib/languages/rust'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
+import { hljs } from '../lib/highlight'
 import Icon from './Icon'
-
-for (const [name, lang] of Object.entries({ bash, css, diff, go, javascript, json, markdown, python, rust, sql, typescript, xml, yaml })) {
-  hljs.registerLanguage(name, lang)
-}
-hljs.registerAliases(['sh', 'shell', 'zsh', 'console'], { languageName: 'bash' })
-hljs.registerAliases(['js', 'jsx', 'mjs'], { languageName: 'javascript' })
-hljs.registerAliases(['ts', 'tsx'], { languageName: 'typescript' })
-hljs.registerAliases(['html', 'svg', 'vue'], { languageName: 'xml' })
-hljs.registerAliases(['yml', 'toml'], { languageName: 'yaml' })
-hljs.registerAliases(['py'], { languageName: 'python' })
-hljs.registerAliases(['golang'], { languageName: 'go' })
-hljs.registerAliases(['md'], { languageName: 'markdown' })
-hljs.registerAliases(['rs'], { languageName: 'rust' })
 
 /** Copies text and shows a check for a moment. */
 export function CopyButton({ text, label = '复制', className = '' }: { text: string; label?: string; className?: string }) {
@@ -82,7 +56,7 @@ function CodeBlock({ lang, code, streaming }: { lang: string; code: string; stre
   )
 }
 
-const heading = 'mt-6 mb-3 first:mt-0 font-semibold tracking-tight text-ink'
+const heading = 'mt-6 mb-2.5 first:mt-0 font-semibold leading-snug text-ink'
 
 function components(streaming: boolean): Components {
   return {
@@ -92,16 +66,16 @@ function components(streaming: boolean): Components {
     h4: ({ children }) => <h4 className={`${heading} text-[14px]`}>{children}</h4>,
     h5: ({ children }) => <h5 className={`${heading} text-[14px] font-medium`}>{children}</h5>,
     h6: ({ children }) => <h6 className={`${heading} text-[14px] font-normal text-muted`}>{children}</h6>,
-    p: ({ children }) => <p className="my-2.5 first:mt-0 last:mb-0">{children}</p>,
+    p: ({ children }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,
     a: ({ href, children }) => (
       <a href={href} target="_blank" rel="noreferrer" className="md-link">{children}</a>
     ),
-    ul: ({ children }) => <ul className="my-2.5 pl-5 list-disc grid gap-1 marker:text-faint [&_ul]:my-1 [&_ol]:my-1">{children}</ul>,
+    ul: ({ children }) => <ul className="my-3 pl-5 list-disc grid gap-1.5 marker:text-faint [&_ul]:my-1 [&_ol]:my-1">{children}</ul>,
     ol: ({ children, start }) => (
-      <ol start={start} className="my-2.5 pl-6 list-decimal grid gap-1 marker:text-faint marker:tabular-nums [&_ul]:my-1 [&_ol]:my-1">{children}</ol>
+      <ol start={start} className="my-3 pl-6 list-decimal grid gap-1.5 marker:text-faint marker:tabular-nums [&_ul]:my-1 [&_ol]:my-1">{children}</ol>
     ),
     li: ({ children, className }) => (
-      <li className={`pl-0.5 [&>p]:my-0 ${className?.includes('task-list-item') ? 'list-none -ml-5 flex gap-2 items-baseline' : ''}`}>{children}</li>
+      <li className={`pl-1 [&>p]:my-0 [&>p+p]:mt-1.5 ${className?.includes('task-list-item') ? 'list-none -ml-5 flex gap-2 items-baseline' : ''}`}>{children}</li>
     ),
     input: ({ checked }) => (
       <span className={`inline-grid place-items-center w-3.5 h-3.5 rounded-[4px] translate-y-[2px] flex-none ${checked ? 'bg-accent text-accent-text' : 'shadow-[inset_0_0_0_1.5px_var(--line-strong)]'}`}>
@@ -139,9 +113,15 @@ const still = components(false)
 const live = components(true)
 
 /** Renders assistant Markdown in the ZCode reading style. Raw HTML is not rendered. */
-function Markdown({ text, streaming = false, children }: { text: string; streaming?: boolean; children?: ReactNode }) {
+function Markdown({ text, streaming = false, children, className = 'text-[14px] leading-[1.75]' }: {
+  text: string
+  streaming?: boolean
+  children?: ReactNode
+  /** Type size and colour; the default is the chat's reading size. */
+  className?: string
+}) {
   return (
-    <div className="md text-[14px] leading-[1.7] [overflow-wrap:anywhere] min-w-0">
+    <div className={`md [overflow-wrap:anywhere] min-w-0 ${className}`}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={streaming ? live : still}>
         {text}
       </ReactMarkdown>

@@ -25,8 +25,13 @@
 | GET | `/me` | `{logged_in, has_passkey, dev_login}`，不需要登录 |
 | GET/POST | `/threads` | 列出、创建线程。`GET /threads` 只列一般线程（主线和普通对话）；`GET /threads?project_id=<id>` 列这个项目的项目对话。`POST /threads {"title", "project_id"?}` 带 `project_id` 时建项目对话（`kind: project`，项目不存在返回 404）。线程对象带 `project_id`（只在项目对话上有） |
 | GET/PATCH | `/threads/{id}` | 读取、改名或归档 |
-| GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
-| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?}}`，返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么。项目对话里主管的作用域限定在这个项目：环境只列这个项目和它的任务，`task_create` 不填 `project` 时归到这个项目，动别的项目或别的项目的任务会被拒绝 |
+| GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新；用户消息带 `attachments: [{id, name, mime, size}]`）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
+| GET | `/threads/{id}/context` | 对话的上下文（见下文“上下文”）：`{segment, covers_up_to, summary, profile, reason?, compacted_at?, used, window, soft, hard, cache: {calls, input_tokens, cached_tokens, last_input}}`。`segment` 为 0 表示还没有第一段；`used` 是下一轮输入 token 的估算；`cache` 汇总主管在这条对话里最近 20 次调用 |
+| POST | `/threads/{id}/compact` | 立即把较早的消息整理进摘要（原因 `manual`），返回 202 `{queued: true}`；在这条对话正在进行的回合结束后执行，完成时 `/ws` 推送 `thread.compacted` |
+| PUT | `/threads/{id}/summary` | 用户改写摘要 `{"summary": "..."}`（最多 20000 字），返回 202；开始新的一段（原因 `edit`），覆盖的消息不变 |
+| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?}, "attachments"?: [附件 id]}`（只有附件、`content` 为空也可以；附件 id 必须是 `POST /attachments` 返回的，最多 8 个，否则 400 `bad_attachment`），返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么。项目对话里主管的作用域限定在这个项目：环境只列这个项目和它的任务，`task_create` 不填 `project` 时归到这个项目，动别的项目或别的项目的任务会被拒绝 |
+| POST | `/attachments?name=<文件名>` | 上传一个文件：请求体是文件本身的字节（不是 JSON），最多 20 MB。返回 201 `{id, name, mime, size}`。类型由 Hub 按内容判断，不信客户端：PNG / JPEG / GIF / WebP 是图片（`image/*`），UTF-8 文本是 `text/plain`，PDF 是 `application/pdf`，其余（包括 SVG、HTML）一律 `application/octet-stream`。文件名里的路径分隔符会被换成 `_` |
+| GET | `/attachments/{id}` | 取回附件。图片 `inline` 显示，其余带 `Content-Disposition: attachment` 下载，永远不会当页面运行 |
 | GET | `/tasks?status=a,b&project_id=&thread_id=&parent_id=` | 列出任务（优先级高的在前，同级按创建时间） |
 | POST | `/tasks` | 创建 `{title, detail?, kind?, project_id?, persona_id?, priority?, agent_pref?, node_pref?, permission_mode?, parent_id?, depends_on?, thread_id?, dispatch?}`，返回 201。`kind` 是 `code`、`general` 或 `ops`，缺省时有项目（不是 `misc`）就是 `code`；没有项目的任务归到内置项目 `misc`（杂项）；`ops` 必须指定项目。用户创建且不派发的进 `inbox` |
 | GET | `/tasks/{id}` | `{task, runs, subtasks}` |
@@ -83,12 +88,18 @@
 | PUT | `/nodes/{id}/agents/{agent}/env` | `{name, value}`：设置 API Key 环境变量（只能是 `key_env` 里的名字），`value` 为空表示清除 |
 | GET | `/nodes/{id}/jobs/{job}` | `{job_id, kind, agent, command, offset, data, running, exit_code?}`：作业最后 64 KB 的终端输出（`offset` 是 `data` 开头的字节位置） |
 | POST | `/nodes/{id}/jobs/{job}/input` / `resize` / `cancel` | `{data}` 写入终端；`{cols, rows}` 改终端大小；结束作业。终端（`kind: shell`）只有打开它的登录会话能用，别的会话一律 404 |
-| GET | `/models` | `{providers: [{id, name, kind, base_url, api_key_env, models, key_set, env_set, default_url, created_at, updated_at}], roles: {角色: {provider_id, model, effort?, inherited}}, role_order, kinds, efforts}`。角色是 `supervisor`、`reviewer`、`approver`、`inspector`；没有单独选的角色 `inherited: true`，内容是主管的。从不返回 API Key，只有 `key_set`（Hub 上存了）和 `env_set`（`api_key_env` 指的环境变量有值） |
+| GET | `/models` | `{providers: [{id, name, kind, base_url, api_key_env, models, key_set, env_set, default_url, created_at, updated_at}], roles: {角色: {provider_id, model, effort?, context_window?, inherited}}, role_order, kinds, efforts}`。角色是 `supervisor`、`reviewer`、`approver`、`inspector`、`compactor`（整理对话的摘要）；`context_window` 是模型的上下文窗口（token，没有时按 128000）；没有单独选的角色 `inherited: true`，内容是主管的。从不返回 API Key，只有 `key_set`（Hub 上存了）和 `env_set`（`api_key_env` 指的环境变量有值） |
 | POST / PATCH | `/models/providers`、`/models/providers/{id}` | 添加、修改供应商 `{name, kind, base_url?, api_key?, api_key_env?, clear_key?, models?}`（PATCH 只改出现的字段；`api_key` 留空不改，`clear_key: true` 删掉存的 Key）。`base_url` 必须是 https（本机 `http://localhost` 除外），不填用这个协议的官方地址。需要近期登录（401 `reauth`）：地址决定 Key 发到哪里。返回同 `GET /models` |
 | DELETE | `/models/providers/{id}` | 删除供应商和它的 Key；还有角色在用时 409 `in_use`。需要近期登录 |
 | POST | `/models/providers/{id}/discover` | 问供应商有哪些模型（OpenAI 兼容 `GET /models`，Anthropic `GET /v1/models`），返回 `{models}`，不保存 |
 | POST | `/models/test` | `{provider_id, model, effort?}`：发一句短消息试试，返回 `{ok, reply?, error?, ms}` |
-| PUT | `/models/roles` | `{角色: {provider_id, model, effort?} 或 null}`：只改出现的角色；`null` 或空 `model` 让它跟主管一样（主管不能清空）。下一次调用模型就生效，不用重启。返回同 `GET /models`。改动后 `/ws` 推送 `models.changed`（`{what}`，不含密钥） |
+| PUT | `/models/roles` | `{角色: {provider_id, model, effort?, context_window?} 或 null}`：只改出现的角色；不带 `context_window` 时，模型没变就保留原来的窗口，`0` 清除（8000 到 10000000 之间才有效）；`null` 或空 `model` 让它跟主管一样（主管不能清空）。下一次调用模型就生效，不用重启。返回同 `GET /models`。改动后 `/ws` 推送 `models.changed`（`{what}`，不含密钥） |
+| GET | `/mcp` | `{servers: [{id, name, slug, transport, command, args, url, enabled, pending, source, note, state, error?, tools: [{name, description, disabled, read_only, exposed?}], disabled_tools, env_keys: [{name, set}], header_names: [{name, set}], missing}], stdio_allowed}`。`transport` 是 `stdio`（在 Hub 上运行程序）或 `http`（远程，streamable HTTP）；`state` 是 `off` / `connecting` / `ready` / `error`；`pending: true` 是主管提议、用户还没批准的服务，它不会启动；`source` 是 `user` 或 `agent`。环境变量和请求头的值（可能是令牌）永远不返回，只有名字和有没有值（`env_keys`、`header_names`），`missing` 是还没填值的名字 |
+| POST | `/mcp/servers` | `{name, transport, command?, args?, url?, env?, headers?, enabled?}`：添加服务并立刻连接。需要近期登录（401 `reauth`）。名字重复（按 `slug`）409，配置不合法 400（`stdio` 在 `mcp.stdio_disabled` 时拒绝；带 `headers` 时地址要 https，本机除外）。返回同 `GET /mcp` |
+| PATCH | `/mcp/servers/{id}` | 只改出现的字段：`name`、`transport`、`command`、`args`、`url`、`env` / `headers`（设置；已有的名字值为空则保留原值）、`remove_env` / `remove_headers`、`enabled`、`disabled_tools`（对主管隐藏的工具名）。改前几类（决定运行什么、令牌发到哪）需要近期登录；只改 `enabled` / `disabled_tools` 不需要，其中 `disabled_tools` 不会重连。待批准的服务不能 `enabled: true`（409）。返回同 `GET /mcp` |
+| POST | `/mcp/servers/{id}/approve` | 批准主管提议的服务并启动它；还有没填值的变量或请求头时 409。需要近期登录。返回同 `GET /mcp` |
+| POST | `/mcp/servers/{id}/reconnect` | 断开重连，重新读取工具列表（最多等 35 秒）。返回同 `GET /mcp`，结果看 `state` / `error` |
+| DELETE | `/mcp/servers/{id}` | 删除服务（待批准的提议用它来拒绝），它的工具立刻从主管的工具列表里去掉 |
 | POST | `/projects/{id}/locations/{node}/sync` | 把项目在那台机器上的 checkout 和上游对齐：先 fetch，能快进就快进；有未提交的改动（`dirty`）、和上游分叉（`diverged`）、没有跟踪上游（`no_upstream`）时什么都不改。返回 `{outcome, message, git}`，`outcome` 还有 `up_to_date`、`fast_forwarded`。记一条 `project.repo_op` 事件 |
 | POST | `/projects/{id}/locations/{node}/wip` | 把那台机器上未提交（含新文件，遵守 .gitignore）和未推送的改动做成一个提交，推到 origin 的 `sous/wip/<机器>-<时间>`；本地的文件、暂存区和分支都不变。返回 `{outcome: pushed|nothing, message, branch?, commit?}`。记一条 `project.repo_op` 事件 |
 | GET | `/projects/{id}/shells` | `{shells: [{node_id, job_id, root, command, started_at, running, exit_code?}]}`：当前登录会话在这个项目各台在线机器上开的终端 |
@@ -96,7 +107,7 @@
 | GET | `/nodes/{id}/files/{agent}/{file}` | `{agent, file, path, format: "json"\|"jsonc"\|"toml"\|"text", exists, content, sha256}`。文件只能是 `AgentInfo.configs` 里的；`agent` 为 `sous`、`file` 为 `node` 时是机器的 node.json，设备令牌和 API Key 显示成 `***` |
 | PUT | `/nodes/{id}/files/{agent}/{file}` | `{content, base_sha256}`：`base_sha256` 是读到的 `sha256`（文件不存在时为空），不一致返回 409 `conflict`；格式不对 400。写入前把原文件存为 `<文件>.sous-bak`，返回新内容和 `backup` |
 | GET | `/projects/{id}/tree?path=&node=` | 项目目录里一层文件：`{node_id, result: {rel, entries: [{name, dir, size}]}}`（文件夹在前，不含 `.git`）。`node` 省略时用项目第一台在线的机器；都不在线 409 `offline` |
-| GET | `/projects/{id}/file?path=&node=` | `{node_id, result: {rel, size, binary, content, sha256}}`；超过 1 MB 或二进制的文件不返回内容 |
+| GET | `/projects/{id}/file?path=&node=` | `{node_id, result: {rel, size, binary, content, sha256, data?}}`；超过 1 MB 或二进制的文件不返回 `content`，其中 png / jpg / gif / webp / bmp / ico / avif 图片带 `data`（base64）供页面显示 |
 | PUT | `/projects/{id}/file?node=` | `{path, content, base_sha256}`：`base_sha256` 是读到的 `sha256`（新文件为空），不一致返回 409 `conflict`；返回新文件内容 |
 
 **远程管理 agent**（上面 `/nodes/{id}/agents/*`、`/jobs/*`、`/files/*` 这几组）：Hub 转成 `node.request` 发给机器，等它回答（一般 20 秒超时）。机器离线 409 `offline`，sous 版本太旧 409 `unsupported`，机器的 node.json 关闭了远程管理 403 `disabled`，超时 504 `timeout`。`GET /nodes` 的每台机器多一个实时字段 `admin`：`on`、`off`、`unsupported`，离线时没有。`AgentInfo` 多了这些字段：`install? upgrade? login? logout?`（sous 会运行的命令，没有就不能做）、`missing?`（缺少的命令，如 `npx`）、`key_env?`、`env_set?`（已设置的变量名，不含值）、`options?`（agent 上次报告的会话选项 `[{id, name, description?, category?: "model"|"thought_level"|"model_config"|…, current, values: [{value, name, description?, group?}]}]`）、`options_at?`、`defaults?`、`configs?: [{id, path, format}]`、`launch_override?`、`job?`（正在进行的作业）。`/ws` 推送 `agent.job.started`（`{node_id, job_id, kind, agent, command}`）、临时事件 `agent.job.output`（`{node_id, job_id, offset, data}`，seq 为 0）、`agent.job.ended`（`{node_id, job_id, kind, agent, exit_code, error?}`）、`node.config_changed`（`{node_id, agent, what: "defaults"|"env:<名字>"|"file:<id>"}`，不含内容）。
@@ -120,6 +131,8 @@
 **推送**：通知点开后打开 PWA 的哈希路由：`/#approvals`、`/#task=<id>`、`/#thread=<id>`。M5 起工作台自己的路由是 `/#/`、`/#/projects`、`/#/project=<id>`、`/#/task=<id>`、`/#/inbox`，旧的三种链接仍然有效。
 
 **记忆**：`{id, kind: "profile"|"project"|"lesson"|"note", content, created_at, updated_at}`。记忆变化时，`/ws` 推送 `memory.put` / `memory.deleted` 事件。
+
+**上下文**：一条对话的上下文分成若干段。每段开头是用户画像记忆的快照和一份摘要，摘要代替 `covers_up_to` 及以前的消息；之后的消息原样发给模型。占用超过窗口的 60%（`soft`）时，回合结束后自动整理一次；超过 85%（`hard`）时先整理再回复。整理先让模型把值得记住的写进记忆，再生成新摘要，然后推送 `thread.compacted`（`{segment, covers_up_to, summary, profile, reason, input_tokens?, model?}`，`reason` 是 `start` / `soft` / `hard` / `overflow` / `manual` / `edit`）。消息本身不删不改，`/threads/{id}/messages` 照样能翻到全部历史。
 
 ## WebSocket `/ws`
 

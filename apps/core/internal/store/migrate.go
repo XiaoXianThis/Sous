@@ -370,6 +370,44 @@ CREATE TABLE model_keys (
   api_key     TEXT NOT NULL
 );
 `,
+	// 10: context segments of a thread (long-main-thread).
+	`
+CREATE TABLE thread_segments (
+  thread_id    TEXT NOT NULL,
+  segment      INTEGER NOT NULL,
+  covers_up_to INTEGER NOT NULL,
+  summary      TEXT NOT NULL,
+  profile      TEXT NOT NULL DEFAULT '[]',
+  reason       TEXT NOT NULL DEFAULT '',
+  model        TEXT NOT NULL DEFAULT '',
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  event_seq    INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, segment)
+);
+`,
+	// 11: files sent with a message.
+	`ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '';`,
+	// 12: MCP servers the supervisor can use (decision 0021).
+	`
+CREATE TABLE mcp_servers (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  transport      TEXT NOT NULL,
+  command        TEXT NOT NULL DEFAULT '',
+  args           TEXT NOT NULL DEFAULT '[]',
+  url            TEXT NOT NULL DEFAULT '',
+  env            TEXT NOT NULL DEFAULT '{}',
+  headers        TEXT NOT NULL DEFAULT '{}',
+  disabled_tools TEXT NOT NULL DEFAULT '[]',
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  pending        INTEGER NOT NULL DEFAULT 0,
+  source         TEXT NOT NULL DEFAULT 'user',
+  note           TEXT NOT NULL DEFAULT '',
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

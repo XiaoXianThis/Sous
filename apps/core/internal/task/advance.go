@@ -295,50 +295,6 @@ func diffFiles(diff string) []string {
 	return out
 }
 
-// Approve is the effect handler for an approval the approver agent may
-// decide (auto mode). It allows the action, or hands it to the user.
-func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
-	a, err := e.store().Approval(ctx, eff.Key)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	if a.Status != "pending" || a.Review != "ai" {
-		return nil
-	}
-	allow := ""
-	for _, kind := range []string{"allow_once", "allow_always"} {
-		for _, o := range a.Options {
-			if o.Kind == kind && allow == "" {
-				allow = o.OptionID
-			}
-		}
-	}
-	if !models.Usable(ctx, e.Approver.Provider) || allow == "" {
-		return e.Nodes.Escalate(ctx, a.ID, "没有配置审批模型，交给你决定")
-	}
-	t, _ := e.store().Task(ctx, a.TaskID)
-	r, _ := e.store().Run(ctx, a.RunID)
-	in := fmt.Sprintf("## 任务\n%s\n\n%s\n\n## agent 收到的说明\n%s\n\n## 它想做的操作\n类别：%s\n%s\n\n%s\n",
-		t.Title, t.Detail, r.Prompt, a.Category, a.Title, a.Detail)
-	var out struct {
-		Decision string `json:"decision"`
-		Reason   string `json:"reason"`
-	}
-	if err := e.askJSON(ctx, e.Approver, "approver", t, prompts.Approver, in, &out); err != nil {
-		if eff.Attempts+1 >= approverGiveUp {
-			return e.Nodes.Escalate(ctx, a.ID, "审批模型调用失败，交给你决定："+err.Error())
-		}
-		return err
-	}
-	reason := strings.TrimSpace(out.Reason)
-	if out.Decision == "allow" {
-		return e.Nodes.DecideAs(ctx, a.ID, allow, reason, event.ActorApprover)
-	}
-	return e.Nodes.Escalate(ctx, a.ID, firstNonEmpty(reason, "审批 agent 拿不准"))
-}
-
 // askJSON calls a role's model with one message and decodes the JSON object
 // in its answer.
 func (e *Engine) askJSON(ctx context.Context, m Model, role string, t store.Task, system, user string, out any) error {

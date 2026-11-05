@@ -74,3 +74,25 @@ func safeCall(ctx context.Context, t Tool, args json.RawMessage) (out string, er
 	}()
 	return t.Call(ctx, args)
 }
+
+// Subset returns a registry with only the named tools of r.
+func (r *Registry) Subset(names ...string) *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := NewRegistry()
+	for _, n := range names {
+		if t, ok := r.tools[n]; ok {
+			out.tools[n] = t
+		}
+	}
+	return out
+}
+
+// Unregister removes the named tools; unknown names are ignored.
+func (r *Registry) Unregister(names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		delete(r.tools, n)
+	}
+}

@@ -23,6 +23,9 @@ const (
 	UsageRecorded         Type = "usage.recorded"
 	MemoryPut             Type = "memory.put"
 	MemoryDeleted         Type = "memory.deleted"
+	// ThreadCompacted starts a new context segment of a thread: the
+	// messages up to CoversUpTo are folded into a summary (long-main-thread).
+	ThreadCompacted Type = "thread.compacted"
 
 	NodePaired    Type = "node.paired"
 	NodeUpdated   Type = "node.updated" // renamed
@@ -101,6 +104,15 @@ type ThreadCreatedPayload struct {
 	ProjectID string `json:"project_id,omitempty"`
 }
 
+// Attachment is a file sent along with a user message; its bytes live in the
+// Hub's attachment directory (package attach).
+type Attachment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Mime string `json:"mime"`
+	Size int64  `json:"size"`
+}
+
 type MessagePayload struct {
 	MessageID string `json:"message_id"`
 	Content   string `json:"content"`
@@ -114,6 +126,8 @@ type MessagePayload struct {
 	Notify bool `json:"notify,omitempty"`
 	// Context is what the user was looking at on the workbench (M5).
 	Context *MessageContext `json:"context,omitempty"`
+	// Attachments are the files of a user message.
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Message kinds.
@@ -132,6 +146,29 @@ type MemoryPayload struct {
 	Kind     string `json:"kind,omitempty"` // profile / project / lesson / note
 	Content  string `json:"content,omitempty"`
 }
+
+// CompactedPayload starts a context segment. Messages with seq up to
+// CoversUpTo are represented by Summary; Profile is the snapshot of the
+// user's profile memories the segment shows (formatted, one per item).
+type CompactedPayload struct {
+	Segment     int      `json:"segment"`
+	CoversUpTo  int64    `json:"covers_up_to"`
+	Summary     string   `json:"summary"`
+	Profile     []string `json:"profile"`
+	Reason      string   `json:"reason"` // start / soft / hard / overflow / manual / edit
+	InputTokens int      `json:"input_tokens,omitempty"`
+	Model       string   `json:"model,omitempty"`
+}
+
+// Compaction reasons.
+const (
+	CompactStart    = "start"
+	CompactSoft     = "soft"
+	CompactHard     = "hard"
+	CompactOverflow = "overflow"
+	CompactManual   = "manual"
+	CompactEdit     = "edit"
+)
 
 type DeltaPayload struct {
 	MessageID string `json:"message_id"`

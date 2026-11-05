@@ -207,6 +207,14 @@ func (a *admin) mergeNodeConfig(content []byte) (Config, error) {
 			next.Policy.ExtraFloor = append(next.Policy.ExtraFloor, r)
 		}
 	}
+	// Extra high-risk rules can be added but not removed, and routine
+	// actions can be sent to the approver but not the other way round.
+	for _, r := range cur.Policy.ExtraHard {
+		if !slices.Contains(next.Policy.ExtraHard, r) {
+			next.Policy.ExtraHard = append(next.Policy.ExtraHard, r)
+		}
+	}
+	next.Policy.RoutineDisabled = next.Policy.RoutineDisabled || cur.Policy.RoutineDisabled
 	// A masked key keeps its value; a new value replaces it.
 	for agent, env := range next.AgentEnv {
 		for k, v := range env {

@@ -2,7 +2,9 @@
 // A file rather than an inline script: the Hub's Content-Security-Policy forbids inline scripts.
 try {
   var t = localStorage.getItem('sous.theme')
-  if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  // Default is dark; only an explicit "system" choice follows the OS.
+  if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  else if (t !== 'light') t = 'dark'
   document.documentElement.dataset.theme = t
   var c = document.querySelector('meta[name="theme-color"]')
   if (c) c.setAttribute('content', t === 'dark' ? '#141414' : '#f3f3f3')

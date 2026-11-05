@@ -264,9 +264,10 @@ func TestAutoModeApprover(t *testing.T) {
 	if done := te.waitStatus(tk.ID, event.TaskDone, event.TaskBlocked, event.TaskFailed); done.Status != event.TaskDone {
 		t.Fatalf("task: %+v", done)
 	}
-	// The approver decided both the command and the push; the user was never asked.
+	// The approver decided the command; pushing the task branch is a routine
+	// action the node allows itself (docs/decisions/0019). The user was never asked.
 	as, _ := te.log.Store.Approvals(ctx, "", "")
-	if len(as) != 2 {
+	if len(as) != 1 {
 		t.Fatalf("approvals: %+v", as)
 	}
 	for _, a := range as {
@@ -274,8 +275,20 @@ func TestAutoModeApprover(t *testing.T) {
 			t.Fatalf("approval: %+v", a)
 		}
 	}
-	if reqs := te.approver.requests(); len(reqs) != 2 || !strings.Contains(reqs[0].System, "审批员") {
+	if reqs := te.approver.requests(); len(reqs) != 1 || !strings.Contains(reqs[0].System, "审批员") {
 		t.Fatalf("approver calls: %d", len(reqs))
+	}
+	// The push left a record: allowed by the node, with the reason.
+	evs, _ := te.log.Store.EventsSince(ctx, 0, 5000)
+	pushed := false
+	for _, ev := range evs {
+		var p event.RunUpdatePayload
+		if ev.Type == event.RunUpdate && ev.Decode(&p) == nil && p.Kind == "permission" && p.Decision == "allow" && strings.Contains(p.Title, "push") && strings.Contains(p.Title, "常规操作") {
+			pushed = true
+		}
+	}
+	if !pushed {
+		t.Error("the routine push was not recorded")
 	}
 }
 
@@ -287,6 +300,21 @@ func TestApproverEscalatesToUser(t *testing.T) {
 	a := te.approveNext(tk.ID)
 	if a.Escalation != "和任务无关" {
 		t.Fatalf("escalated approval: %+v", a)
+	}
+}
+
+// A request with a hard signal goes to the user even in the auto mode; the
+// approver agent is never asked (docs/decisions/0019).
+func TestHardSignalSkipsTheApprover(t *testing.T) {
+	te := newTaskEnv(t)
+	defer te.startDaemon("secret")()
+	tk, _ := te.tasks.Create(context.Background(), task.Input{ProjectID: "p1", Title: "x", Mode: "auto", Dispatch: true, Actor: event.ActorSupervisor})
+	a := te.approveNext(tk.ID)
+	if a.Review != "user" || !strings.Contains(a.Detail, "高风险信号：读写凭据或密钥") {
+		t.Fatalf("approval: %+v", a)
+	}
+	if n := len(te.approver.requests()); n != 0 {
+		t.Fatalf("the approver was asked %d times", n)
 	}
 }
 

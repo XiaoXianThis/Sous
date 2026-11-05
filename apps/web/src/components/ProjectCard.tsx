@@ -6,8 +6,7 @@ import type { ProjectCard as Card } from '../lib/workbench'
 import AgentCard from './AgentCard'
 import FileTree from './FileTree'
 import Icon from './Icon'
-import Locations from './Locations'
-import ProjectTile from './ProjectTile'
+import { LocationsChip } from './Locations'
 import TaskRow from './TaskRow'
 
 /** shell is only in the expanded dialog; a card shows it as tasks. */
@@ -57,7 +56,7 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
   const p = card.project
   const idle = card.allAgents.length === 0 && card.allTasks.length === 0
   const hidden = card.hiddenTasks + card.hiddenAgents
-  const counts = (['attention', 'active', 'todo', 'closed'] as const).filter((k) => card.counts[k] > 0)
+  const counts = (['active', 'todo', 'closed'] as const).filter((k) => card.counts[k] > 0)
   const newTask = () => {
     ui.state.newTask = p.id
     ui.emit()
@@ -70,13 +69,10 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
       data-project-card={p.id}
     >
       <header className="flex items-start gap-3 min-w-0">
-        <button className="border-0 bg-transparent p-0 rounded-[12px]" aria-label={`打开项目 ${p.name}`} onClick={() => onOpenProject(p.id)}>
-          <ProjectTile name={p.name} id={p.id} size={36} misc={p.id === 'misc'} />
-        </button>
-        <div className="grid gap-1 min-w-0 flex-1">
+        <div className="grid gap-1 min-w-0 flex-1 self-center">
           <div className="flex items-center gap-1.5 min-w-0">
             <button
-              className="max-w-full border-0 bg-transparent p-0 text-left text-[14.5px] font-semibold tracking-tight leading-tight overflow-hidden text-ellipsis whitespace-nowrap hover:text-accent"
+              className="max-w-full border-0 bg-transparent p-0 text-left text-[14.5px] font-semibold tracking-tight leading-tight overflow-hidden text-ellipsis whitespace-nowrap hover:text-muted"
               onClick={() => onOpenProject(p.id)}
               title={p.notes || p.name}
             >
@@ -84,14 +80,17 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
             </button>
             {card.archived && <ArchivedBadge />}
           </div>
-          {p.id !== 'misc' && <Locations locations={card.locations} compact />}
         </div>
         <div className="flex items-center gap-0.5 -mr-1.5 -mt-1">
-          {card.archived && (
+          {p.id !== 'misc' && (card.archived ? (
             <button className="icon-btn" aria-label={`激活 ${p.name}`} data-tip="激活，放回工作台" data-tip-pos="bottom" onClick={() => void setArchived(p, false)}>
               <Icon name="unarchive" size={17} />
             </button>
-          )}
+          ) : (
+            <button className="icon-btn" aria-label={`归档 ${p.name}`} data-tip="归档" data-tip-pos="bottom" onClick={() => void setArchived(p, true)}>
+              <Icon name="archive" size={17} />
+            </button>
+          ))}
           <button className="icon-btn" aria-label={`在 ${p.name} 里新建任务`} data-tip="新建任务" data-tip-pos="bottom" onClick={newTask}>
             <Icon name="plus" size={18} />
           </button>
@@ -150,7 +149,7 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
 
       {idle && (
         <button
-          className="flex items-center justify-center gap-1.5 h-16 rounded-[14px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
+          className="flex items-center justify-center gap-1.5 h-16 rounded-[14px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-muted hover:border-accent"
           onClick={newTask}
         >
           <Icon name="plus" size={16} />新任务
@@ -160,6 +159,7 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
       )}
 
       <footer className="flex items-center gap-1.5 pt-0.5 min-h-[22px]">
+          {p.id !== 'misc' && <LocationsChip locations={card.locations} />}
           {counts.map((k) => (
             <span key={k} className={`pill tone-${taskStates[k].tone}`} title={taskStates[k].text}>
               <Icon name={taskStates[k].icon} size={12} stroke={2.2} />{card.counts[k]}

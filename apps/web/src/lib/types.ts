@@ -11,6 +11,14 @@ export interface Thread {
   archived: boolean
 }
 
+/** A file sent along with a user message. */
+export interface Attachment {
+  id: string
+  name: string
+  mime: string
+  size: number
+}
+
 export interface Message {
   id: string
   thread_id: string
@@ -33,6 +41,8 @@ export interface Message {
   thinking?: string
   /** What the user was looking at on the workbench when they wrote it. */
   context?: MessageContext
+  /** The files of a user message. */
+  attachments?: Attachment[]
 }
 
 export interface HubEvent {
@@ -308,8 +318,28 @@ export interface ModelRole {
   provider_id: string
   model: string
   effort?: string
+  /** The model's context window in tokens; 0 or missing means 128000. */
+  context_window?: number
   /** No choice of its own: uses the supervisor's. */
   inherited?: boolean
+}
+
+/** A thread's context (GET /threads/{id}/context, long-main-thread). */
+export interface ThreadContext {
+  /** 0 before the thread's first turn. */
+  segment: number
+  /** Messages up to this seq are folded into the summary. */
+  covers_up_to: number
+  summary: string
+  profile: string[]
+  reason?: string
+  compacted_at?: number
+  /** Estimated input tokens of the next turn. */
+  used: number
+  window: number
+  soft: number
+  hard: number
+  cache: { calls: number; input_tokens: number; cached_tokens: number; last_input: number }
 }
 
 export interface ModelsView {
@@ -318,6 +348,46 @@ export interface ModelsView {
   role_order: string[]
   kinds: string[]
   efforts: string[]
+}
+
+export interface McpKey { name: string; set: boolean }
+
+export interface McpTool {
+  name: string
+  description: string
+  disabled: boolean
+  read_only: boolean
+  /** The name the model sees. */
+  exposed?: string
+}
+
+/** An MCP server as the Hub returns it. Secret values never come back, only their names. */
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  transport: 'stdio' | 'http'
+  command: string
+  args: string[]
+  url: string
+  enabled: boolean
+  /** The agent proposed it and the user has not approved it: it does not run. */
+  pending: boolean
+  source: 'user' | 'agent'
+  note: string
+  state: 'off' | 'connecting' | 'ready' | 'error'
+  error?: string
+  tools: McpTool[]
+  disabled_tools: string[]
+  env_keys: McpKey[]
+  header_names: McpKey[]
+  /** Secrets still waiting for a value. */
+  missing: string[]
+}
+
+export interface McpView {
+  servers: McpServer[]
+  stdio_allowed: boolean
 }
 
 export interface Deploy {

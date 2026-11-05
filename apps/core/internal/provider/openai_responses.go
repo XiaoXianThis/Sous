@@ -36,8 +36,19 @@ func orInput(req Request) []map[string]any {
 					"arguments": string(argsOrEmpty(c.Args))})
 			}
 		default:
-			items = append(items, map[string]any{"role": "user",
-				"content": []map[string]any{{"type": "input_text", "text": m.PlainText()}}})
+			content := []map[string]any{{"type": "input_text", "text": m.PlainText()}}
+			if m.hasImage() {
+				content = nil
+				for _, p := range m.Parts {
+					switch {
+					case p.Image != nil:
+						content = append(content, map[string]any{"type": "input_image", "image_url": p.Image.dataURL()})
+					case p.Text != "":
+						content = append(content, map[string]any{"type": "input_text", "text": p.Text})
+					}
+				}
+			}
+			items = append(items, map[string]any{"role": "user", "content": content})
 		}
 	}
 	return items

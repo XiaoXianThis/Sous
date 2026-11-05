@@ -28,7 +28,7 @@ func (p *openaiChat) Name() string { return p.cfg.Name }
 
 type ocMessage struct {
 	Role       string       `json:"role"`
-	Content    *string      `json:"content"`
+	Content    any          `json:"content"` // *string, or []map[string]any with images
 	ToolCalls  []ocToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string       `json:"tool_call_id,omitempty"`
 }
@@ -73,7 +73,7 @@ func ocMessages(req Request) []ocMessage {
 			}
 			out = append(out, msg)
 		default:
-			out = append(out, ocMessage{Role: "user", Content: str(m.PlainText())})
+			out = append(out, ocMessage{Role: "user", Content: ocUserContent(m, str)})
 		}
 	}
 	return out
@@ -204,4 +204,22 @@ func openaiEffort(e string) string {
 		return "xhigh"
 	}
 	return e
+}
+
+// ocUserContent is a user message's content: a plain string, or content
+// parts when the message carries images.
+func ocUserContent(m Message, str func(string) *string) any {
+	if !m.hasImage() {
+		return str(m.PlainText())
+	}
+	var parts []map[string]any
+	for _, p := range m.Parts {
+		switch {
+		case p.Image != nil:
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": p.Image.dataURL()}})
+		case p.Text != "":
+			parts = append(parts, map[string]any{"type": "text", "text": p.Text})
+		}
+	}
+	return parts
 }

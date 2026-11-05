@@ -21,13 +21,15 @@ export interface ChatState {
   schedulesRev: number
   /** Bumped when a Run starts, ends, pauses or resumes; drives the workbench. */
   runsRev: number
+  /** Bumped when a thread's context segment changes (thread.compacted). */
+  contextRev: number
   runs: Record<string, RunView>
   /** Installs and logins on machines, by job id. */
   jobs: Record<string, JobView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, runs: {}, jobs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, contextRev: 0, runs: {}, jobs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -145,6 +147,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         error: p.error || undefined,
         reply_to: p.reply_to || undefined,
         kind: p.kind || undefined,
+        attachments: p.attachments?.length ? p.attachments : undefined,
         seq: ev.seq,
         created_at: ev.ts,
       })
@@ -169,6 +172,9 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     case 'memory.put':
     case 'memory.deleted':
       state.memoryRev++
+      break
+    case 'thread.compacted':
+      state.contextRev++
       break
     case 'message.assistant.delta': {
       const msgs = list(state, ev.thread_id!)

@@ -126,7 +126,9 @@ var DefaultFloor = []string{
 
 // Policy classifies requests for one run.
 type Policy struct {
-	floor []*regexp.Regexp
+	floor     []*regexp.Regexp
+	extraHard []*regexp.Regexp
+	noRoutine bool
 }
 
 // Config is the policy section of a node's config.
@@ -137,11 +139,24 @@ type Config struct {
 	Floor []string `json:"floor,omitempty"`
 	// ExtraFloor adds rules to the defaults.
 	ExtraFloor []string `json:"extra_floor,omitempty"`
+	// ExtraHard adds high-risk signals: requests matching one always go to
+	// the user, never to the approver agent (docs/decisions/0019).
+	ExtraHard []string `json:"extra_hard,omitempty"`
+	// RoutineDisabled sends routine actions (pushing a task branch, deleting
+	// build output) to the approver agent in the auto mode too.
+	RoutineDisabled bool `json:"routine_disabled,omitempty"`
 }
 
 // New compiles a policy. Invalid patterns are returned as errors.
 func New(c Config) (*Policy, error) {
-	p := &Policy{}
+	p := &Policy{noRoutine: c.RoutineDisabled}
+	for _, r := range c.ExtraHard {
+		re, err := regexp.Compile(r)
+		if err != nil {
+			return nil, err
+		}
+		p.extraHard = append(p.extraHard, re)
+	}
 	if c.FloorDisabled {
 		return p, nil
 	}
@@ -302,6 +317,17 @@ var splitter = regexp.MustCompile(`&&|\|\||;|\||\n`)
 // classifyCommand classifies a shell command line by its worst part.
 func classifyCommand(cmd, workdir string) (Category, string) {
 	worst, why := Read, ""
+	// Commands inside $(...), `...` and <(...) run too: classify them as
+	// commands of their own.
+	cmd, subs, open := substitutions(cmd)
+	if open {
+		worst, why = ExecOther, "无法解析的命令替换"
+	}
+	for _, sub := range subs {
+		if c, w := classifyCommand(sub, workdir); rank[c] > rank[worst] {
+			worst, why = c, w
+		}
+	}
 	for _, part := range splitter.Split(cmd, -1) {
 		c, w := classifyOne(strings.TrimSpace(part), workdir)
 		if rank[c] > rank[worst] {
@@ -314,7 +340,85 @@ func classifyCommand(cmd, workdir string) (Category, string) {
 	return worst, why
 }
 
+// classifyOne classifies one simple command, then raises the result when
+// it redirects output into a file.
 func classifyOne(cmd, workdir string) (Category, string) {
+	c, w := classifyBase(cmd, workdir)
+	if rc, rw := redirectCategory(cmd, workdir); rank[rc] > rank[c] {
+		return rc, rw
+	}
+	return c, w
+}
+
+var shellC = regexp.MustCompile(`(?s)^(?:\S*/)?(?:ba|z|da|k)?sh\s+(?:-[a-z]+\s+)*-[a-z]*c\s+(?:'(.*)'|"(.*)")\s*$`)
+
+// wrappers run another command given as their arguments, with these
+// options taking a value.
+var wrappers = map[string]string{
+	"env": "-uCS", "nohup": "", "time": "", "command": "", "exec": "", "nice": "-n", "stdbuf": "-ioe",
+	"timeout": "-ks", "xargs": "-nIPLdEsa", "ionice": "-cn", "setsid": "", "caffeinate": "",
+}
+
+// unwrap returns the command a wrapper like env, timeout or xargs runs.
+func unwrap(f []string) []string {
+	valued, ok := wrappers[filepath.Base(f[0])]
+	if !ok {
+		return nil
+	}
+	name := filepath.Base(f[0])
+	rest := f[1:]
+	for len(rest) > 0 {
+		a := rest[0]
+		switch {
+		case strings.HasPrefix(a, "-") && len(a) >= 2:
+			rest = rest[1:]
+			if len(a) == 2 && strings.Contains(valued, a[1:]) && len(rest) > 0 {
+				rest = rest[1:] // the option's value
+			}
+		case name == "env" && strings.Contains(a, "="):
+			rest = rest[1:]
+		case name == "timeout":
+			name = "" // the duration, once
+			rest = rest[1:]
+		default:
+			return rest
+		}
+	}
+	return rest
+}
+
+// redirectCategory looks at > and >> in a simple command: writing into a
+// file is at least an edit, and outside the working directory is not one.
+func redirectCategory(cmd, workdir string) (Category, string) {
+	f := strings.Fields(cmd)
+	worst, why := Read, ""
+	for i, tok := range f {
+		m := redirect.FindStringSubmatch(tok)
+		if m == nil {
+			continue
+		}
+		target := m[3]
+		if target == "" && i+1 < len(f) {
+			target = f[i+1]
+		}
+		target = strings.Trim(target, `"'`)
+		if target == "" || strings.HasPrefix(target, "&") || target == "/dev/null" || target == "/dev/stdout" || target == "/dev/stderr" {
+			continue
+		}
+		if out := outside([]string{target}, workdir); out != "" {
+			return OutsideWorktree, "把输出写到工作目录之外的 " + out
+		}
+		worst, why = EditWorktree, ""
+	}
+	return worst, why
+}
+
+var redirect = regexp.MustCompile(`^(\d*|&)(>>?|>\|)(.*)$`)
+
+func classifyBase(cmd, workdir string) (Category, string) {
+	if m := shellC.FindStringSubmatch(strings.TrimSpace(cmd)); m != nil {
+		return classifyCommand(m[1]+m[2], workdir)
+	}
 	f := strings.Fields(cmd)
 	// Skip environment assignments like FOO=1 go test.
 	for len(f) > 0 && strings.Contains(f[0], "=") && !strings.HasPrefix(f[0], "-") {
@@ -322,6 +426,16 @@ func classifyOne(cmd, workdir string) (Category, string) {
 	}
 	if len(f) == 0 {
 		return Read, ""
+	}
+	if isWrapper(f[0]) {
+		if filepath.Base(f[0]) == "command" && len(f) > 1 && (f[1] == "-v" || f[1] == "-V") {
+			return Read, ""
+		}
+		inner := unwrap(f)
+		if len(inner) == 0 {
+			return Read, "" // env alone prints the environment
+		}
+		return classifyOne(strings.Join(inner, " "), workdir)
 	}
 	name := filepath.Base(f[0])
 	args := f[1:]
@@ -347,12 +461,42 @@ func classifyOne(cmd, workdir string) (Category, string) {
 		}
 		return Read, ""
 	}
+	// sed -i and sort -o look read-only but write the files they name.
+	writes := name == "sed" && (has("-i", "--in-place") || hasPrefixFlag(args, "-i")) || name == "sort" && has("-o", "--output")
 	for _, a := range args {
 		if filepath.IsAbs(a) || strings.HasPrefix(a, "~/") {
-			if out := outside([]string{a}, workdir); out != "" && !readOnly[name] && !isSystemPath(a) {
+			if out := outside([]string{a}, workdir); out != "" && (!readOnly[name] || writes) && !isSystemPath(a) {
 				return OutsideWorktree, cmd
 			}
+		} else if !readOnly[name] && strings.Contains(a, "..") && !strings.HasPrefix(a, "-") {
+			if out := outside([]string{a}, workdir); out != "" {
+				return OutsideWorktree, cmd // a relative path that climbs out
+			}
 		}
+	}
+	switch {
+	case name == "find" && has("-delete"):
+		return Delete, cmd
+	case name == "find" && (has("-exec", "-execdir", "-ok", "-okdir")):
+		for i, a := range args {
+			if a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir" {
+				var inner []string
+				for _, x := range args[i+1:] {
+					if x == ";" || x == "\\;" || x == "+" {
+						break
+					}
+					inner = append(inner, x)
+				}
+				if c, _ := classifyOne(strings.Join(inner, " "), workdir); rank[c] > rank[ExecOther] {
+					return c, cmd
+				}
+				return ExecOther, cmd
+			}
+		}
+	case (name == "awk" || name == "gawk") && strings.Contains(cmd, "system("):
+		return ExecOther, cmd
+	case writes:
+		return EditWorktree, ""
 	}
 
 	switch name {
@@ -368,6 +512,12 @@ func classifyOne(cmd, workdir string) (Category, string) {
 		case "status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "blame", "remote", "describe", "grep", "config":
 			if sub == "branch" && has("-D", "-d", "--delete") {
 				return Irreversible, cmd
+			}
+			if sub == "remote" && len(args) > 1 && args[1] != "-v" && args[1] != "--verbose" && args[1] != "show" && args[1] != "get-url" {
+				return ExecOther, cmd // add, set-url, remove: changes where pushes go
+			}
+			if sub == "config" && !has("--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin", "--get-urlmatch") && positional(args[1:]) > 1 {
+				return ExecOther, cmd // setting a value
 			}
 			return Read, ""
 		case "add", "commit", "checkout", "switch", "restore", "stash", "merge", "rebase", "cherry-pick", "mv", "fetch", "pull", "tag":
@@ -468,7 +618,53 @@ func classifyOne(cmd, workdir string) (Category, string) {
 			return Service, cmd
 		}
 		return ExecOther, cmd
-	case "kubectl", "terraform", "helm":
+	case "terraform", "tofu":
+		switch sub {
+		case "validate", "fmt", "version", "output", "show", "graph", "providers":
+			return ExecSafe, ""
+		case "apply":
+			return Service, cmd
+		case "destroy":
+			return Irreversible, cmd
+		}
+		return ExecOther, cmd
+	case "kubectl":
+		switch sub {
+		case "get", "describe", "logs", "top", "explain", "version", "api-resources", "diff", "events":
+			return Read, ""
+		case "delete", "drain":
+			return Irreversible, cmd
+		case "apply", "rollout", "scale", "patch", "annotate", "label", "create", "replace", "set", "expose", "run", "exec", "cp", "edit", "port-forward", "cordon", "uncordon", "taint":
+			return Service, cmd
+		}
+		return ExecOther, cmd
+	case "helm":
+		switch sub {
+		case "list", "ls", "status", "get", "show", "template", "lint", "search", "version", "history":
+			return Read, ""
+		case "uninstall", "delete":
+			return Irreversible, cmd
+		case "install", "upgrade", "rollback", "repo", "plugin":
+			return Service, cmd
+		}
+		return ExecOther, cmd
+	case "python", "python3", "py":
+		if sub == "-m" && len(args) > 1 {
+			switch args[1] {
+			case "pytest", "unittest", "compileall", "py_compile", "mypy", "ruff", "black", "flake8", "isort", "pylint", "coverage":
+				return ExecSafe, ""
+			case "pip":
+				if len(args) > 2 && (args[2] == "list" || args[2] == "show" || args[2] == "freeze") {
+					return Read, ""
+				}
+				return Install, cmd
+			}
+		}
+		return ExecOther, cmd
+	case "node":
+		if has("--test") {
+			return ExecSafe, ""
+		}
 		return ExecOther, cmd
 	}
 	if readOnly[name] {
@@ -522,4 +718,99 @@ var safeTools = map[string]bool{
 var safeScript = map[string]bool{
 	"test": true, "build": true, "lint": true, "check": true, "format": true, "fmt": true, "typecheck": true, "dev": true,
 	"test:unit": true, "test:e2e": true, "preview": true,
+}
+
+// isWrapper reports whether a command name is one of the wrappers.
+func isWrapper(name string) bool {
+	_, ok := wrappers[filepath.Base(name)]
+	return ok
+}
+
+// hasPrefixFlag reports whether an argument starts with the short flag, as
+// in sed -i.bak.
+func hasPrefixFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, flag) && !strings.HasPrefix(a, "--") {
+			return true
+		}
+	}
+	return false
+}
+
+// positional counts the arguments that are not flags.
+func positional(args []string) int {
+	n := 0
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			n++
+		}
+	}
+	return n
+}
+
+// substitutions splits the command substitutions out of a command line. It
+// returns the line with each one replaced by a word, the commands that were
+// inside, and whether one could not be closed. Single-quoted text is left
+// alone, since the shell does not expand it.
+func substitutions(cmd string) (string, []string, bool) {
+	if !strings.ContainsAny(cmd, "$`<>") {
+		return cmd, nil, false
+	}
+	var out strings.Builder
+	var subs []string
+	open := false
+	inSingle, inDouble := false, false
+	rs := []rune(cmd)
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		switch {
+		case inSingle:
+			out.WriteRune(c)
+			inSingle = c != '\''
+		case c == '\\' && i+1 < len(rs):
+			out.WriteRune(c)
+			out.WriteRune(rs[i+1])
+			i++
+		case c == '\'' && !inDouble:
+			inSingle = true
+			out.WriteRune(c)
+		case c == '"':
+			inDouble = !inDouble
+			out.WriteRune(c)
+		case c == '`':
+			j := i + 1
+			for j < len(rs) && rs[j] != '`' {
+				j++
+			}
+			if j >= len(rs) {
+				open = true
+				out.WriteRune(c)
+				continue
+			}
+			subs = append(subs, string(rs[i+1:j]))
+			out.WriteString("SUB")
+			i = j
+		case (c == '$' || (!inDouble && (c == '<' || c == '>'))) && i+1 < len(rs) && rs[i+1] == '(' && !(c == '$' && i+2 < len(rs) && rs[i+2] == '('):
+			depth, j := 1, i+2
+			for ; j < len(rs) && depth > 0; j++ {
+				switch rs[j] {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth > 0 {
+				open = true
+				out.WriteRune(c)
+				continue
+			}
+			subs = append(subs, string(rs[i+2:j-1]))
+			out.WriteString("SUB")
+			i = j - 1
+		default:
+			out.WriteRune(c)
+		}
+	}
+	return out.String(), subs, open
 }

@@ -511,3 +511,12 @@ func (s *Store) Approvals(ctx context.Context, status, runID string) ([]Approval
 	}
 	return scanApprovals(rows)
 }
+
+// TaskApprovals lists a task's approvals across all its runs, oldest first.
+func (s *Store) TaskApprovals(ctx context.Context, taskID string) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+approvalCols+` FROM approvals WHERE task_id = ? ORDER BY created_at LIMIT 500`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return scanApprovals(rows)
+}

@@ -221,4 +221,7 @@ type ProjectFile struct {
 	Binary  bool   `json:"binary"`
 	Content string `json:"content"`
 	SHA256  string `json:"sha256"`
+	// Data is the bytes of a binary image (base64 on the wire) so the page can
+	// show it; other binary files carry none.
+	Data []byte `json:"data,omitempty"`
 }

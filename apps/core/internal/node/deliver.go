@@ -49,7 +49,9 @@ func (r *run) deliver() {
 		push = "git push --force-with-lease -u origin " + ws.Branch
 	}
 	raw, _ := json.Marshal(map[string]string{"command": push})
-	cat, why := r.d.pol().Classify(policy.Request{ToolKind: "execute", RawInput: raw, Workdir: ws.Dir})
+	req := policy.Request{ToolKind: "execute", RawInput: raw, Workdir: ws.Dir}
+	cat, why := r.d.pol().Classify(req)
+	act, assess, reason := r.judge(req, cat)
 	ask := fmt.Sprintf("push 分支 %s 并创建 PR", ws.Branch)
 	detail := fmt.Sprintf("将执行：\n  %s\n  gh pr create --head %s", push, ws.Branch)
 	if ws.BaseBranch != "" {
@@ -60,17 +62,20 @@ func (r *run) deliver() {
 		detail += "\n\n" + stat
 	}
 	options := []proto.Option{{OptionID: "allow", Name: "批准", Kind: "allow_once"}, {OptionID: "reject", Name: "拒绝", Kind: "reject_once"}}
-	switch policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) {
+	switch act {
 	case policy.Deny:
 		r.recordPolicy(ask+"（"+why+"）", cat, "deny")
 		r.end("failed", "", "", stat, errors.New("底线规则拒绝了 push："+why))
 		return
 	case policy.Allow:
-		r.recordPolicy(ask, cat, "allow")
+		r.recordPolicy(ask+reasonSuffix(reason), cat, "allow")
 	default:
 		review := "user"
-		if policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) == policy.AskAI {
+		if act == policy.AskAI {
 			review = "ai"
+		}
+		if note := assess.Note(); note != "" {
+			detail = note + "\n\n" + detail
 		}
 		if review == "ai" {
 			r.status("等审批 agent 判断能否 push")

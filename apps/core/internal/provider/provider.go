@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,9 +23,16 @@ const (
 	RoleTool      Role = "tool" // carries tool results
 )
 
-// Part is one piece of a message: text, a tool call or a tool result.
+// Image is a picture the user sent along with a message.
+type Image struct {
+	Mime string `json:"mime"` // image/png, image/jpeg, image/gif or image/webp
+	Data []byte `json:"data"`
+}
+
+// Part is one piece of a message: text, an image, a tool call or a tool result.
 type Part struct {
 	Text       string      `json:"text,omitempty"`
+	Image      *Image      `json:"image,omitempty"`
 	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
 }
@@ -44,6 +52,19 @@ type ToolResult struct {
 type Message struct {
 	Role  Role   `json:"role"`
 	Parts []Part `json:"parts"`
+}
+
+func (m Message) hasImage() bool {
+	for _, p := range m.Parts {
+		if p.Image != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (i *Image) dataURL() string {
+	return "data:" + i.Mime + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
 }
 
 // Text returns a message with a single text part.
@@ -88,6 +109,11 @@ type Request struct {
 	// Empty leaves the model's default. Each kind maps it to its own
 	// parameter; a model that does not reason may reject it.
 	Effort string
+	// CacheAt lists indexes of Messages after which providers with explicit
+	// prompt caching (Anthropic) place a cache breakpoint; the system
+	// prompt and tools are cached too when it is set. Providers that cache
+	// prefixes automatically ignore it.
+	CacheAt []int
 }
 
 // Efforts are the reasoning levels a role may set.

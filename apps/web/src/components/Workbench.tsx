@@ -8,7 +8,6 @@ import Icon from './Icon'
 import ProjectCardComponent, { type ProjectTab } from './ProjectCard'
 import ProjectModal from './ProjectModal'
 import ProjectSetupSheet from './ProjectSetupSheet'
-import ProjectTile from './ProjectTile'
 import PhoneHeader from './PhoneHeader'
 import TaskRow from './TaskRow'
 import { usePhone } from '../lib/phone'
@@ -135,7 +134,6 @@ export default function Workbench() {
           const p = projectOf(t.task.project_id)
           return (
             <div key={t.task.id} className="flex items-center gap-1 pl-1 min-w-0">
-              {p && <span title={p.name}><ProjectTile name={p.name} id={p.id} size={22} misc={p.id === 'misc'} /></span>}
               <div className="flex-1 min-w-0">
                 <TaskRow task={t} onOpen={() => { setAttention(false); go({ view: 'task', id: t.task.id }) }} />
               </div>

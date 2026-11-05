@@ -31,3 +31,6 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted |
 | [0017](0017-web-search-and-fetch.md) | 主管可以联网：web_search 和 web_fetch | Accepted |
 | [0018](0018-phone-liquid-glass.md) | 手机端按原生 App 做：WebView 行为 + Liquid Glass 外观 | Accepted |
+| [0019](0019-auto-approval-layers.md) | 自动审批分层：确定性规则、审批 agent、硬上限 | Accepted |
+| [0020](0020-long-thread-context.md) | 长对话的上下文：分段、结构化摘要、查回原文 | Accepted |
+| [0021](0021-mcp-servers.md) | 主管支持 MCP：页面上管理，agent 只能提议、用户批准 | Accepted |

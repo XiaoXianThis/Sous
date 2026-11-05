@@ -46,7 +46,7 @@ func newEnv(t *testing.T, dev bool) *env {
 	os.MkdirAll(filepath.Join(web, "assets"), 0o755)
 	os.WriteFile(filepath.Join(web, "assets", "app.js"), []byte("console.log(1)"), 0o644)
 
-	cfg := &config.Hub{PublicURL: "http://localhost:8787", Dev: dev, WebDir: web}
+	cfg := &config.Hub{PublicURL: "http://localhost:8787", Dev: dev, WebDir: web, DataDir: t.TempDir()}
 	log := eventlog.New(st, event.NewBus())
 	a, err := auth.New(st, cfg)
 	if err != nil {
@@ -361,5 +361,105 @@ func TestRequestBodyIsCapped(t *testing.T) {
 	huge := map[string]string{"title": strings.Repeat("x", 5<<20)}
 	if code := e.do(t, "POST", "/api/v1/threads", huge, nil); code != 400 {
 		t.Fatalf("5 MB body: %d", code)
+	}
+}
+
+// A 1x1 PNG.
+var tinyPNG = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xa7\x9a\xa0\xa0\x00\x00\x00\x00IEND\xaeB`\x82")
+
+func (e *env) upload(t *testing.T, name string, data []byte) (int, event.Attachment) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/attachments?name="+url.QueryEscape(name), strings.NewReader(string(data)))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set(auth.CSRFHeader, e.csrf())
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var a event.Attachment
+	json.NewDecoder(resp.Body).Decode(&a)
+	return resp.StatusCode, a
+}
+
+func TestAttachmentsRoundTrip(t *testing.T) {
+	e := newEnv(t, true)
+	e.login(t)
+
+	// The type comes from the bytes: a script called .png is not a picture.
+	code, fake := e.upload(t, "x.png", []byte("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"))
+	if code != 201 || fake.Mime == "image/png" || fake.Mime == "image/svg+xml" {
+		t.Fatalf("fake image: %d %+v", code, fake)
+	}
+	code, img := e.upload(t, "../../shot.png", tinyPNG)
+	if code != 201 || img.Mime != "image/png" || img.Name != ".._.._shot.png" && img.Name != "_.._shot.png" && !strings.HasSuffix(img.Name, "shot.png") {
+		t.Fatalf("image: %d %+v", code, img)
+	}
+	if strings.ContainsAny(img.Name, `/\`) {
+		t.Fatalf("name %q keeps a separator", img.Name)
+	}
+	code, txt := e.upload(t, "notes.md", []byte("# 你好\n"))
+	if code != 201 || txt.Mime != "text/plain" {
+		t.Fatalf("text: %d %+v", code, txt)
+	}
+
+	// Pictures show inline, the rest downloads.
+	get := func(id string) *http.Response {
+		resp, err := e.client.Get(e.srv.URL + "/api/v1/attachments/" + id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	resp := get(img.ID)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "image/png" || string(body) != string(tinyPNG) {
+		t.Fatalf("image served as %q", resp.Header.Get("Content-Type"))
+	}
+	resp = get(fake.ID)
+	resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "application/octet-stream" || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("file served as %q / %q", resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
+	}
+	if resp := get("nope"); resp.StatusCode != 404 {
+		t.Fatalf("unknown id: %d", resp.StatusCode)
+	}
+
+	// A message may be only files; unknown ids are refused.
+	path := "/api/v1/threads/" + e.main + "/messages"
+	if code := e.do(t, "POST", path, map[string]any{"content": " ", "attachments": []string{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}, nil); code != 400 {
+		t.Fatalf("unknown attachment: %d", code)
+	}
+	if code := e.do(t, "POST", path, map[string]any{"content": " "}, nil); code != 400 {
+		t.Fatalf("empty message: %d", code)
+	}
+	if code := e.do(t, "POST", path, map[string]any{"content": "", "attachments": []string{img.ID, txt.ID}}, nil); code != 202 {
+		t.Fatalf("files only: %d", code)
+	}
+	var list struct{ Messages []store.Message }
+	e.do(t, "GET", path, nil, &list)
+	var got *store.Message
+	for i := range list.Messages {
+		if list.Messages[i].Role == "user" {
+			got = &list.Messages[i]
+		}
+	}
+	if got == nil || len(got.Attachments) != 2 || got.Attachments[0].ID != img.ID || got.Attachments[1].Name != "notes.md" {
+		t.Fatalf("stored message: %+v", got)
+	}
+}
+
+func TestAttachmentUploadNeedsLoginAndHasASizeLimit(t *testing.T) {
+	e := newEnv(t, true)
+	if code, _ := e.upload(t, "a.txt", []byte("hi")); code != 401 && code != 403 {
+		t.Fatalf("logged out upload: %d", code)
+	}
+	e.login(t)
+	if code, _ := e.upload(t, "big.bin", make([]byte, 21<<20)); code != 413 {
+		t.Fatalf("21 MB upload: %d", code)
+	}
+	if code, _ := e.upload(t, "empty", nil); code != 400 {
+		t.Fatalf("empty upload: %d", code)
 	}
 }

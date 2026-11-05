@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/mcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/attach"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/effects"
@@ -39,6 +41,7 @@ type Hub struct {
 	Log        *eventlog.Log
 	Auth       *auth.Auth
 	Models     *models.Registry
+	MCP        *mcp.Manager
 	Supervisor *supervisor.Supervisor
 	Effects    *effects.Runner
 	Nodes      *nodehub.Hub
@@ -116,12 +119,20 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		tool.CurrentTime{},
 		tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
 		tool.Notify{Log: h.Log},
+		tool.ThreadSearch{Log: h.Log}, tool.ThreadRead{Log: h.Log},
 	)
 	for _, t := range append(h.Tasks.Tools(), h.Triggers.Tools()...) {
 		tools.Register(t)
 	}
 	for _, t := range webTools(cfg) {
 		tools.Register(t)
+	}
+	if !cfg.MCP.Disabled {
+		h.MCP = mcp.NewManager(h.Log, tools)
+		h.MCP.StdioDisabled = cfg.MCP.StdioDisabled
+		for _, t := range h.MCP.Tools() {
+			tools.Register(t)
+		}
 	}
 	h.Supervisor = supervisor.New(supervisor.Options{
 		Log:      h.Log,
@@ -132,6 +143,12 @@ func Open(cfg *config.Hub) (*Hub, error) {
 			return append(h.Nodes.Environment(ctx), h.Tasks.Environment(ctx, threadID)...)
 		},
 		DescribeContext: h.Tasks.DescribeContext,
+		Attachments:     attach.Open(filepath.Join(cfg.DataDir, "attachments")),
+		Compactor:       h.Models.For(config.RoleCompactor),
+		CompactorModel:  config.RoleCompactor,
+		ContextWindow: func(ctx context.Context) int {
+			return h.Models.ContextWindow(ctx, config.RoleSupervisor)
+		},
 	})
 
 	vapid, err := notify.LoadVAPID(cfg.DataDir)
@@ -148,7 +165,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	h.Effects.Handle(store.EffectSetup, h.Tasks.Setup)
 	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
 	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(h.Models.RoleRefs), h.Models.Routes(h.Auth.RequireFresh),
-		h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes))
+		h.mcpRoutes(), h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes), h.Supervisor.Routes)
 	h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
 	h.Nodes.DeviceRoutes(h.HTTP.Mux())
 	// The single writer's lock must never hang: every write goes through it.
@@ -157,6 +174,14 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		return err
 	})
 	return h, nil
+}
+
+// mcpRoutes serves the MCP settings page's API unless MCP is switched off.
+func (h *Hub) mcpRoutes() httpapi.Routes {
+	if h.MCP == nil {
+		return func(*http.ServeMux, func(string, http.HandlerFunc)) {}
+	}
+	return h.MCP.Routes(h.Auth.RequireFresh)
 }
 
 // pushSubject is the contact push services see in the VAPID token.
@@ -179,6 +204,11 @@ func (h *Hub) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	h.Supervisor.Start(runCtx)
+	if h.MCP != nil {
+		if err := h.MCP.Start(runCtx); err != nil {
+			slog.Warn("mcp: cannot start the servers", "err", err)
+		}
+	}
 	h.Tasks.Start(runCtx)
 	h.Triggers.Start(runCtx)
 	h.Inspector.Start(runCtx)

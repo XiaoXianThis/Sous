@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../lib/api'
 import { loginWithPasskey, passkeySupported, registerPasskey } from '../lib/passkey'
 import type { Me } from '../lib/types'
+import Icon from './Icon'
 
 export default function Login({ me, onLoggedIn }: { me: Me; onLoggedIn: () => void }) {
   const setupToken = new URLSearchParams(location.search).get('token') ?? ''
@@ -42,7 +43,7 @@ export default function Login({ me, onLoggedIn }: { me: Me; onLoggedIn: () => vo
           </>
         ) : me.has_passkey ? (
           <button className="btn w-full" disabled={busy} onClick={() => void run(loginWithPasskey)}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12zM10.8 13.2L3 21M6 18l2 2M15 7.5h.01" /></svg>
+            <Icon name="fingerprint" size={18} />
             用 Passkey 登录
           </button>
         ) : (

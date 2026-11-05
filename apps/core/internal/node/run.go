@@ -578,17 +578,19 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 	for i, l := range req.ToolCall.Locations {
 		paths[i] = l.Path
 	}
-	cat, why := r.d.pol().Classify(policy.Request{
+	preq := policy.Request{
 		ToolKind: req.ToolCall.Kind, Title: req.ToolCall.Title, RawInput: req.ToolCall.RawInput, Paths: paths, Workdir: workdir,
-	})
+	}
+	cat, why := r.d.pol().Classify(preq)
 	title := req.ToolCall.Title
 	if title == "" {
 		title = "agent 请求执行一个操作"
 	}
+	act, assess, reason := r.judge(preq, cat)
 	review := "user"
-	switch policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) {
+	switch act {
 	case policy.Allow:
-		r.recordPolicy(title, cat, "allow")
+		r.recordPolicy(title+reasonSuffix(reason), cat, "allow")
 		return acp.Decision{OptionID: pickOption(req.Options, "allow_once", "allow_always")}
 	case policy.Deny:
 		r.recordPolicy(title+"（"+why+"）", cat, "deny")
@@ -597,11 +599,31 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 	case policy.AskAI:
 		review = "ai"
 	}
+	if note := assess.Note(); note != "" {
+		why = strings.TrimSpace(note + "\n" + why)
+	}
 	opt, note := r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, review, toOptions(req.Options))
 	if kind := optionKind(req.Options, opt); kind == "reject_once" || kind == "reject_always" {
 		r.noteRefusal(title, note)
 	}
 	return acp.Decision{OptionID: opt}
+}
+
+// judge is the mode table refined by the policy's assessment of the
+// request: hard signals go to the user, routine actions skip the approver
+// in the auto mode (docs/decisions/0019). reason says why when the
+// assessment changed the table's answer.
+func (r *run) judge(req policy.Request, cat policy.Category) (policy.Action, policy.Assessment, string) {
+	a := r.d.pol().Assess(req, cat)
+	act, reason := policy.Judge(r.d.role(), r.spec.PermissionMode, cat, a)
+	return act, a, reason
+}
+
+func reasonSuffix(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return "（" + reason + "）"
 }
 
 // maxRefusalTurns is how many times a run continues after the agent ended

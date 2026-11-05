@@ -9,6 +9,8 @@
 //	edit   like write, but ask to edit hello.txt (a worktree edit, which
 //	       the node's policy allows by itself)
 //	floor  like write, but ask to run rm -rf ~ (refused by the floor rules)
+//	secret like write, but ask to run cat ~/.ssh/id_rsa (a hard signal: the
+//	       user decides, never the approver agent)
 //	auth   like write, but session/new fails until authenticate is called
 //	nologin session/new always needs a login
 //	slow   stream a message, then wait until session/cancel
@@ -176,12 +178,14 @@ func runFake(mode string) {
 			return
 		}
 		update(sid, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{{"content": "创建 hello.txt", "priority": "high", "status": "in_progress"}}})
-		kind, input := "execute", map[string]string{"command": "sh -c 'echo hi > hello.txt'"}
+		kind, input := "execute", map[string]string{"command": "./scripts/make-hello.sh hello.txt"}
 		switch mode {
 		case "edit":
 			kind, input = "edit", map[string]string{"path": "hello.txt"}
 		case "floor":
 			input = map[string]string{"command": "rm -rf ~"}
+		case "secret":
+			input = map[string]string{"command": "cat ~/.ssh/id_rsa"}
 		}
 		update(sid, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Write hello.txt", "kind": kind, "status": "pending"})
 		resp := request("session/request_permission", map[string]any{

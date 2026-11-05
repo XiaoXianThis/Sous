@@ -37,6 +37,11 @@ roles:
 #     api_key_env: BRAVE_API_KEY   # brave and tavily: the variable that holds the key
 #     base_url: https://searx.example.org   # searxng: the instance (it must allow the json format)
 
+# MCP servers are added on the page (Settings -> MCP), not here (docs/decisions/0021).
+# mcp:
+#   disabled: false          # true turns MCP off: nothing starts and the page cannot add a server
+#   stdio_disabled: false    # true refuses servers that run a program on this machine; only remote (HTTP) ones
+
 # Everything below is optional; these are the defaults.
 # triggers:                 # follow-ups the supervisor gets (design §9)
 #   followup_every: 5m

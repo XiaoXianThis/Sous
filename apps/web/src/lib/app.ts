@@ -319,8 +319,8 @@ export async function newThread() {
   return t
 }
 
-export async function send(content: string) {
-  await api.send(ui.state.current, content, currentContext())
+export async function send(content: string, attachments?: string[]) {
+  await api.send(ui.state.current, content, currentContext(), attachments)
 }
 
 /** Loads a project's chats and shows the latest one (none until the first message). */
@@ -356,10 +356,10 @@ export async function newProjectThread(projectId: string, title: string) {
 }
 
 /** Sends in a project's chat, creating it on the first message. */
-export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext) {
+export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[]) {
   let id = ui.state.projectThread[projectId]
   if (!id) id = (await newProjectThread(projectId, title)).id
-  await api.send(id, content, context)
+  await api.send(id, content, context, attachments)
 }
 
 /** Shows a system notification for a notice while the page is in the background. */

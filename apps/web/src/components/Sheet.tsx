@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import Icon from './Icon'
 
 // The sheets currently mounted, oldest first. Escape only closes the top one,
 // so a nested sheet does not take its parent down with it.
@@ -39,7 +40,7 @@ export default function Sheet({ title, onClose, wide = false, head, children }: 
         <header className="flex items-center gap-3 mb-3 min-w-0">
           <div className="flex-1 min-w-0">{head ?? <h2 className="m-0 text-[18px] font-bold tracking-tight">{title}</h2>}</div>
           <button className="icon-btn bg-sunken rounded-full w-8 h-8 self-start" aria-label="关闭" onClick={onClose}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            <Icon name="x" size={16} />
           </button>
         </header>
         <div className="overflow-y-auto grid gap-3.5 content-start min-h-0 pb-1 -mx-1 px-1">{children}</div>

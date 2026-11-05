@@ -14,9 +14,10 @@ function read(): ThemePref {
     const v = localStorage.getItem(KEY)
     if (v === 'light' || v === 'dark' || v === 'system') return v
   } catch {
-    // Storage may be blocked; follow the system.
+    // Storage may be blocked; use the default below.
   }
-  return 'system'
+  // Dark is the default until the user picks another theme.
+  return 'dark'
 }
 
 const media = typeof matchMedia !== 'undefined' ? matchMedia('(prefers-color-scheme: dark)') : null

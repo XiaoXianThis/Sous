@@ -5,7 +5,6 @@ import { runFromHistory, type RunView } from '../lib/runs'
 import { avatarOf, kindText, looks, stages, taskLook } from '../lib/status'
 import { deployedAfter, personaFor } from '../lib/workbench'
 import type { Run, Task } from '../lib/types'
-import { Who } from './Avatar'
 import Icon from './Icon'
 import RunCard from './RunCard'
 import StageBar from './StageBar'
@@ -78,7 +77,6 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
             {!embedded && (
               <button className="icon-btn" aria-label="返回项目" onClick={() => go(project ? { view: 'project', id: project.id } : { view: 'overview', id: '' })}><Icon name="back" /></button>
             )}
-            <Who persona={persona} agent={persona?.agent || task.agent_pref} size={46} />
             <div className="min-w-0 grid gap-1.5">
               <h1 className="m-0 text-[20px] font-bold tracking-tight leading-[1.3] [overflow-wrap:anywhere]">{task.title}</h1>
               <p className="m-0 flex flex-wrap gap-1.5 items-center">

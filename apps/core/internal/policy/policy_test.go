@@ -62,7 +62,7 @@ func TestClassifyCommands(t *testing.T) {
 		"cp a.txt /Users/u/Desktop/a.txt": OutsideWorktree,
 		"python3 script.py":               ExecOther,
 		"FOO=1 go build ./cmd/x":          ExecSafe,
-		"terraform apply":                 ExecOther,
+		"terraform apply":                 Service,
 		"cat /usr/include/stdio.h":        Read,
 		"mkfs.ext4 /dev/sdb1":             Floor,
 	}

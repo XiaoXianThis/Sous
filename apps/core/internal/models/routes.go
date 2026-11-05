@@ -260,11 +260,20 @@ func (r *Registry) test(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": text, "ms": ms, "usage": resp.Usage})
 }
 
+// roleInput is one role in PUT /models/roles. Without context_window the
+// role keeps its window while its model stays the same.
+type roleInput struct {
+	ProviderID    string `json:"provider_id"`
+	Model         string `json:"model"`
+	Effort        string `json:"effort"`
+	ContextWindow *int   `json:"context_window"`
+}
+
 // putRoles sets the model of the roles present: {"supervisor":
-// {provider_id, model, effort}}; an empty model clears a role's own choice
-// (it falls back on the supervisor's).
+// {provider_id, model, effort, context_window}}; an empty model clears a
+// role's own choice (it falls back on the supervisor's).
 func (r *Registry) putRoles(w http.ResponseWriter, req *http.Request) {
-	var b map[string]*store.ModelRole
+	var b map[string]*roleInput
 	if err := json.NewDecoder(io.LimitReader(req.Body, 64<<10)).Decode(&b); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
@@ -275,12 +284,12 @@ func (r *Registry) putRoles(w http.ResponseWriter, req *http.Request) {
 		internal(w, err)
 		return
 	}
-	for role, c := range b {
+	for role, in := range b {
 		if !slices.Contains(Roles, role) {
 			writeError(w, http.StatusBadRequest, "invalid", "不认识的角色："+role)
 			return
 		}
-		if c == nil || c.Model == "" {
+		if in == nil || in.Model == "" {
 			if role == "supervisor" {
 				writeError(w, http.StatusBadRequest, "invalid", "主管必须有一个模型")
 				return
@@ -288,13 +297,22 @@ func (r *Registry) putRoles(w http.ResponseWriter, req *http.Request) {
 			delete(roles, role)
 			continue
 		}
-		c.Model = strings.TrimSpace(c.Model)
+		c := &store.ModelRole{ProviderID: in.ProviderID, Model: strings.TrimSpace(in.Model), Effort: in.Effort}
+		if in.ContextWindow != nil {
+			c.ContextWindow = *in.ContextWindow
+		} else if old, ok := roles[role]; ok && old.ProviderID == c.ProviderID && old.Model == c.Model {
+			c.ContextWindow = old.ContextWindow
+		}
 		if _, err := r.store().ModelProvider(ctx, c.ProviderID); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid", "供应商不存在")
 			return
 		}
 		if c.Effort != "" && !slices.Contains(provider.Efforts, c.Effort) {
 			writeError(w, http.StatusBadRequest, "invalid", "思考强度只能是 "+strings.Join(provider.Efforts, " / "))
+			return
+		}
+		if c.ContextWindow != 0 && (c.ContextWindow < 8000 || c.ContextWindow > 10_000_000) {
+			writeError(w, http.StatusBadRequest, "invalid", "上下文窗口要在 8000 到 10000000 token 之间（不填用默认的 128000）")
 			return
 		}
 		roles[role] = *c

@@ -13,7 +13,6 @@ import { usePhone } from '../lib/phone'
 import { useStoredWidth } from '../lib/resize'
 import { ArchivedBadge, ProjectTabs, type ProjectTab } from './ProjectCard'
 import { BackButton } from './PhoneHeader'
-import ProjectTile from './ProjectTile'
 import ShellPanel from './ShellPanel'
 import TaskRow from './TaskRow'
 import TaskView from './TaskView'
@@ -141,7 +140,6 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
             <div className="flex items-center gap-2 min-w-0">
               <BackButton label={back.label} onClick={back.go} />
               <div className="flex-1 min-w-0 flex items-center justify-center gap-2">
-                <ProjectTile name={p.name} id={p.id} size={26} misc={p.id === 'misc'} />
                 <h2 className="m-0 text-[17px] font-semibold tracking-tight truncate">{p.name}</h2>
                 {card.archived && <ArchivedBadge />}
               </div>
@@ -162,7 +160,6 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
           </header>
         ) : (
           <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap max-[760px]:gap-x-2 max-[760px]:gap-y-3 max-[760px]:px-3 max-[760px]:pt-2">
-            <ProjectTile name={p.name} id={p.id} size={40} misc={p.id === 'misc'} />
             <div className="grid gap-1 min-w-0 flex-1">
               <div className="flex items-center gap-2 min-w-0">
                 <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</h2>
@@ -226,7 +223,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
           <div className="grid grid-cols-[340px_minmax(0,1fr)] min-h-0 border-t border-line max-[760px]:grid-cols-1">
             <div className={`overflow-y-auto p-2.5 border-r border-line min-h-0 max-[760px]:border-r-0 max-[760px]:px-3 max-[760px]:pb-[calc(16px+var(--safe-b))] grid gap-2 content-start ${taskId ? 'max-[760px]:hidden' : ''}`}>
               <button
-                className="flex items-center justify-center gap-1.5 h-10 rounded-[12px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-accent hover:border-accent"
+                className="flex items-center justify-center gap-1.5 h-10 rounded-[12px] border border-dashed border-line-strong bg-transparent text-muted text-[13px] hover:text-muted hover:border-accent"
                 onClick={() => { ui.state.newTask = p.id; ui.emit() }}
               >
                 <Icon name="plus" size={16} />新任务

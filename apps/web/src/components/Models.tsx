@@ -4,12 +4,13 @@ import { reauthenticate } from '../lib/passkey'
 import type { ModelProvider, ModelRole, ModelsView } from '../lib/types'
 import Icon from './Icon'
 
-export const roleText: Record<string, string> = { supervisor: '主管', reviewer: '验收', approver: '审批', inspector: '巡检' }
+export const roleText: Record<string, string> = { supervisor: '主管', reviewer: '验收', approver: '审批', inspector: '巡检', compactor: '整理' }
 const roleHelp: Record<string, string> = {
   supervisor: '和你对话、管理任务、派活',
   reviewer: '检查 agent 的改动是否完成了任务',
   approver: '自动模式下替你判断要不要放行',
   inspector: '定时巡检，发现卡住或循环的 Run',
+  compactor: '对话很长时，把较早的消息整理成摘要',
 }
 export const kindText: Record<string, string> = {
   'openai-chat': 'OpenAI 兼容（Chat Completions）',
@@ -90,6 +91,7 @@ export default function Models() {
     const cur = view.roles[role]?.inherited ? undefined : view.roles[role]
     if (next === null) return run(() => api.putRoles({ [role]: null }))
     const merged = { provider_id: cur?.provider_id ?? '', model: cur?.model ?? '', effort: cur?.effort ?? '', ...next }
+    if (next.context_window === undefined) delete merged.context_window // the Hub keeps it while the model stays
     if (!merged.model) return
     return run(() => api.putRoles({ [role]: merged }))
   }
@@ -142,6 +144,11 @@ export default function Models() {
             )
           })}
         </div>
+        <ContextWindow
+          value={view.roles.supervisor?.context_window ?? 0}
+          disabled={!view.roles.supervisor?.model}
+          onSave={(n) => setRole('supervisor', { context_window: n })}
+        />
       </section>
 
       <section className="grid gap-2">
@@ -324,5 +331,29 @@ function ProviderForm({ provider, kinds, onSave, onCancel }: {
         <button className="btn small ghost" type="button" onClick={onCancel}>取消</button>
       </div>
     </form>
+  )
+}
+
+/** The supervisor model's context window: when long conversations get folded into a summary. */
+function ContextWindow({ value, disabled, onSave }: { value: number; disabled: boolean; onSave: (n: number) => unknown }) {
+  const [draft, setDraft] = useState(value ? String(value) : '')
+  useEffect(() => setDraft(value ? String(value) : ''), [value])
+  const n = Number(draft.replace(/[,_\s]/g, '')) || 0
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-[13px]">
+      <label htmlFor="ctx-window" className="text-muted">主管模型的上下文窗口</label>
+      <input
+        id="ctx-window"
+        className={`${input} w-[150px]`}
+        inputMode="numeric"
+        placeholder="128000（默认）"
+        disabled={disabled}
+        value={draft}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        onBlur={() => { if (n !== value) void onSave(n) }}
+      />
+      <span className="text-faint text-[12px]">token。用到 60% 时把较早的对话整理成摘要。</span>
+    </div>
   )
 }

@@ -171,13 +171,18 @@ func (a *admin) prState(ctx context.Context, url string) (proto.PRState, error) 
 // answers. It reports whether the command may run.
 func (r *run) permit(ask, command, dir, detail string) (bool, error) {
 	raw, _ := json.Marshal(map[string]string{"command": command})
-	cat, why := r.d.pol().Classify(policy.Request{ToolKind: "execute", RawInput: raw, Workdir: dir})
-	switch policy.DecideFor(r.d.role(), r.spec.PermissionMode, cat) {
+	req := policy.Request{ToolKind: "execute", RawInput: raw, Workdir: dir}
+	cat, why := r.d.pol().Classify(req)
+	act, assess, reason := r.judge(req, cat)
+	if note := assess.Note(); note != "" && act != policy.Allow {
+		detail = note + "\n\n" + detail
+	}
+	switch act {
 	case policy.Deny:
 		r.recordPolicy(ask+"（"+why+"）", cat, "deny")
 		return false, errors.New("底线规则拒绝了：" + why)
 	case policy.Allow:
-		r.recordPolicy(ask, cat, "allow")
+		r.recordPolicy(ask+reasonSuffix(reason), cat, "allow")
 		return true, nil
 	case policy.AskAI:
 		r.status("等审批 agent 判断能否" + ask)

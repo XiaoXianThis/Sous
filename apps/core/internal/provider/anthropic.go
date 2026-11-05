@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 )
@@ -19,8 +20,18 @@ func (p *anthropicMessages) Name() string { return p.cfg.Name }
 const anthropicDefaultMaxTokens = 8192
 
 // anMessages converts to Anthropic content blocks. Tool results travel in user
-// messages, and consecutive messages of the same role are merged.
+// messages, and consecutive messages of the same role are merged. The last
+// block of each message in req.CacheAt gets a cache breakpoint (at most
+// three, the newest kept; the system prompt takes the fourth).
 func anMessages(req Request) []map[string]any {
+	cache := map[int]bool{}
+	at := req.CacheAt
+	if len(at) > 3 {
+		at = at[len(at)-3:]
+	}
+	for _, i := range at {
+		cache[i] = true
+	}
 	var out []map[string]any
 	add := func(role string, blocks []map[string]any) {
 		if len(blocks) == 0 {
@@ -32,7 +43,7 @@ func anMessages(req Request) []map[string]any {
 		}
 		out = append(out, map[string]any{"role": role, "content": blocks})
 	}
-	for _, m := range req.Messages {
+	for mi, m := range req.Messages {
 		var blocks []map[string]any
 		role := "user"
 		if m.Role == RoleAssistant {
@@ -46,9 +57,15 @@ func anMessages(req Request) []map[string]any {
 			case part.ToolResult != nil:
 				blocks = append(blocks, map[string]any{"type": "tool_result", "tool_use_id": part.ToolResult.CallID,
 					"content": part.ToolResult.Content, "is_error": part.ToolResult.IsError})
+			case part.Image != nil:
+				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{
+					"type": "base64", "media_type": part.Image.Mime, "data": base64.StdEncoding.EncodeToString(part.Image.Data)}})
 			case part.Text != "":
 				blocks = append(blocks, map[string]any{"type": "text", "text": part.Text})
 			}
+		}
+		if cache[mi] && len(blocks) > 0 {
+			blocks[len(blocks)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
 		}
 		add(role, blocks)
 	}
@@ -67,7 +84,12 @@ func (p *anthropicMessages) Stream(ctx context.Context, req Request, onDelta fun
 		"stream":     true,
 	}
 	if req.System != "" {
-		body["system"] = req.System
+		if req.CacheAt != nil {
+			// Caching the system prompt caches the tools before it too.
+			body["system"] = []map[string]any{{"type": "text", "text": req.System, "cache_control": map[string]any{"type": "ephemeral"}}}
+		} else {
+			body["system"] = req.System
+		}
 	}
 	if req.Effort != "" {
 		// Thinking stays at the model's default (adaptive on current
@@ -113,8 +135,9 @@ func (p *anthropicMessages) Stream(ctx context.Context, req Request, onDelta fun
 			} `json:"delta"`
 			Message struct {
 				Usage struct {
-					InputTokens          int `json:"input_tokens"`
-					CacheReadInputTokens int `json:"cache_read_input_tokens"`
+					InputTokens              int `json:"input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 			Usage struct {
@@ -129,7 +152,8 @@ func (p *anthropicMessages) Stream(ctx context.Context, req Request, onDelta fun
 		}
 		switch e.Type {
 		case "message_start":
-			out.Usage.InputTokens = e.Message.Usage.InputTokens + e.Message.Usage.CacheReadInputTokens
+			u := e.Message.Usage
+			out.Usage.InputTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 			out.Usage.CachedTokens = e.Message.Usage.CacheReadInputTokens
 		case "content_block_start":
 			b := &block{kind: e.ContentBlock.Type}

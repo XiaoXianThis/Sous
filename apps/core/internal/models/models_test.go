@@ -189,6 +189,19 @@ func TestRoutes(t *testing.T) {
 	if code := call("PUT", "/api/v1/models/roles", `{"supervisor":{"provider_id":"`+id+`","model":"m1","effort":"high"}}`, &v); code != 200 || v.Roles["supervisor"].Model != "m1" || !v.Roles["reviewer"].Inherited {
 		t.Fatalf("roles %d %+v", code, v.Roles)
 	}
+	// The context window stays while the model does, unless it is set.
+	if code := call("PUT", "/api/v1/models/roles", `{"supervisor":{"provider_id":"`+id+`","model":"m1","context_window":64000}}`, &v); code != 200 || v.Roles["supervisor"].ContextWindow != 64000 {
+		t.Fatalf("window %d %+v", code, v.Roles)
+	}
+	if code := call("PUT", "/api/v1/models/roles", `{"supervisor":{"provider_id":"`+id+`","model":"m1","effort":"low"}}`, &v); code != 200 || v.Roles["supervisor"].ContextWindow != 64000 {
+		t.Fatalf("window kept %d %+v", code, v.Roles)
+	}
+	if r.ContextWindow(ctx, "compactor") != 64000 {
+		t.Fatal("the compactor should fall back on the supervisor's window")
+	}
+	if code := call("PUT", "/api/v1/models/roles", `{"supervisor":{"provider_id":"`+id+`","model":"m1","context_window":100}}`, nil); code != 400 {
+		t.Fatalf("tiny window: %d", code)
+	}
 	if code := call("DELETE", "/api/v1/models/providers/"+id, "", nil); code != 409 {
 		t.Fatalf("delete in use: %d", code)
 	}

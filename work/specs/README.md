@@ -20,3 +20,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [m5-workbench](m5-workbench/) | core, web | 已实现并验收（含真实模型），Linux 真机待验收 |
 | [workbench-single-page](workbench-single-page/) | web | 已实现并验收（浏览器） |
 | [multi-machine-sync](multi-machine-sync/) | core, web | 已实现并验收（浏览器） |
+| [long-main-thread](long-main-thread/) | core, web | 已实现并验收（含真实模型） |

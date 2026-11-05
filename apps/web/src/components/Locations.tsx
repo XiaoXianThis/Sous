@@ -86,6 +86,36 @@ function describe(g: GitState): string {
   return parts.length ? parts.join('，') : '和远端一致'
 }
 
+/** Where a project lives, folded into one chip (laptop icon + count) that opens the full list. */
+export function LocationsChip({ locations }: { locations: Location[] }) {
+  const [open, setOpen] = useState(false)
+  const n = locations.filter((l) => l.kind === 'node').length || locations.length
+  if (locations.length === 0) return <Locations locations={locations} compact />
+  const offline = locations.some((l) => l.kind === 'node' && l.online === false)
+  return (
+    <span className="relative inline-flex min-w-0">
+      <button
+        className={`${chip} border-0 bg-sunken text-muted hover:text-ink`}
+        aria-label={`项目位置：${locations.map((l) => l.name).join('、')}`}
+        aria-expanded={open}
+        title={locations.map((l) => l.name).join('、')}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open) }}
+      >
+        <Icon name="laptop" size={13} /><span className="tabular-nums">{n}</span>
+        {offline && <span className="w-1.5 h-1.5 rounded-full flex-none bg-faint"></span>}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[40]" onClick={(e) => { e.stopPropagation(); setOpen(false) }}></div>
+          <div className="absolute left-0 bottom-7 z-[41] w-max max-w-[300px] bg-raised rounded-[12px] p-2 shadow-pop rise" onClick={(e) => e.stopPropagation()}>
+            <Locations locations={locations} />
+          </div>
+        </>
+      )}
+    </span>
+  )
+}
+
 /** One machine's checkout: where it stands, and bringing it in step. */
 function Place({ l, onClose, onMachines }: { l: Location; onClose: () => void; onMachines: () => void }) {
   const [busy, setBusy] = useState('')

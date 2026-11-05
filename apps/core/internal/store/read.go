@@ -118,6 +118,8 @@ type Message struct {
 	CreatedAt int64  `json:"created_at"`
 	// Context is what the user was looking at on the workbench (M5).
 	Context *event.MessageContext `json:"context,omitempty"`
+	// Attachments are the files sent with a user message.
+	Attachments []event.Attachment `json:"attachments,omitempty"`
 }
 
 // Messages returns up to limit messages of a thread with seq < before (0 means
@@ -127,19 +129,26 @@ func (s *Store) Messages(ctx context.Context, threadID string, before int64, lim
 		before = 1 << 62
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context FROM (
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments FROM (
 		   SELECT * FROM messages WHERE thread_id = ? AND event_seq < ? ORDER BY event_seq DESC LIMIT ?
 		 ) ORDER BY event_seq`, threadID, before, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanMessageRows(rows)
+}
+
+func scanMessageRows(rows *sql.Rows) ([]Message, error) {
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var mctx string
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Kind, &m.Seq, &m.CreatedAt, &mctx); err != nil {
+		var mctx, atts string
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Kind, &m.Seq, &m.CreatedAt, &mctx, &atts); err != nil {
 			return nil, err
+		}
+		if atts != "" {
+			_ = json.Unmarshal([]byte(atts), &m.Attachments)
 		}
 		if mctx != "" {
 			var c event.MessageContext

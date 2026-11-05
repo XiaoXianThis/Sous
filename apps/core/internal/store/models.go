@@ -29,6 +29,9 @@ type ModelRole struct {
 	ProviderID string `json:"provider_id"`
 	Model      string `json:"model"`
 	Effort     string `json:"effort,omitempty"`
+	// ContextWindow is the model's context window in tokens; 0 means the
+	// default (supervisor.DefaultContextWindow).
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 const modelRolesKey = "models.roles"

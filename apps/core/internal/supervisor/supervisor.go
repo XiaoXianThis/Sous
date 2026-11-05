@@ -6,23 +6,22 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/attach"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 )
 
 const (
-	// HistoryMessages is how many recent messages a turn sees.
-	HistoryMessages = 40
 	// MaxSteps bounds the model calls of one turn, so a tool loop cannot run away.
 	MaxSteps = 12
 )
@@ -39,6 +38,17 @@ type Options struct {
 	// DescribeContext names what the user was looking at on the workbench
 	// when they wrote a message (M5), such as "项目 sous" or "任务「…」".
 	DescribeContext func(ctx context.Context, c event.MessageContext) string
+	// Compactor folds old messages into a thread's summary
+	// (long-main-thread); CompactorModel names it for usage. Without one,
+	// threads are only trimmed to fit.
+	Compactor      provider.Provider
+	CompactorModel string
+	// ContextWindow is the supervisor model's context window in tokens;
+	// nil or 0 means DefaultContextWindow.
+	ContextWindow func(ctx context.Context) int
+	// Attachments holds the files users send; without it the model only
+	// hears that a file was attached.
+	Attachments *attach.Store
 }
 
 type Supervisor struct {
@@ -46,8 +56,10 @@ type Supervisor struct {
 	ctx context.Context
 	wg  sync.WaitGroup
 
-	mu     sync.Mutex
-	queues map[string]chan struct{}
+	mu       sync.Mutex
+	queues   map[string]chan struct{}
+	ops      map[string][]func() // run by a thread's worker after its turn
+	failures map[string]int      // failed compactions in a row, by thread
 }
 
 func New(opt Options) *Supervisor {
@@ -57,7 +69,7 @@ func New(opt Options) *Supervisor {
 	if opt.Tools == nil {
 		opt.Tools = tool.NewRegistry()
 	}
-	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}}
+	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}}
 }
 
 // Start subscribes to stored events. Turns run until ctx is cancelled; Wait
@@ -99,6 +111,10 @@ func (s *Supervisor) worker(threadID string, ch chan struct{}) {
 		select {
 		case <-ch:
 			s.turn(threadID)
+			s.runOps(threadID)
+			if s.ctx.Err() == nil {
+				s.maybeCompact(threadID)
+			}
 		case <-s.ctx.Done():
 			return
 		default:
@@ -114,6 +130,34 @@ func (s *Supervisor) worker(threadID string, ch chan struct{}) {
 	}
 }
 
+// enqueue runs op in the thread's worker, after any turn in progress.
+func (s *Supervisor) enqueue(threadID string, op func()) {
+	s.mu.Lock()
+	s.ops[threadID] = append(s.ops[threadID], op)
+	s.mu.Unlock()
+	s.signal(threadID)
+}
+
+func (s *Supervisor) runOps(threadID string) {
+	for {
+		s.mu.Lock()
+		ops := s.ops[threadID]
+		delete(s.ops, threadID)
+		s.mu.Unlock()
+		if len(ops) == 0 {
+			return
+		}
+		for _, op := range ops {
+			if s.ctx.Err() != nil {
+				return
+			}
+			op()
+		}
+	}
+}
+
+func newID() string { return ids.New() }
+
 func (s *Supervisor) turn(threadID string) {
 	ctx := s.ctx
 	st := s.opt.Log.Store
@@ -122,7 +166,12 @@ func (s *Supervisor) turn(threadID string) {
 		slog.Error("supervisor: load thread", "thread", threadID, "err", err)
 		return
 	}
-	history, err := st.Messages(ctx, threadID, 0, HistoryMessages)
+	seg, err := s.segment(ctx, threadID)
+	if err != nil {
+		slog.Error("supervisor: load segment", "thread", threadID, "err", err)
+		return
+	}
+	history, err := st.MessagesAfter(ctx, threadID, seg.CoversUpTo)
 	if err != nil {
 		slog.Error("supervisor: load messages", "thread", threadID, "err", err)
 		return
@@ -134,30 +183,29 @@ func (s *Supervisor) turn(threadID string) {
 
 	mainID, _ := st.MainThreadID(ctx)
 	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID})
-	project := ""
-	if thread.ProjectID != "" {
-		project = thread.ProjectID
-		if s.opt.DescribeContext != nil {
-			if d := s.opt.DescribeContext(ctx, event.MessageContext{ProjectID: thread.ProjectID}); d != "" {
-				project = d
+	// load rebuilds the request from the current segment, compacting
+	// first (reason) when it would not fit, and leaving out the oldest
+	// messages when it still does not.
+	hard := int(HardRatio * float64(s.window(ctx)))
+	load := func(reason string) provider.Request {
+		if reason != "" && s.opt.Compactor != nil {
+			if err := s.compact(s.ctx, threadID, reason); err != nil {
+				slog.Warn("supervisor: compaction", "thread", threadID, "reason", reason, "err", err)
+			}
+			if g, err := s.segment(ctx, threadID); err == nil {
+				if h, err := st.MessagesAfter(ctx, threadID, g.CoversUpTo); err == nil {
+					seg, history = g, h
+				}
 			}
 		}
+		_, b := s.trim(ctx, thread, seg, history, hard)
+		return b.req
 	}
-	req := provider.Request{
-		Model: s.opt.Model, SessionID: threadID,
-		System: prompts.Supervisor(prompts.Env{
-			Now: s.opt.Now(), ThreadTitle: thread.Title, ThreadKind: thread.Kind, Project: project,
-			Memories: s.recall(ctx, history),
-			Machines: s.environment(ctx, threadID),
-		}),
-		Messages: toProvider(history, func(c event.MessageContext) string {
-			if s.opt.DescribeContext == nil {
-				return ""
-			}
-			return s.opt.DescribeContext(ctx, c)
-		}),
-		Tools: append(s.opt.Tools.Specs(), silentSpec),
+	req := s.build(ctx, thread, seg, history).req
+	if estimateRequest(req) > hard {
+		req = load(event.CompactHard)
 	}
+	retried := false
 	messageID := ids.New()
 	reply := func(text string, err error) { s.reply(threadID, messageID, upTo, "", text, err) }
 	var texts []string // said since the last stored step
@@ -175,6 +223,13 @@ func (s *Supervisor) turn(threadID string) {
 			emit(provider.Delta{Text: "\n\n"})
 		}
 		resp, err := s.opt.Provider.Stream(ctx, req, emit)
+		if err != nil && step == 0 && !retried && isOverflow(err) {
+			retried = true
+			slog.Warn("supervisor: context overflow, compacting", "thread", threadID, "err", err)
+			req = load(event.CompactOverflow)
+			step--
+			continue
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -183,7 +238,7 @@ func (s *Supervisor) turn(threadID string) {
 			reply(strings.Join(texts, "\n\n"), err)
 			return
 		}
-		s.recordUsage(threadID, resp)
+		s.record(threadID, "supervisor", provider.ModelOf(resp, s.opt.Model), s.opt.Provider, resp)
 		if t := resp.Message.PlainText(); t != "" {
 			texts = append(texts, t)
 			spoke = true
@@ -216,6 +271,10 @@ func (s *Supervisor) turn(threadID string) {
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
 		}
 		req.Messages = append(req.Messages, results)
+		req.CacheAt = append(req.CacheAt[:0:0], req.CacheAt...)
+		if n := len(req.CacheAt); n > 0 {
+			req.CacheAt[n-1] = len(req.Messages) - 1 // the end moves with the steps
+		}
 	}
 	reply(strings.Join(texts, "\n\n")+"\n\n（这一轮调用工具的次数达到上限，已停止。）", nil)
 }
@@ -243,23 +302,9 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text
 	}
 }
 
-func (s *Supervisor) recordUsage(threadID string, resp provider.Response) {
-	u, model := resp.Usage, resp.Model
-	if model == "" {
-		model = s.opt.Model
-	}
-	ev := event.New(event.UsageRecorded, event.ActorSupervisor, threadID, event.UsagePayload{
-		Provider: s.opt.Provider.Name(), Model: model, Role: "supervisor",
-		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens,
-	})
-	if _, err := s.opt.Log.Append(s.ctx, ev); err != nil {
-		slog.Error("supervisor: store usage", "err", err)
-	}
-}
-
 // hasStep reports whether the turn answering replyTo stored a step.
 func (s *Supervisor) hasStep(threadID string, replyTo int64) bool {
-	msgs, err := s.opt.Log.Store.Messages(s.ctx, threadID, 0, HistoryMessages)
+	msgs, err := s.opt.Log.Store.MessagesAfter(s.ctx, threadID, replyTo-1)
 	if err != nil {
 		return false
 	}
@@ -296,6 +341,12 @@ func unanswered(msgs []store.Message) int64 {
 // joined into one assistant message. Failed replies are left out so the model
 // does not imitate error text.
 func toProvider(msgs []store.Message, label ...func(event.MessageContext) string) []provider.Message {
+	return toProviderWith(nil, msgs, label...)
+}
+
+// toProviderWith is toProvider that also shows the files of user messages:
+// pictures as image parts, text files inline, anything else by name.
+func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(event.MessageContext) string) []provider.Message {
 	replies := map[int64][]store.Message{}
 	for _, m := range msgs {
 		if m.Role == "assistant" && m.ReplyTo > 0 {
@@ -317,7 +368,11 @@ func toProvider(msgs []store.Message, label ...func(event.MessageContext) string
 				content = "【用户写这条消息时，正在工作台上看：" + l + "。消息里的“这个”“它”多半指它】\n" + content
 			}
 		}
-		out = append(out, provider.Text(role, content))
+		msg := provider.Text(role, content)
+		if m.Role == "user" {
+			msg.Parts = append(msg.Parts, attachmentParts(files, m.Attachments)...)
+		}
+		out = append(out, msg)
 	}
 	for _, m := range msgs {
 		if m.Role == "assistant" && m.ReplyTo > 0 {
@@ -358,30 +413,30 @@ func silentOnly(calls []provider.ToolCall) (string, bool) {
 }
 
 // RecallLimit is how many memories related to the conversation a turn sees,
-// besides the user's profile memories.
+// besides the profile memories the segment already shows.
 const RecallLimit = 6
 
-// recall picks the memories a turn should see: the user's profile, plus the
-// ones related to the latest user messages.
-func (s *Supervisor) recall(ctx context.Context, history []store.Message) []string {
-	st := s.opt.Log.Store
-	profile, err := st.Memories(ctx, "profile", 10)
-	if err != nil {
-		slog.Warn("supervisor: load profile memories", "err", err)
-	}
+// recall picks the memories related to the latest user messages, leaving
+// out the ones the segment head or the tail already show.
+func (s *Supervisor) recall(ctx context.Context, history []store.Message, shown ...[]string) []string {
 	var query []string
 	for i := len(history) - 1; i >= 0 && len(query) < 3; i-- {
 		if history[i].Role == "user" {
 			query = append(query, history[i].Content)
 		}
 	}
-	related, err := st.SearchMemories(ctx, strings.Join(query, " "), RecallLimit)
+	related, err := s.opt.Log.Store.SearchMemories(ctx, strings.Join(query, " "), RecallLimit)
 	if err != nil {
 		slog.Warn("supervisor: search memories", "err", err)
 	}
 	seen := map[string]bool{}
+	for _, list := range shown {
+		for _, m := range list {
+			seen[memoryID(m)] = true
+		}
+	}
 	var out []string
-	for _, m := range append(profile, related...) {
+	for _, m := range related {
 		if !seen[m.ID] {
 			seen[m.ID] = true
 			out = append(out, tool.FormatMemory(m))
@@ -395,4 +450,35 @@ func (s *Supervisor) environment(ctx context.Context, threadID string) []string 
 		return nil
 	}
 	return s.opt.Environment(ctx, threadID)
+}
+
+// attachmentParts shows a message's files to the model.
+func attachmentParts(files *attach.Store, atts []event.Attachment) []provider.Part {
+	var parts []provider.Part
+	for _, a := range atts {
+		var data []byte
+		if files != nil {
+			var err error
+			if data, err = files.Read(a); err != nil {
+				parts = append(parts, provider.Part{Text: fmt.Sprintf("\n【附件 %s 已经找不到了】", a.Name)})
+				continue
+			}
+		}
+		switch {
+		case data == nil:
+			parts = append(parts, provider.Part{Text: fmt.Sprintf("\n【用户附了文件 %s】", a.Name)})
+		case attach.IsImage(a.Mime):
+			parts = append(parts, provider.Part{Text: fmt.Sprintf("\n【图片 %s】", a.Name)}, provider.Part{Image: &provider.Image{Mime: a.Mime, Data: data}})
+		case attach.IsText(a.Mime):
+			note := ""
+			if len(data) > attach.MaxTextBytes {
+				data = data[:attach.MaxTextBytes]
+				note = fmt.Sprintf("\n【文件太长，只给出前 %d KB】", attach.MaxTextBytes>>10)
+			}
+			parts = append(parts, provider.Part{Text: fmt.Sprintf("\n【文件 %s】\n%s%s\n【文件结束】", a.Name, strings.ToValidUTF8(string(data), "�"), note)})
+		default:
+			parts = append(parts, provider.Part{Text: fmt.Sprintf("\n【附件 %s（%s，%d KB）：这种文件读不了，只能告诉用户你看不到它的内容】", a.Name, a.Mime, a.Size>>10)})
+		}
+	}
+	return parts
 }

@@ -62,6 +62,14 @@ func setup(t *testing.T, p provider.Provider, tools *tool.Registry) (*eventlog.L
 	return log, main, sup
 }
 
+// said is the text of a message without the turn's environment tail.
+func said(m provider.Message) string {
+	if len(m.Parts) == 0 {
+		return ""
+	}
+	return m.Parts[0].Text
+}
+
 func say(t *testing.T, log *eventlog.Log, thread, text string) {
 	t.Helper()
 	if _, err := log.Append(context.Background(), event.New(event.MessageUser, event.ActorUser, thread,
@@ -107,7 +115,7 @@ func TestReplyStreamsAndStores(t *testing.T) {
 	if !gotDelta {
 		t.Fatal("no delta with the reply's message id was published")
 	}
-	if !strings.Contains(p.requests[0].System, "sous") || p.requests[0].Messages[0].PlainText() != "在吗" {
+	if !strings.Contains(p.requests[0].System, "sous") || said(p.requests[0].Messages[0]) != "在吗" {
 		t.Fatalf("request: %+v", p.requests[0])
 	}
 	usage, _ := log.Store.UsageSince(context.Background(), time.Now().Add(-time.Minute))
@@ -177,7 +185,7 @@ func TestMessagesDuringTurnAreBatched(t *testing.T) {
 		t.Fatalf("expected b and c in one turn, got %d model calls", len(p.requests))
 	}
 	got := p.requests[1].Messages
-	if got[len(got)-1].PlainText() != "c" || got[len(got)-2].PlainText() != "b" {
+	if said(got[len(got)-1]) != "c" || said(got[len(got)-2]) != "b" {
 		t.Fatalf("second turn input: %+v", got)
 	}
 }
@@ -247,12 +255,13 @@ func TestRelevantMemoriesReachThePrompt(t *testing.T) {
 	)
 	say(t, log, main, "Hub 部署在哪里？")
 	waitMessages(t, log, main, 2)
-	sys := p.requests[0].System
-	if !strings.Contains(sys, "[p1] (profile) 用户叫小贤") || !strings.Contains(sys, "[j1] (project)") {
-		t.Fatalf("missing memories:\n%s", sys)
+	msgs := p.requests[0].Messages
+	head, tail := msgs[0].PlainText(), msgs[len(msgs)-1].PlainText()
+	if !strings.Contains(head, "[p1] (profile) 用户叫小贤") || !strings.Contains(tail, "[j1] (project)") {
+		t.Fatalf("missing memories:\nhead: %s\ntail: %s", head, tail)
 	}
-	if strings.Contains(sys, "爬山") {
-		t.Fatalf("unrelated memory included:\n%s", sys)
+	if strings.Contains(head+tail, "爬山") || strings.Contains(tail, "[p1]") {
+		t.Fatalf("unrelated or repeated memory included:\nhead: %s\ntail: %s", head, tail)
 	}
 }
 

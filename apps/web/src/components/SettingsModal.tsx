@@ -5,6 +5,7 @@ import { setTheme, useTheme, type ThemePref } from '../lib/theme'
 import Icon from './Icon'
 import Machines from './Machines'
 import Memories from './Memories'
+import Mcp from './Mcp'
 import Models from './Models'
 import Personas from './Personas'
 import PhoneHeader, { BackButton } from './PhoneHeader'
@@ -12,17 +13,18 @@ import Schedules from './Schedules'
 import Settings from './Settings'
 import Usage from './Usage'
 
-// color and group are for the phone's grouped list, after iOS Settings.
+// group is for the phone's grouped list, after iOS Settings.
 const tabs = [
-  { key: 'machines', text: '机器', icon: 'laptop', color: '#0a84ff', group: 0 },
-  { key: 'models', text: '模型', icon: 'cpu', color: '#5e5ce6', group: 0 },
-  { key: 'personas', text: '岗位', icon: 'users', color: '#ff9f0a', group: 0 },
-  { key: 'schedules', text: '定时任务', icon: 'calendar', color: '#ff453a', group: 1 },
-  { key: 'memories', text: '记忆', icon: 'brain', color: '#ff375f', group: 1 },
-  { key: 'usage', text: '用量', icon: 'chart', color: '#30b158', group: 1 },
-  { key: 'settings', text: '通知与默认', icon: 'bell', color: '#ff3b30', group: 2 },
-  { key: 'appearance', text: '外观', icon: 'moon', color: '#3a3a3c', group: 2 },
-  { key: 'account', text: '账号', icon: 'key', color: '#8e8e93', group: 3 },
+  { key: 'machines', text: '机器', icon: 'laptop', group: 0 },
+  { key: 'models', text: '模型', icon: 'cpu', group: 0 },
+  { key: 'personas', text: '岗位', icon: 'users', group: 0 },
+  { key: 'mcp', text: 'MCP', icon: 'bolt', group: 0 },
+  { key: 'schedules', text: '定时任务', icon: 'calendar', group: 1 },
+  { key: 'memories', text: '记忆', icon: 'brain', group: 1 },
+  { key: 'usage', text: '用量', icon: 'chart', group: 1 },
+  { key: 'settings', text: '通知与默认', icon: 'bell', group: 2 },
+  { key: 'appearance', text: '外观', icon: 'moon', group: 2 },
+  { key: 'account', text: '账号', icon: 'key', group: 3 },
 ]
 const statusText = { connecting: '连接中', online: '已连接', offline: '离线，正在重连' }
 
@@ -100,6 +102,8 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
       <Machines onClose={close} />
     ) : key === 'models' ? (
       <Models />
+    ) : key === 'mcp' ? (
+      <Mcp />
     ) : key === 'personas' ? (
       <Personas onClose={close} />
     ) : key === 'schedules' ? (
@@ -156,7 +160,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
               <div key={g} className="ios-group">
                 {tabs.filter((t) => t.group === g).map((t) => (
                   <button key={t.key} className="ios-row" onClick={() => { ui.state.settings = t.key; ui.emit() }}>
-                    <span className="ios-icon" style={{ background: t.color }}><Icon name={t.icon} size={18} stroke={2} /></span>
+                    <span className="ios-icon" style={{ background: 'var(--tile)' }}><Icon name={t.icon} size={18} stroke={2} /></span>
                     <span className="flex-1 min-w-0 truncate">{t.text}</span>
                     <Icon name="chevron" size={16} className="-rotate-90 text-faint" stroke={2.4} />
                   </button>

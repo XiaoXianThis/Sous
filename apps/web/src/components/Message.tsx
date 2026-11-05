@@ -1,5 +1,7 @@
-import { useState } from 'react'
-import type { Message } from '../lib/types'
+import { useEffect, useRef, useState } from 'react'
+import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
+import { triggerView } from '../lib/trigger'
+import type { Attachment, Message } from '../lib/types'
 import Icon from './Icon'
 import Markdown, { CopyButton } from './Markdown'
 
@@ -22,13 +24,87 @@ const noticeLook: Record<string, { icon: string; text: string; color: string }> 
   inspector: { icon: 'shield', text: '巡检', color: 'var(--info)' },
 }
 
-export default function MessageView({ message }: { message: Message }) {
-  const [showThinking, setShowThinking] = useState(false)
-  const [showTrigger, setShowTrigger] = useState(false)
+/** The files of a user message: pictures as thumbnails, the rest as download chips. */
+function Attachments({ list }: { list: Attachment[] }) {
+  const images = list.filter((a) => isImage(a.mime))
+  const files = list.filter((a) => !isImage(a.mime))
+  return (
+    <div className="grid gap-1.5 justify-items-end max-w-[min(85%,620px)]">
+      {images.length > 0 && (
+        <div className="flex gap-1.5 flex-wrap justify-end">
+          {images.map((a) => (
+            <a key={a.id} href={attachmentUrl(a.id)} target="_blank" rel="noreferrer" title={a.name} className="block rounded-[12px] overflow-hidden bg-sunken">
+              <img src={attachmentUrl(a.id)} alt={a.name} loading="lazy" className="block max-w-[260px] max-h-[220px] min-w-12 min-h-12 object-cover max-[760px]:max-w-[200px]" />
+            </a>
+          ))}
+        </div>
+      )}
+      {files.map((a) => (
+        <a key={a.id} href={attachmentUrl(a.id)} download={a.name} className="flex items-center gap-2 h-11 px-3 rounded-[12px] bg-sunken text-ink no-underline max-w-full" title={a.name}>
+          <Icon name="file" size={16} className="text-muted flex-none" />
+          <span className="grid min-w-0 text-[12.5px] leading-tight">
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{a.name}</span>
+            <span className="text-faint">{formatSize(a.size)}</span>
+          </span>
+        </a>
+      ))}
+    </div>
+  )
+}
 
-  // A trigger's first line says what fired: 【定时任务「…」】 or 【跟进】…
-  const triggerHead = message.kind === 'trigger' ? message.content.split('\n')[0].replace(/^【(定时任务|跟进)?|】$/g, '') : ''
-  const scheduled = message.content.startsWith('【定时任务')
+/**
+ * The model's reasoning. Open while it is being written (a short box that
+ * follows the newest line), folded once the answer starts; a click overrides.
+ */
+function Thinking({ text, live }: { text: string; live: boolean }) {
+  const [choice, setChoice] = useState<boolean | null>(null)
+  const open = choice ?? live
+  const box = useRef<HTMLDivElement>(null)
+  const follow = useRef(true)
+
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    if (live && follow.current) el.scrollTop = el.scrollHeight
+    el.dataset.scrolled = String(el.scrollTop > 2)
+  }, [text, live, open])
+
+  function onScroll() {
+    const el = box.current
+    if (!el) return
+    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+    el.dataset.scrolled = String(el.scrollTop > 2)
+  }
+
+  return (
+    <div className="grid gap-2 min-w-0">
+      <button
+        type="button"
+        className="justify-self-start inline-flex items-center gap-1.5 h-7 -ml-1 px-1.5 rounded-[8px] border-0 bg-transparent text-muted text-[13px] hover:bg-hover hover:text-ink transition-colors"
+        onClick={() => setChoice(!open)}
+        aria-expanded={open}
+        aria-label={open ? '收起思考过程' : '查看思考过程'}
+      >
+        <Icon name="brain" size={14} className={live ? 'text-accent' : ''} />
+        <span className={live ? 'think-shimmer' : ''}>{live ? '正在思考' : '思考过程'}</span>
+        <Icon name="chevron" size={12} className={`text-faint transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && (
+        <div
+          ref={box}
+          onScroll={onScroll}
+          className={`think-box selectable overflow-y-auto overscroll-contain border-l-2 pl-3.5 pr-1 ${live ? 'border-[color-mix(in_srgb,var(--accent)_45%,transparent)] max-h-[min(200px,32dvh)]' : 'border-line-strong max-h-[min(420px,55dvh)]'}`}
+          data-testid="thinking"
+        >
+          <Markdown text={text} streaming={live} className="text-[13px] leading-[1.7] text-muted [&_p]:my-2 [&_strong]:text-muted" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function MessageView({ message }: { message: Message }) {
+  const [showTrigger, setShowTrigger] = useState(false)
   const time = new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
   if (message.kind === 'silent') {
@@ -41,21 +117,30 @@ export default function MessageView({ message }: { message: Message }) {
   }
 
   if (message.kind === 'trigger') {
+    const t = triggerView(message.content)
+    const scheduled = t.kind === 'schedule'
     return (
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-1 justify-items-center" data-testid="message-trigger">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2" data-testid="message-trigger">
         <button
-          className="flex items-center gap-1.5 max-w-full border-0 bg-sunken rounded-full px-2.5 py-1 text-muted text-[12px] hover:text-ink"
+          type="button"
+          className="group/trig flex items-center gap-2.5 w-full min-w-0 border-0 bg-transparent p-0 text-[12px] text-muted"
           onClick={() => setShowTrigger(!showTrigger)}
           aria-expanded={showTrigger}
-          title={scheduled ? '定时任务' : '自动跟进'}
+          title={t.title}
         >
-          <Icon name={scheduled ? 'calendar' : 'refresh'} size={12} className="text-warm" />
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap">{triggerHead}</span>
-          <time className="text-faint tabular-nums">{time}</time>
+          <span className="h-px bg-line flex-1 min-w-4"></span>
+          <span className="flex items-center gap-1.5 min-w-0 max-w-[calc(100%-48px)] h-7 pl-2 pr-2.5 rounded-full bg-sunken group-hover/trig:text-ink transition-colors">
+            <Icon name={scheduled ? 'calendar' : 'refresh'} size={13} className="text-warm flex-none" />
+            <span className="font-medium text-warm flex-none">{scheduled ? '定时任务' : t.kind === 'followup' ? '跟进' : '系统'}</span>
+            {t.title && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>}
+            <time className="text-faint tabular-nums flex-none">{time}</time>
+            <Icon name="chevron" size={11} className={`text-faint flex-none transition-transform duration-200 ${showTrigger ? '' : '-rotate-90'}`} />
+          </span>
+          <span className="h-px bg-line flex-1 min-w-4"></span>
         </button>
         {showTrigger && (
-          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px] text-muted bg-sunken rounded-[14px] px-3 py-2 justify-self-stretch">
-            {message.content}
+          <div className="selectable justify-self-center w-full max-w-[640px] whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.7] text-muted bg-sunken rounded-[14px] px-4 py-3 rise">
+            {t.body || message.content}
           </div>
         )}
       </div>
@@ -68,7 +153,8 @@ export default function MessageView({ message }: { message: Message }) {
   if (user) {
     return (
       <article className="grid gap-1 justify-items-end group" data-testid={`message-${message.kind ?? message.role}`}>
-        <div className="selectable whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
+        {message.attachments && message.attachments.length > 0 && <Attachments list={message.attachments} />}
+        {message.content.trim() !== '' && <div className="selectable whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
           {linkify(message.content).map((part, i) =>
             part.url ? (
               <a key={i} href={part.url} target="_blank" rel="noreferrer" className="md-link">{part.text}</a>
@@ -76,44 +162,41 @@ export default function MessageView({ message }: { message: Message }) {
               <span key={i}>{part.text}</span>
             ),
           )}
-        </div>
+        </div>}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
           <time className="text-[11px] text-faint px-1 tabular-nums">{time}</time>
-          <CopyButton text={message.content} />
+          {message.content.trim() !== '' && <CopyButton text={message.content} />}
         </div>
       </article>
     )
   }
 
-  return (
-    <article
-      className={`grid gap-1.5 min-w-0 group ${notice ? 'rounded-[12px] border border-line bg-panel px-3.5 py-3' : ''}`}
-      data-testid={`message-${message.kind ?? message.role}`}
-    >
-      {notice && (
-        <span className="flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: notice.color }}>
-          <Icon name={notice.icon} size={14} stroke={2} />{notice.text}
-        </span>
-      )}
-      {message.thinking && (
-        <div className="grid gap-1.5">
-          <button
-            className="toggle justify-self-start inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-muted text-[13px] hover:text-ink"
-            onClick={() => setShowThinking(!showThinking)}
-            aria-expanded={showThinking}
-            aria-label={showThinking ? '收起思考过程' : '查看思考过程'}
+  if (notice) {
+    return (
+      <article className="grid gap-2 min-w-0 group bg-panel shadow-card rounded-[16px] px-4 pt-3 pb-3.5" data-testid={`message-${message.kind}`}>
+        <header className="flex items-center gap-2 min-w-0 h-6">
+          <span
+            className="grid place-items-center w-6 h-6 rounded-[8px] flex-none"
+            style={{ color: notice.color, background: `color-mix(in srgb, ${notice.color} 14%, transparent)` }}
           >
-            <Icon name="brain" size={14} />
-            <span>{message.streaming && !message.content ? '正在思考' : '思考过程'}</span>
-            <Icon name="chevron" size={12} className={`transition-transform ${showThinking ? 'rotate-180' : ''}`} />
-          </button>
-          {showThinking && (
-            <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.65] text-muted border-l-2 border-line py-0.5 pl-3">
-              {message.thinking}
-            </div>
+            <Icon name={notice.icon} size={14} stroke={2} />
+          </span>
+          <span className="text-[13px] font-semibold" style={{ color: notice.color }}>{notice.text}</span>
+          <time className="text-[11.5px] text-faint tabular-nums">{time}</time>
+          <span className="flex-1"></span>
+          {!message.streaming && message.content && (
+            <CopyButton text={message.content} className="-my-1 -mr-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
           )}
-        </div>
-      )}
+        </header>
+        {message.thinking && <Thinking text={message.thinking} live={!!message.streaming && !message.content} />}
+        {(message.content || message.streaming) && <Markdown text={message.content} streaming={message.streaming} />}
+      </article>
+    )
+  }
+
+  return (
+    <article className="grid gap-2 min-w-0 group" data-testid={`message-${message.kind ?? message.role}`}>
+      {message.thinking && <Thinking text={message.thinking} live={!!message.streaming && !message.content} />}
       {message.error ? (
         <div className="flex gap-2 items-start text-[13.5px] text-danger rounded-[12px] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-3 py-2.5">
           <Icon name="alert" size={15} className="mt-[3px] flex-none" />

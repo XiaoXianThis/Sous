@@ -59,6 +59,8 @@ type Hub struct {
 	UpdateRepo string `yaml:"update_repo"`
 	// Web gives the supervisor web_search and web_fetch.
 	Web Web `yaml:"web"`
+	// MCP switches off MCP servers (docs/decisions/0021).
+	MCP MCP `yaml:"mcp"`
 
 	explicit map[string]bool // roles the file sets itself
 }
@@ -90,6 +92,15 @@ type Web struct {
 	// Disabled removes web_search and web_fetch.
 	Disabled bool      `yaml:"disabled"`
 	Search   WebSearch `yaml:"search"`
+}
+
+// MCP configures the supervisor's MCP servers, which are added on the page.
+type MCP struct {
+	// Disabled turns MCP off: no server starts and the page cannot add one.
+	Disabled bool `yaml:"disabled"`
+	// StdioDisabled refuses servers that run as a program on the Hub; only
+	// remote (HTTP) servers can be added.
+	StdioDisabled bool `yaml:"stdio_disabled"`
 }
 
 // WebSearch picks the search engine. Like model providers, it names the
@@ -131,6 +142,8 @@ const (
 	RoleReviewer   = "reviewer"
 	RoleApprover   = "approver"
 	RoleInspector  = "inspector"
+	// RoleCompactor folds old messages of a thread into its summary.
+	RoleCompactor = "compactor"
 )
 
 // Load reads and validates a config file.
@@ -190,7 +203,7 @@ func (c *Hub) applyDefaults(base string) {
 	}
 	// Unset roles fall back to the supervisor's model.
 	if sup, ok := c.Roles[RoleSupervisor]; ok {
-		for _, r := range []string{RoleReviewer, RoleApprover, RoleInspector} {
+		for _, r := range []string{RoleReviewer, RoleApprover, RoleInspector, RoleCompactor} {
 			if c.Roles[r] == "" {
 				c.Roles[r] = sup
 			}

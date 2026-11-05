@@ -26,7 +26,7 @@ import (
 )
 
 // Roles are the roles a model can be chosen for, in the page's order.
-var Roles = []string{config.RoleSupervisor, config.RoleReviewer, config.RoleApprover, config.RoleInspector}
+var Roles = []string{config.RoleSupervisor, config.RoleReviewer, config.RoleApprover, config.RoleInspector, config.RoleCompactor}
 
 // ErrNotConfigured: no model is chosen for the role (nor the supervisor's
 // to fall back on).
@@ -106,6 +106,8 @@ type Resolved struct {
 	Model    string
 	Effort   string
 	Role     string // the role whose choice this is (the supervisor's when the role has none)
+	// ContextWindow is the model's context window in tokens, 0 when not set.
+	ContextWindow int
 }
 
 // Resolve finds the role's current model: its own choice, else the
@@ -127,7 +129,17 @@ func (r *Registry) Resolve(ctx context.Context, role string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
-	return Resolved{Provider: p, Name: name, Model: choice.Model, Effort: choice.Effort, Role: from}, nil
+	return Resolved{Provider: p, Name: name, Model: choice.Model, Effort: choice.Effort, Role: from, ContextWindow: choice.ContextWindow}, nil
+}
+
+// ContextWindow is the context window of the role's current model in
+// tokens, 0 when not set.
+func (r *Registry) ContextWindow(ctx context.Context, role string) int {
+	res, err := r.Resolve(ctx, role)
+	if err != nil {
+		return 0
+	}
+	return res.ContextWindow
 }
 
 // instance builds (or reuses) the client of a provider.

@@ -23,6 +23,15 @@ describe('applyEvent', () => {
     expect(s.threads.find((t) => t.id === 'c1')?.project_id).toBeUndefined()
   })
 
+  it('keeps the files of a user message', () => {
+    const s = emptyState()
+    const a = { id: 'A', name: 'x.png', mime: 'image/png', size: 3 }
+    applyEvent(s, ev(1, 'message.user', { message_id: 'u1', content: '', attachments: [a] }))
+    applyEvent(s, ev(2, 'message.user', { message_id: 'u2', content: 'hi' }))
+    expect(s.messages.t1[0].attachments).toEqual([a])
+    expect(s.messages.t1[1].attachments).toBeUndefined()
+  })
+
   it('ignores stored events it already applied', () => {
     const s = emptyState()
     expect(applyEvent(s, ev(5, 'message.user', { message_id: 'u1', content: 'a' }))).toBe(true)
