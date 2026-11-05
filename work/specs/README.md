@@ -22,3 +22,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [multi-machine-sync](multi-machine-sync/) | core, web | 已实现并验收（浏览器） |
 | [long-main-thread](long-main-thread/) | core, web | 已实现并验收（含真实模型） |
 | [e2e-review-2026-11](e2e-review-2026-11/) | core, web | 已完成端到端测试（浏览器/CLI），修复任务待排期 |
+| [security-audit-2026-11](security-audit-2026-11/) | 仓库 | 已完成只读安全检查（未发现真实凭据泄露） |
