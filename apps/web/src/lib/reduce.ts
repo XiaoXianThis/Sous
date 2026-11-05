@@ -148,6 +148,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         reply_to: p.reply_to || undefined,
         kind: p.kind || undefined,
         attachments: p.attachments?.length ? p.attachments : undefined,
+        context: p.context || undefined,
         seq: ev.seq,
         created_at: ev.ts,
       })

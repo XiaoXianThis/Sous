@@ -36,7 +36,7 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
       threadIcon={() => 'chat'}
       onPick={(id) => pickProjectThread(project.id, id)}
       onNew={() => newProjectThread(project.id, title)}
-      onSend={(text, attachments) => sendToProject(project.id, title, text, withTask ? { task_id: task.id } : undefined, attachments)}
+      onSend={(text, attachments, mentions) => sendToProject(project.id, title, text, withTask ? { task_id: task.id } : undefined, attachments, mentions)}
       context={withTask ? { icon: 'target', text: task.title } : { icon: 'folder', text: project.name }}
       onDropContext={withTask ? () => setDropTask(true) : undefined}
       placeholder={`问问 ${project.name} 的事，或者让 sous 派个任务…`}

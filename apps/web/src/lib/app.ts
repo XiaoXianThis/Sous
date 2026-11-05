@@ -7,7 +7,7 @@ import { applyEvent, emptyState, mergeHistory, sortThreads, type ChatState } fro
 import { runFromHistory } from './runs'
 import { home, parseRoute, routeHash, type Route } from './route'
 import { EventStream, type StreamStatus } from './stream'
-import type { HubEvent, Inbox, MessageContext, Overview, Run, Thread } from './types'
+import type { HubEvent, Inbox, Mention, MessageContext, Overview, Run, Thread } from './types'
 
 /** A mutable state object plus a version subscribers watch. */
 export class Store<T extends object> {
@@ -319,8 +319,21 @@ export async function newThread() {
   return t
 }
 
-export async function send(content: string, attachments?: string[]) {
-  await api.send(ui.state.current, content, currentContext(), attachments)
+export async function send(content: string, attachments?: string[], mentions?: Mention[]) {
+  await api.send(ui.state.current, content, withMentions(currentContext(), mentions), attachments)
+}
+
+/** Opens a project's dialog on the workbench (an @ reference in a message). */
+export function showProject(id: string) {
+  ui.state.openProject = id
+  ui.state.tab = 'work'
+  ui.emit()
+}
+
+/** Adds the projects referenced with @ to a message's context. */
+export function withMentions(context: MessageContext | undefined, mentions: Mention[] | undefined): MessageContext | undefined {
+  if (!mentions?.length) return context
+  return { ...context, mentions }
 }
 
 /** Loads a project's chats and shows the latest one (none until the first message). */
@@ -356,10 +369,10 @@ export async function newProjectThread(projectId: string, title: string) {
 }
 
 /** Sends in a project's chat, creating it on the first message. */
-export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[]) {
+export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[], mentions?: Mention[]) {
   let id = ui.state.projectThread[projectId]
   if (!id) id = (await newProjectThread(projectId, title)).id
-  await api.send(id, content, context, attachments)
+  await api.send(id, content, withMentions(context, mentions), attachments)
 }
 
 /** Shows a system notification for a notice while the page is in the background. */

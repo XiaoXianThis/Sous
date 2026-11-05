@@ -387,7 +387,7 @@
   .shell .side .chat-composer { padding-bottom: calc(var(--tabbar-space) - 6px); }
   :root.kb-open .shell .side .chat-composer { padding-bottom: 8px; }
   /* iOS zooms into a focused field under 16px. */
-  input, select, textarea { font-size: 16px !important; }
+  input, select, textarea, .mention-layer { font-size: 16px !important; }
 }
 :root {
   --tabbar-h: 62px;
@@ -500,7 +500,9 @@
 .chat-phone .composer-box { grid-template-columns: minmax(0, 1fr) auto; align-items: end; column-gap: 8px; row-gap: 0; }
 .chat-phone .composer-box > .composer-tray { grid-row: 1; grid-column: 1 / -1; }
 .chat-phone .composer-box > .composer-tools { grid-row: 2; grid-column: 1 / -1; justify-self: start; max-width: 100%; margin: 2px 0 4px; }
-.chat-phone .composer-box > textarea { grid-row: 3; grid-column: 1; min-height: 36px; padding-top: 6px; }
+.chat-phone .composer-box > .composer-input { grid-row: 3; grid-column: 1; }
+.chat-phone .composer-input > textarea { min-height: 36px; padding-top: 6px; }
+.chat-phone .composer-input > .mention-layer { padding-top: 6px; }
 .chat-phone .composer-box > .composer-send { grid-row: 3; grid-column: 2; margin-bottom: 1px; }
 .chat-phone .composer-tools > .flex-1 { display: none; }
 
@@ -607,3 +609,28 @@ body[data-resizing] iframe { pointer-events: none; }
 :root[data-theme='dark'] .hljs-symbol, :root[data-theme='dark'] .hljs-bullet, :root[data-theme='dark'] .hljs-link, :root[data-theme='dark'] .hljs-meta, :root[data-theme='dark'] .hljs-params { color: #ffa657; }
 :root[data-theme='dark'] .hljs-deletion { color: #ffdcd7; background: rgb(248 81 73 / .18); }
 :root[data-theme='dark'] .hljs-addition { color: #aff5b4; background: rgb(46 160 67 / .18); }
+
+/*
+ * @ references in the composer: a copy of the text drawn behind the
+ * transparent textarea, with each referenced project as a tinted tag. Only the
+ * tags have a background; the visible text is still the textarea's, so the
+ * caret and typing never depend on this layer. Padding, font and wrapping
+ * must match the textarea.
+ */
+.mention-layer {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  padding: 2px; font-size: 14px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+  color: transparent;
+}
+.mention-layer mark, .mention-tag {
+  color: inherit; border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* In a sent message the tag also takes the accent colour and opens the project. */
+.mention-tag {
+  display: inline; border: 0; padding: 0; margin: 0; font: inherit; cursor: pointer;
+  color: var(--accent); font-weight: 500;
+}
+.mention-tag:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }

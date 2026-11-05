@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { showProject } from '../lib/app'
 import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
+import { splitMentions } from '../lib/mention'
 import { triggerView } from '../lib/trigger'
 import type { Attachment, Message } from '../lib/types'
 import Icon from './Icon'
@@ -159,7 +161,25 @@ export default function MessageView({ message }: { message: Message }) {
             part.url ? (
               <a key={i} href={part.url} target="_blank" rel="noreferrer" className="md-link">{part.text}</a>
             ) : (
-              <span key={i}>{part.text}</span>
+              <span key={i}>
+                {splitMentions(part.text, message.context?.mentions).map((seg, j) =>
+                  seg.mention ? (
+                    <button
+                      key={j}
+                      type="button"
+                      className="mention-tag"
+                      title={`引用的项目：${seg.mention.name}`}
+                      aria-label={`引用的项目：${seg.mention.name}，打开项目`}
+                      data-project-id={seg.mention.project_id}
+                      onClick={() => showProject(seg.mention!.project_id)}
+                    >
+                      {seg.text}
+                    </button>
+                  ) : (
+                    seg.text
+                  ),
+                )}
+              </span>
             ),
           )}
         </div>}
