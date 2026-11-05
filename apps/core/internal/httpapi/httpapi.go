@@ -234,6 +234,12 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "too_long", "消息太长")
 		return
 	}
+	if body.Context != nil {
+		body.Context.Mentions = cleanMentions(body.Context.Mentions)
+		if body.Context.Empty() {
+			body.Context = nil
+		}
+	}
 	msgID := ids.New()
 	evs, err := s.log.Append(r.Context(), event.New(event.MessageUser, event.ActorUser, id,
 		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts}))
@@ -242,6 +248,25 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq})
+}
+
+// cleanMentions drops @ references without a project id and repeats, and
+// keeps at most 16 with names cut to 100 characters.
+func cleanMentions(in []event.Mention) []event.Mention {
+	var out []event.Mention
+	seen := map[string]bool{}
+	for _, m := range in {
+		m.ProjectID = strings.TrimSpace(m.ProjectID)
+		if m.ProjectID == "" || seen[m.ProjectID] || len(out) >= 16 {
+			continue
+		}
+		seen[m.ProjectID] = true
+		if r := []rune(m.Name); len(r) > 100 {
+			m.Name = string(r[:100])
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // uploadAttachment stores the request body as an attachment; the name comes

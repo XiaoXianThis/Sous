@@ -463,3 +463,33 @@ func TestAttachmentUploadNeedsLoginAndHasASizeLimit(t *testing.T) {
 		t.Fatalf("empty upload: %d", code)
 	}
 }
+
+func TestMessageMentionsAreKept(t *testing.T) {
+	e := newEnv(t, true)
+	e.login(t)
+	path := "/api/v1/threads/" + e.main + "/messages"
+	body := map[string]any{
+		"content": "@blog 和 @web shop 要一起发版",
+		"context": map[string]any{"mentions": []map[string]string{
+			{"project_id": "p2", "name": "blog"},
+			{"project_id": "p3", "name": "web shop"},
+			{"project_id": "p2", "name": "blog"},
+			{"project_id": " ", "name": "nobody"},
+		}},
+	}
+	if code := e.do(t, "POST", path, body, nil); code != 202 {
+		t.Fatalf("post: %d", code)
+	}
+	var list struct{ Messages []store.Message }
+	e.do(t, "GET", path, nil, &list)
+	var got *store.Message
+	for i := range list.Messages {
+		if list.Messages[i].Role == "user" {
+			got = &list.Messages[i]
+		}
+	}
+	want := []event.Mention{{ProjectID: "p2", Name: "blog"}, {ProjectID: "p3", Name: "web shop"}}
+	if got == nil || got.Context == nil || len(got.Context.Mentions) != 2 || got.Context.Mentions[0] != want[0] || got.Context.Mentions[1] != want[1] {
+		t.Fatalf("stored message: %+v", got)
+	}
+}
