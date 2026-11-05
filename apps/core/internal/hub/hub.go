@@ -30,6 +30,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/trigger"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/watchdog"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/web"
 )
 
 type Hub struct {
@@ -117,6 +118,9 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		tool.Notify{Log: h.Log},
 	)
 	for _, t := range append(h.Tasks.Tools(), h.Triggers.Tools()...) {
+		tools.Register(t)
+	}
+	for _, t := range webTools(cfg) {
 		tools.Register(t)
 	}
 	h.Supervisor = supervisor.New(supervisor.Options{
@@ -223,4 +227,23 @@ func (h *Hub) announceSetup(ctx context.Context) error {
 	}
 	slog.Info("no passkey registered yet; open this link within 24 hours to register one", "url", h.Auth.SetupURL(tok))
 	return nil
+}
+
+// webTools returns web_search and web_fetch unless the config turns them off.
+// A search engine that cannot start (no key) is left out with a warning, so
+// the model is never offered a tool that always fails.
+func webTools(cfg *config.Hub) []tool.Tool {
+	if cfg.Web.Disabled {
+		return nil
+	}
+	tools := []tool.Tool{tool.WebFetch{Fetcher: &web.Fetcher{}}}
+	s, err := web.NewSearcher(web.SearchConfig{
+		Provider: cfg.Web.Search.Provider, APIKey: cfg.Web.Search.APIKey(), BaseURL: cfg.Web.Search.BaseURL,
+	})
+	if err != nil {
+		slog.Warn("web_search is off", "err", err, "hint", "set the key in the environment variable named by web.search.api_key_env")
+		return tools
+	}
+	slog.Info("web_search ready", "engine", s.Name())
+	return append(tools, tool.WebSearch{Searcher: s})
 }

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/XiaoXianThis/Sous/apps/core/internal/web"
 )
 
 type Hub struct {
@@ -55,6 +57,8 @@ type Hub struct {
 	RetentionDays int `yaml:"retention_days"`
 	// UpdateRepo is the GitHub repository releases come from (owner/name).
 	UpdateRepo string `yaml:"update_repo"`
+	// Web gives the supervisor web_search and web_fetch.
+	Web Web `yaml:"web"`
 
 	explicit map[string]bool // roles the file sets itself
 }
@@ -79,6 +83,31 @@ type Inspector struct {
 	StalledAfter time.Duration `yaml:"stalled_after"` // default 30m
 	LongAfter    time.Duration `yaml:"long_after"`    // default 3h
 	TokenAlarm   int           `yaml:"token_alarm"`   // default 2000000 per period
+}
+
+// Web configures the supervisor's internet tools (docs/decisions/0017).
+type Web struct {
+	// Disabled removes web_search and web_fetch.
+	Disabled bool      `yaml:"disabled"`
+	Search   WebSearch `yaml:"search"`
+}
+
+// WebSearch picks the search engine. Like model providers, it names the
+// environment variable that holds the key instead of holding it.
+type WebSearch struct {
+	// Provider is duckduckgo (default, no key), brave, tavily or searxng.
+	Provider  string `yaml:"provider"`
+	APIKeyEnv string `yaml:"api_key_env"`
+	// BaseURL is the SearXNG instance, e.g. https://searx.example.org.
+	BaseURL string `yaml:"base_url"`
+}
+
+// APIKey reads the search key from its environment variable.
+func (w WebSearch) APIKey() string {
+	if w.APIKeyEnv == "" {
+		return ""
+	}
+	return os.Getenv(w.APIKeyEnv)
 }
 
 type Provider struct {
@@ -182,6 +211,17 @@ func (c *Hub) Validate() error {
 	}
 	if c.TLSCert == "" && !c.InsecureListen && !loopbackListen(c.Listen) {
 		return fmt.Errorf("listen %q is reachable from other machines over plain HTTP: listen on 127.0.0.1 behind a TLS proxy, set tls_cert and tls_key, or set insecure_listen: true if the network in between is encrypted", c.Listen)
+	}
+	if p := c.Web.Search.Provider; p != "" && !web.Known(p) {
+		return fmt.Errorf("web.search.provider %q must be duckduckgo, brave, tavily or searxng", p)
+	}
+	if c.Web.Search.Provider == web.SearXNG {
+		if u, err := url.Parse(c.Web.Search.BaseURL); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return fmt.Errorf("web.search.base_url %q must be the http(s) address of a SearXNG instance", c.Web.Search.BaseURL)
+		}
+	}
+	if web.NeedsKey(c.Web.Search.Provider) && c.Web.Search.APIKeyEnv == "" {
+		return fmt.Errorf("web.search.provider %s needs api_key_env", c.Web.Search.Provider)
 	}
 	names := map[string]bool{}
 	for _, p := range c.Providers {

@@ -129,3 +129,29 @@ func TestPlainListenOutsideLoopbackIsRefused(t *testing.T) {
 		t.Error("bad effort accepted")
 	}
 }
+
+func TestWebSearchConfig(t *testing.T) {
+	c, err := Load(write(t, "web:\n  search:\n    provider: brave\n    api_key_env: TEST_SOUS_SEARCH_KEY\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_SOUS_SEARCH_KEY", "bk")
+	if c.Web.Search.Provider != "brave" || c.Web.Search.APIKey() != "bk" || c.Web.Disabled {
+		t.Fatalf("%+v", c.Web)
+	}
+	for _, ok := range []string{"", "web: {disabled: true}\n", "web: {search: {provider: searxng, base_url: 'http://localhost:8080'}}\n", "web: {search: {provider: duckduckgo}}\n"} {
+		if _, err := Load(write(t, ok)); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for name, bad := range map[string]string{
+		"unknown engine":    "web: {search: {provider: bing}}\n",
+		"brave without key": "web: {search: {provider: brave}}\n",
+		"searxng no url":    "web: {search: {provider: searxng}}\n",
+		"searxng bad url":   "web: {search: {provider: searxng, base_url: searx.example.org}}\n",
+	} {
+		if _, err := Load(write(t, bad)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}

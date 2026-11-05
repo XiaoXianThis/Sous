@@ -29,6 +29,14 @@ roles:
 #   supervisor: high
 #   inspector: low
 
+# Internet access for the supervisor (docs/decisions/0017): web_search and web_fetch.
+# web:
+#   disabled: false          # true removes both tools
+#   search:
+#     provider: duckduckgo   # duckduckgo (default, no key; may refuse server IPs) / brave / tavily / searxng
+#     api_key_env: BRAVE_API_KEY   # brave and tavily: the variable that holds the key
+#     base_url: https://searx.example.org   # searxng: the instance (it must allow the json format)
+
 # Everything below is optional; these are the defaults.
 # triggers:                 # follow-ups the supervisor gets (design §9)
 #   followup_every: 5m

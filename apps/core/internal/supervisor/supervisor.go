@@ -24,7 +24,7 @@ const (
 	// HistoryMessages is how many recent messages a turn sees.
 	HistoryMessages = 40
 	// MaxSteps bounds the model calls of one turn, so a tool loop cannot run away.
-	MaxSteps = 8
+	MaxSteps = 12
 )
 
 type Options struct {
