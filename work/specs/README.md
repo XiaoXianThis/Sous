@@ -21,3 +21,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [workbench-single-page](workbench-single-page/) | web | 已实现并验收（浏览器） |
 | [multi-machine-sync](multi-machine-sync/) | core, web | 已实现并验收（浏览器） |
 | [long-main-thread](long-main-thread/) | core, web | 已实现并验收（含真实模型） |
+| [e2e-review-2026-11](e2e-review-2026-11/) | core, web | 已完成端到端测试（浏览器/CLI），修复任务待排期 |
