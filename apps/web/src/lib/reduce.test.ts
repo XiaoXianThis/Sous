@@ -32,6 +32,13 @@ describe('applyEvent', () => {
     expect(s.messages.t1[1].attachments).toBeUndefined()
   })
 
+  it('keeps the context and @ references of a user message', () => {
+    const s = emptyState()
+    const context = { project_id: 'p1', mentions: [{ project_id: 'p2', name: 'blog' }] }
+    applyEvent(s, ev(1, 'message.user', { message_id: 'u1', content: '看看 @blog ', context }))
+    expect(s.messages.t1[0].context).toEqual(context)
+  })
+
   it('ignores stored events it already applied', () => {
     const s = emptyState()
     expect(applyEvent(s, ev(5, 'message.user', { message_id: 'u1', content: 'a' }))).toBe(true)

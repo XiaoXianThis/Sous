@@ -460,6 +460,14 @@ export interface Overview {
 export interface MessageContext {
   project_id?: string
   task_id?: string
+  /** Projects the user referenced with @ in the message. */
+  mentions?: Mention[]
+}
+
+/** A project referenced with @; `name` is what the message text shows after the @. */
+export interface Mention {
+  project_id: string
+  name: string
 }
 
 export interface Quiet {

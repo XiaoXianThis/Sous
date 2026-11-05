@@ -33,7 +33,7 @@ func project(w *Writer, ev event.Event) error {
 			role = "assistant"
 		}
 		mctx := ""
-		if p.Context != nil && (p.Context.ProjectID != "" || p.Context.TaskID != "") {
+		if !p.Context.Empty() {
 			raw, _ := json.Marshal(p.Context)
 			mctx = string(raw)
 		}

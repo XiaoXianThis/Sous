@@ -368,6 +368,9 @@ func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(eve
 				content = "【用户写这条消息时，正在工作台上看：" + l + "。消息里的“这个”“它”多半指它】\n" + content
 			}
 		}
+		if m.Role == "user" && m.Context != nil && len(m.Context.Mentions) > 0 {
+			content = mentionNote(m.Context.Mentions, label...) + "\n" + content
+		}
 		msg := provider.Text(role, content)
 		if m.Role == "user" {
 			msg.Parts = append(msg.Parts, attachmentParts(files, m.Attachments)...)
@@ -392,6 +395,23 @@ func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(eve
 		}
 	}
 	return out
+}
+
+// mentionNote tells the model which projects the @ references in a user
+// message stand for, by id, so it does not have to guess from the name.
+func mentionNote(ms []event.Mention, label ...func(event.MessageContext) string) string {
+	names := make([]string, 0, len(ms))
+	for _, mn := range ms {
+		d := ""
+		if len(label) > 0 && label[0] != nil {
+			d = label[0](event.MessageContext{ProjectID: mn.ProjectID})
+		}
+		if d == "" {
+			d = fmt.Sprintf("项目 %s（id %s）", mn.Name, mn.ProjectID)
+		}
+		names = append(names, "@"+mn.Name+" = "+d)
+	}
+	return "【消息里用 @ 引用了工作台上的项目：" + strings.Join(names, "；") + "】"
 }
 
 // silentSpec lets the supervisor end a turn without speaking.

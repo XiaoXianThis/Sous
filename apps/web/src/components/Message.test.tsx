@@ -54,3 +54,23 @@ describe('thinking', () => {
     expect(box()).toBeNull()
   })
 })
+
+describe('@ references in a user message', () => {
+  it('shows each referenced project as a tag with its name', async () => {
+    await render({
+      role: 'user',
+      content: '@blog 和 @web shop 都要发',
+      context: { mentions: [{ project_id: 'p2', name: 'blog' }, { project_id: 'p3', name: 'web shop' }] },
+    })
+    const tags = Array.from(el.querySelectorAll('.mention-tag'))
+    expect(tags.map((t) => t.textContent)).toEqual(['@blog', '@web shop'])
+    expect(tags[1].getAttribute('title')).toBe('引用的项目：web shop')
+    expect(tags[1].getAttribute('data-project-id')).toBe('p3')
+    expect(el.textContent).toContain('@blog 和 @web shop 都要发')
+  })
+
+  it('leaves an @ without a reference as plain text', async () => {
+    await render({ role: 'user', content: '发邮件到 a@b.com' })
+    expect(el.querySelector('.mention-tag')).toBeNull()
+  })
+})

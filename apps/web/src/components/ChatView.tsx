@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { useChat, useUi, useWb } from '../lib/app'
 import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
 import { usePhone } from '../lib/phone'
+import { activeProjects, filterProjects, insertMention, keptMentions, mentionQuery, splitMentions, type MentionQuery } from '../lib/mention'
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
-import type { Message, Thread } from '../lib/types'
+import type { Mention, Message, Project, Thread } from '../lib/types'
 import ApprovalCard from './ApprovalCard'
 import { ContextPanel, ContextRing, useThreadContext } from './ContextMeter'
 import { dividerAt } from '../lib/context'
@@ -39,7 +40,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   threadIcon: (t: Thread) => string
   onPick: (id: string) => void | Promise<void>
   onNew: () => void | Promise<unknown>
-  onSend: (text: string, attachments: string[]) => Promise<void>
+  onSend: (text: string, attachments: string[], mentions: Mention[]) => Promise<void>
   context?: ChatContext | null
   onDropContext?: () => void
   placeholder: string
@@ -65,6 +66,14 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const composer = useRef<HTMLFormElement>(null)
   const [ctxView, reloadContext] = useThreadContext(threadId)
   const [contextOpen, setContextOpen] = useState(false)
+  // @ references: the projects picked so far, the query at the caret and the highlighted candidate.
+  const [picked, setPicked] = useState<Mention[]>([])
+  const [mq, setMq] = useState<MentionQuery | null>(null)
+  const [active, setActive] = useState(0)
+  const [dismissed, setDismissed] = useState(-1)
+  const nextCaret = useRef<number | null>(null)
+  const layer = useRef<HTMLDivElement>(null)
+  const listId = useId()
 
   // Phone: the composer floats over the timeline, which scrolls under it; keep its height as padding.
   useEffect(() => {
@@ -97,8 +106,15 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     if (stick.current && scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight })
   }, [threadId, messages.length, lastLength, uiState.tab, uiState.chatOpen, answering])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     resize()
+    const el = input.current
+    if (el && nextCaret.current !== null) {
+      el.focus()
+      el.setSelectionRange(nextCaret.current, nextCaret.current)
+      nextCaret.current = null
+      syncLayer()
+    }
   }, [draft])
 
   useEffect(() => {
@@ -177,6 +193,36 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   }
 
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  const mentions = keptMentions(draft, picked)
+  const projects = activeProjects(wbState.data?.projects)
+  const mentionOpen = mq !== null && mq.start !== dismissed
+  const candidates = mentionOpen ? filterProjects(projects, mq.query) : []
+  const highlighted = Math.min(active, Math.max(candidates.length - 1, 0))
+
+  // Looks for an @query at the caret after every edit or caret move.
+  function syncMention() {
+    const el = input.current
+    if (!el) return
+    const q = el.selectionStart === el.selectionEnd ? mentionQuery(el.value, el.selectionStart) : null
+    if (q?.start !== mq?.start || q?.query !== mq?.query) setActive(0)
+    if (!q) setDismissed(-1)
+    setMq(q)
+  }
+
+  function chooseMention(p: Project) {
+    const el = input.current
+    if (!el || !mq) return
+    const r = insertMention(el.value, mq, el.selectionStart, p.name)
+    nextCaret.current = r.caret
+    setDraft(r.text)
+    setPicked((l) => [...l.filter((m) => m.project_id !== p.id), { project_id: p.id, name: p.name }])
+    setMq(null)
+  }
+
+  function syncLayer() {
+    if (layer.current && input.current) layer.current.scrollTop = input.current.scrollTop
+  }
+
   const ids = readyIds(pending)
   const canSend = (draft.trim() !== '' || ids.length > 0) && !uploading(pending) && !sending
 
@@ -186,8 +232,10 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     setSending(true)
     setSendError('')
     try {
-      await onSend(text, ids)
+      await onSend(text, ids, mentions)
       setDraft('')
+      setPicked([])
+      setMq(null)
       for (const p of pending) if (p.preview) URL.revokeObjectURL(p.preview)
       setPending([])
       stick.current = true
@@ -201,6 +249,28 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
 
   const [touch] = useState(() => typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches)
   function onKey(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    const composing = e.nativeEvent.isComposing || e.keyCode === 229
+    if (mentionOpen && !composing) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setDismissed(mq.start)
+        return
+      }
+      if (candidates.length > 0) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault()
+          const step = e.key === 'ArrowDown' ? 1 : -1
+          setActive((highlighted + step + candidates.length) % candidates.length)
+          return
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || (e.key === 'Tab' && !e.shiftKey)) {
+          e.preventDefault()
+          chooseMention(candidates[highlighted])
+          return
+        }
+      }
+    }
     if (!touch && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault()
       void submit()
@@ -303,7 +373,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         <div
           className={phone
             ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
-            : 'grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
+            : 'relative grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
           onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) input.current?.focus() }}
           onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); setDragging(true) } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false) }}
@@ -349,19 +419,63 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               ))}
             </ul>
           )}
-          <textarea
-            ref={input}
-            value={draft}
-            rows={1}
-            placeholder={placeholder}
-            title={touch ? undefined : 'Enter 发送，Shift+Enter 换行'}
-            onChange={(e) => setDraft(e.target.value)}
-            onInput={resize}
-            onKeyDown={onKey}
-            onPaste={onPaste}
-            aria-label="消息"
-            className="col-span-2 w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] max-[760px]:min-h-[36px] max-[760px]:max-h-[160px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
-          ></textarea>
+          {mentionOpen && (
+            <div className="mention-menu absolute bottom-full left-0 z-[30] mb-2 w-[min(320px,100%)] max-h-[min(300px,40dvh)] overflow-y-auto bg-raised rounded-[12px] p-1 grid gap-0.5 shadow-pop rise">
+              <p className="m-0 px-2 pt-1 pb-0.5 text-[11.5px] text-faint">引用项目</p>
+              {candidates.length === 0 ? (
+                <p className="m-0 px-2 py-2 text-[12.5px] text-muted" role="status">
+                  {projects.length === 0 ? '没有可引用的项目' : `没有匹配“${mq.query}”的项目`}
+                </p>
+              ) : (
+                <div id={listId} role="listbox" aria-label="引用项目" className="grid gap-0.5">
+                  {candidates.map((p, i) => (
+                    <button
+                      key={p.id}
+                      id={`${listId}-${i}`}
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={i === highlighted}
+                      className={`border-0 text-left px-2 h-8 rounded-[8px] flex items-center text-[13px] min-w-0 ${i === highlighted ? 'bg-hover text-ink' : 'bg-transparent text-ink'}`}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setActive(i)}
+                      onClick={() => chooseMention(p)}
+                    >
+                      <span className="overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="composer-input relative col-span-2 min-w-0">
+            {mentions.length > 0 && (
+              <div ref={layer} className="mention-layer" aria-hidden="true">
+                {splitMentions(draft, mentions).map((seg, i) => (seg.mention ? <mark key={i}>{seg.text}</mark> : <span key={i}>{seg.text}</span>))}
+                {'\n'}
+              </div>
+            )}
+            <textarea
+              ref={input}
+              value={draft}
+              rows={1}
+              placeholder={placeholder}
+              title={touch ? undefined : 'Enter 发送，Shift+Enter 换行，@ 引用项目'}
+              onChange={(e) => { setDraft(e.target.value); syncMention() }}
+              onSelect={syncMention}
+              onBlur={() => setMq(null)}
+              onScroll={syncLayer}
+              onInput={resize}
+              onKeyDown={onKey}
+              onPaste={onPaste}
+              aria-label="消息"
+              aria-autocomplete="list"
+              aria-expanded={mentionOpen && candidates.length > 0}
+              aria-controls={mentionOpen && candidates.length > 0 ? listId : undefined}
+              aria-activedescendant={mentionOpen && candidates.length > 0 ? `${listId}-${highlighted}` : undefined}
+              className="relative w-full border-0 outline-0 resize-none bg-transparent px-0.5 py-0.5 min-h-[44px] max-h-[220px] max-[760px]:min-h-[36px] max-[760px]:max-h-[160px] leading-[1.55] text-[14px] !shadow-none placeholder:text-faint"
+            ></textarea>
+          </div>
           <div className="composer-tools flex items-center gap-1 min-w-0">
             <input
               ref={fileInput}
