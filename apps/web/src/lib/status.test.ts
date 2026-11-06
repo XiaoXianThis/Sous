@@ -40,14 +40,14 @@ describe('task states', () => {
   })
 
   it('keeps a readable detail for the badge', () => {
-    expect(taskStateDetail(t('queued'))).toBe('排队')
+    expect(taskStateDetail(t('queued'))).toBe('排队中')
     expect(taskStateDetail(t('running', { status_reason: '已暂停：重复调用' }))).toBe('已暂停')
     expect(taskStateDetail(t('review'))).toBe('验收中')
     expect(taskStateDetail(t('review', { status_reason: '没有配置验收模型，等你验收' }))).toBe('等你验收')
     expect(taskStateDetail(t('done', { git_state: 'unmerged' }))).toBe('未合并')
     expect(taskStateDetail(t('done', { git_state: 'merged' }))).toBe('已合并')
     expect(taskStateDetail(t('done', { git_state: 'pr' }))).toBe('PR 已开')
-    expect(taskStateDetail(t('done'))).toBe('完成')
+    expect(taskStateDetail(t('done'))).toBe('已完成')
     expect(taskStateDetail(t('failed'))).toBe('失败')
   })
 })
@@ -60,8 +60,6 @@ describe('stages', () => {
     expect(states(stages(t('review')))).toBe('done done current')
     expect(states(stages(t('running', { next: 'review' })))).toBe('done done current')
     expect(states(stages(t('done', { git_state: 'unmerged' })))).toBe('done done done')
-    expect(states(stages(t('done'), { hasDeploy: true }))).toBe('done done done todo')
-    expect(states(stages(t('done'), { hasDeploy: true, deployed: true }))).toBe('done done done done')
     expect(states(stages(t('failed')))).toBe('done failed todo')
     expect(states(stages(t('blocked', { status_reason: '验收没有通过：缺测试' })))).toBe('done done failed')
     expect(progress(stages(t('review')))).toBe('2/3')
@@ -70,7 +68,11 @@ describe('stages', () => {
     expect(stages(t('running', { review: 'none' })).map((s) => s.text)).toEqual(['计划', '编码'])
   })
   it('has fewer stages for other kinds', () => {
-    expect(stages(t('running', { kind: 'ops' })).map((s) => s.text)).toEqual(['执行', '健康检查'])
+    // An ops task has a health check stage only when it deploys a commit.
+    expect(stages(t('running', { kind: 'ops' })).map((s) => s.text)).toEqual(['执行'])
+    expect(stages(t('running', { kind: 'ops', deploy_commit: 'abc' })).map((s) => s.text)).toEqual(['执行', '健康检查'])
+    expect(stages(t('running', { kind: 'ops', deploy_commit: 'abc', next: 'health' })).map((s) => s.state)).toEqual(['done', 'current'])
+    expect(stages(t('blocked', { kind: 'ops', deploy_commit: 'abc', status_reason: '部署后的健康检查没有通过：502' })).map((s) => s.state)).toEqual(['done', 'failed'])
     expect(stages(t('done', { kind: 'general' })).every((s) => s.state === 'done')).toBe(true)
   })
 })

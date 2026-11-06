@@ -269,6 +269,16 @@ func TestDeployOnNewCommits(t *testing.T) {
 	if r := te.task(ops[0].ID).StatusReason; !strings.Contains(r, "离线") {
 		t.Fatalf("waits for the server: %s", r)
 	}
+
+	// The user cancels that deploy: the next scan does not bring it back
+	// (end-to-end review H4).
+	if err := te.tasks.Cancel(ctx, ops[0].ID, "不部署这个", event.ActorUser); err != nil {
+		t.Fatal(err)
+	}
+	te.tasks.CheckDeploys(ctx)
+	if ops := opsTasks(te); len(ops) != 1 {
+		t.Fatalf("a cancelled deploy came back: %+v", ops)
+	}
 }
 
 func opsTasks(te *taskEnv) []store.Task {

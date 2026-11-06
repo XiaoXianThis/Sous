@@ -1,10 +1,10 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useReducer, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { chat, useChat } from '../lib/app'
 import { jobTitle, latestJob } from '../lib/jobs'
 import type { ConfigOption, Node } from '../lib/types'
 import ConfigEditor from './ConfigEditor'
-import JobLog from './JobLog'
+const JobLog = lazy(() => import('./JobLog'))
 import Sheet from './Sheet'
 
 const catName: Record<string, string> = { model: '模型', thought_level: '思考强度' }
@@ -187,7 +187,7 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
             )}
           </section>
 
-          {job && <JobLog key={job.job_id} nodeId={node.id} jobId={job.job_id} />}
+          {job && <Suspense fallback={null}><JobLog key={job.job_id} nodeId={node.id} jobId={job.job_id} /></Suspense>}
 
           {agent.installed && (
             <section className="grid gap-2">

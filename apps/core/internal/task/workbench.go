@@ -557,7 +557,10 @@ func (e *Engine) CheckDeploys(ctx context.Context) {
 }
 
 // deployHead is the newest commit of the project's deploy branch that any
-// of its machines knows of (the most recent scan wins).
+// of its machines knows of: by commit time, so a machine whose fetch is
+// behind cannot send the deploy back to an older commit (review H3). Scans
+// without commit times (older daemons) count by when they were seen, after
+// any scan that has one.
 func deployHead(p store.Project, scans []store.RepoScan) string {
 	places := map[string]bool{}
 	for _, n := range p.Nodes {
@@ -566,35 +569,34 @@ func deployHead(p store.Project, scans []store.RepoScan) string {
 	if d := p.Deploy; d != nil {
 		places[d.NodeID+"\x00"+d.Path] = true
 	}
-	head, seen := "", int64(0)
+	head, at, seen := "", int64(-1), int64(0)
 	for _, s := range scans {
 		if !places[s.NodeID+"\x00"+s.Path] && (s.ProjectID != p.ID) {
 			continue
 		}
-		if sha := s.Heads[p.Deploy.Branch]; sha != "" && s.SeenAt >= seen {
-			head, seen = sha, s.SeenAt
+		sha := s.Heads[p.Deploy.Branch]
+		if sha == "" {
+			continue
+		}
+		t, ok := s.HeadTimes[p.Deploy.Branch]
+		if !ok {
+			t = 0
+		}
+		if t > at || (t == at && s.SeenAt >= seen) {
+			head, at, seen = sha, t, s.SeenAt
 		}
 	}
 	return head
 }
 
-// deployQueued reports whether a deploy of commit already exists and was
-// not cancelled.
+// deployQueued reports whether a deploy of commit was ever created. One the
+// user cancelled counts too: cancelling means "not this commit", and it is
+// not created again by the next scan (review H4); the user can still ask
+// for it.
 func (e *Engine) deployQueued(ctx context.Context, projectID, commit string) bool {
 	tasks, _ := e.store().Tasks(ctx, store.TaskFilter{ProjectID: projectID, Limit: 5000})
 	for _, t := range tasks {
-		if t.DeployCommit == commit && t.Status != event.TaskCancelled {
-			return true
-		}
-	}
-	return false
-}
-
-// DeployedSince reports whether an ops task of the project was created at
-// or after ts and not cancelled: a deploy is done or under way.
-func DeployedSince(tasks []store.Task, projectID string, ts int64) bool {
-	for _, t := range tasks {
-		if t.ProjectID == projectID && t.Kind == event.TaskKindOps && t.CreatedAt >= ts && t.Status != event.TaskCancelled {
+		if t.DeployCommit == commit {
 			return true
 		}
 	}

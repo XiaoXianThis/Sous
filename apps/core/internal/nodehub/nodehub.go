@@ -495,9 +495,24 @@ func (h *Hub) Busy(ctx context.Context, nodeID string) int {
 	if err != nil {
 		return 0
 	}
+	waiting := map[string]bool{}
+	if pending, err := h.log.Store.Approvals(ctx, "pending", ""); err == nil {
+		for _, a := range pending {
+			if a.Review == "user" {
+				waiting[a.RunID] = true
+			}
+		}
+	}
 	n := 0
 	for _, r := range runs {
-		if r.Purpose != event.PurposeConsult { // consultants take no slot (decision 0022)
+		switch {
+		case r.Purpose == event.PurposeConsult, r.Purpose == event.PurposeGit:
+			// Consultants and git operations run no agent that works: they
+			// take no slot (decision 0022, end-to-end review).
+		case r.Status == event.RunStatusRunning && waiting[r.ID]:
+			// A run waiting for the user gives its slot up until answered:
+			// two unanswered cards must not stop a machine.
+		default:
 			n++
 		}
 	}
@@ -536,4 +551,47 @@ func randomToken() string {
 func hashToken(t string) string {
 	h := sha256.Sum256([]byte(t))
 	return hex.EncodeToString(h[:])
+}
+
+// stuck pauses a run whose agent keeps failing the same tool call, as the
+// node saw it, and tells the user: sooner than the inspector's round and
+// without a model (end-to-end review 4.16). The finding and the message go
+// to the main thread, like the inspector's.
+func (h *Hub) stuck(ctx context.Context, ref runRef, runID, what string) {
+	r, err := h.log.Store.Run(ctx, runID)
+	if err != nil || r.Status != event.RunStatusRunning || r.Paused {
+		return
+	}
+	reason := "agent 卡住了：" + what
+	done := h.Pause(ctx, runID, reason, event.ActorInspector) == nil
+	main, err := h.log.Store.MainThreadID(ctx)
+	if err != nil {
+		return
+	}
+	f := event.FindingPayload{FindingID: ids.New(), Rule: "repeat", Severity: "warning", Action: event.ActionPause, Reason: reason, Done: done}
+	_, err = h.log.Write(ctx, func(w *store.Writer) error {
+		ev := event.New(event.InspectorFinding, event.ActorInspector, main, f)
+		ev.RunID, ev.TaskID = runID, r.TaskID
+		if _, err := w.Append(ev); err != nil {
+			return err
+		}
+		text := fmt.Sprintf("「%s」的 agent %s，已经暂停。可以发一句话告诉它换个办法（会接着做），或者换一个 agent 重试。", firstNonEmpty(r.Title, "这个任务"), what)
+		msg := event.New(event.MessageAssistant, event.ActorInspector, main,
+			event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindInspector})
+		msg.RunID, msg.TaskID = runID, r.TaskID
+		_, err := w.Append(msg)
+		return err
+	})
+	if err != nil {
+		slog.Error("nodehub: record a stuck run", "run", runID, "err", err)
+	}
+}
+
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

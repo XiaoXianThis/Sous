@@ -16,8 +16,8 @@
   --line: rgb(20 20 20 / .08);
   --line-strong: rgb(20 20 20 / .14);
   --text: rgb(20 20 20 / .92);
-  --muted: rgb(20 20 20 / .6);
-  --faint: rgb(20 20 20 / .38);
+  --muted: rgb(20 20 20 / .7);
+  --faint: rgb(20 20 20 / .6); /* 4.5:1 on white for small text (review 4.25) */
   --accent: #2f8ad4;
   --accent-text: #ffffff;
   --brand: #1a1a1a;
@@ -73,8 +73,8 @@
   --line: rgb(228 228 228 / .08);
   --line-strong: rgb(228 228 228 / .15);
   --text: rgb(228 228 228 / .92);
-  --muted: rgb(228 228 228 / .58);
-  --faint: rgb(228 228 228 / .34);
+  --muted: rgb(228 228 228 / .72);
+  --faint: rgb(228 228 228 / .56); /* 4.5:1 on the dark panel and sunken */
   --accent: #79bff0;
   --accent-text: #0f1a24;
   --brand: #2a2a2a;

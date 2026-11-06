@@ -1,8 +1,24 @@
-import { memo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { hljs } from '../lib/highlight'
 import Icon from './Icon'
+
+// highlight.js and its languages are big and only needed once a code block
+// shows up: they load on first use, not with the page (end-to-end review 4.24).
+type Hljs = typeof import('../lib/highlight')['hljs']
+let hljsLoaded: Hljs | null = null
+let hljsLoading: Promise<Hljs> | null = null
+function loadHljs(): Promise<Hljs> {
+  hljsLoading ??= import('../lib/highlight').then((m) => (hljsLoaded = m.hljs))
+  return hljsLoading
+}
+function useHljs(): Hljs | null {
+  const [h, setH] = useState(hljsLoaded)
+  useEffect(() => {
+    if (!h) void loadHljs().then(setH)
+  }, [h])
+  return h
+}
 
 /** Copies text and shows a check for a moment. */
 export function CopyButton({ text, label = '复制', className = '' }: { text: string; label?: string; className?: string }) {
@@ -28,9 +44,10 @@ export function CopyButton({ text, label = '复制', className = '' }: { text: s
 
 function CodeBlock({ lang, code, streaming }: { lang: string; code: string; streaming: boolean }) {
   const [wrap, setWrap] = useState(false)
-  const known = lang && hljs.getLanguage(lang)
+  const hljs = useHljs()
+  const known = lang && hljs?.getLanguage(lang)
   // Highlighting waits for the end of the stream: fences are re-split while text arrives.
-  const html = !streaming && known ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : ''
+  const html = !streaming && hljs && known ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : ''
   return (
     <div className="md-code my-3 rounded-[12px] border border-line bg-sunken overflow-hidden" data-lang={lang || 'text'}>
       <div className="flex items-center gap-2 pl-3 pr-1.5 h-9 text-[12.5px] text-muted">

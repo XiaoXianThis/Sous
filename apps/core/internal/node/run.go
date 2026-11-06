@@ -73,9 +73,19 @@ type run struct {
 	// the run then tells the agent and lets it continue (maxRefusalTurns).
 	refused      []string
 	refusalTurns int
-	turnText     strings.Builder
-	workdir      string
-	loading      bool // replaying a loaded session: its updates are old news
+	// refusedAll is every refusal of the run, reported when it ends.
+	refusedAll []string
+	// toolCalls are the tool calls the agent made in this run.
+	toolCalls  map[string]bool
+	toolTitles map[string]string
+	// failStreak counts tool calls in a row that failed with the same title;
+	// stuckSent marks that the streak was reported (end-to-end review 4.16).
+	failTitle  string
+	failStreak int
+	stuckSent  bool
+	turnText   strings.Builder
+	workdir    string
+	loading    bool // replaying a loaded session: its updates are old news
 	// resumed is set for a run restored after a restart of the daemon.
 	resumed *savedRun
 	// continued is set when ResumeSession was loaded: the agent remembers
@@ -83,11 +93,13 @@ type run struct {
 	continued bool
 	// idle: a consultant between questions.
 	idle bool
+	// slot: the run holds one of the machine's slots (d.sem).
+	slot bool
 }
 
 func newRun(d *Daemon, s proto.RunStart) *run {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &run{d: d, spec: s, ctx: ctx, cancel: cancel, approvals: map[string]chan string{}, notes: map[string]string{}, seen: map[string]bool{},
+	return &run{d: d, spec: s, ctx: ctx, cancel: cancel, approvals: map[string]chan string{}, notes: map[string]string{}, seen: map[string]bool{}, toolCalls: map[string]bool{}, toolTitles: map[string]string{},
 		wake: make(chan struct{}, 1)}
 }
 
@@ -111,7 +123,13 @@ func (r *run) end(status, stopReason, summary, diffstat string, err error) {
 	e := proto.RunEnded{RunID: r.spec.RunID, Status: status, StopReason: stopReason, Summary: summary, DiffStat: diffstat}
 	if err != nil {
 		e.Error = err.Error()
+		if status == "failed" {
+			e.ErrorKind = errorKind(err, "")
+		}
 	}
+	r.mu.Lock()
+	e.Refused = append([]string(nil), r.refusedAll...)
+	r.mu.Unlock()
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
 	r.d.forget(r.spec.RunID)
 	slog.Info("daemon: run ended", "run", r.spec.RunID, "status", status, "err", err)
@@ -128,14 +146,13 @@ func (r *run) execute() {
 	defer r.cancel()
 	// A consultant is read only and waits idle most of its life: it does
 	// not take one of the machine's slots (decision 0022).
-	if r.spec.Purpose != proto.PurposeConsult {
-		select {
-		case r.d.sem <- struct{}{}:
-			defer func() { <-r.d.sem }()
-		case <-r.ctx.Done():
+	// Nor does a git operation: fixed commands, no agent.
+	if r.spec.Purpose != proto.PurposeConsult && r.spec.Purpose != proto.PurposeGit {
+		if !r.takeSlot() {
 			r.end("cancelled", "", "", "", errors.New(r.stopReasonText()))
 			return
 		}
+		defer r.releaseSlot()
 	}
 	if r.spec.Purpose == proto.PurposeDeliver || r.spec.Purpose == proto.PurposeRebase {
 		// Automatic delivery is gone (decision 0022): a Hub of this version
@@ -179,6 +196,17 @@ func (r *run) execute() {
 		return
 	}
 
+	if ws.Shadow != "" && r.spec.Purpose != proto.PurposeReview {
+		// The directory as the agent left it: what an undo or a commit of
+		// the task works from.
+		key := r.spec.TaskID
+		if key == "" {
+			key = r.spec.RunID
+		}
+		if err := workspace.MarkEnd(context.Background(), ws, key); err != nil {
+			slog.Warn("daemon: end snapshot failed", "run", r.spec.RunID, "err", err)
+		}
+	}
 	// Report what changed even when the turn failed part way.
 	diff, stat, derr := workspace.Diff(context.Background(), ws)
 	if derr != nil {
@@ -186,7 +214,69 @@ func (r *run) execute() {
 	} else if diff != "" {
 		r.sendDiff(diff)
 	}
-	r.end(status, stop, r.summary(), stat, err)
+	summary := r.summary()
+	if status == "succeeded" && (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork) {
+		r.mu.Lock()
+		calls := len(r.toolCalls)
+		r.mu.Unlock()
+		st, kind, out := outcome(calls, stat, summary)
+		if st == "failed" {
+			r.endWith(proto.RunEnded{Status: st, StopReason: stop, Summary: summary, DiffStat: stat, ErrorKind: kind,
+				Error: "agent 没做任何操作就结束了，它说：" + truncate(summary, 300)})
+			return
+		}
+		if out != "" {
+			r.endWith(proto.RunEnded{Status: status, StopReason: stop, Summary: summary, DiffStat: stat, Outcome: out})
+			return
+		}
+	}
+	r.end(status, stop, summary, stat, err)
+}
+
+// stuckFailures is after how many failures in a row of the same tool call
+// the node tells the Hub, which pauses the run: sooner than the inspector's
+// round, and without a model.
+const stuckFailures = 4
+
+// trackFailure follows failed tool calls; it returns what to report once a
+// streak reaches stuckFailures.
+func (r *run) trackFailure(callID, title, status string) string {
+	if status != "completed" && status != "failed" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if title == "" {
+		// Updates often carry only the id; the title came with the call.
+		title = r.toolTitles[callID]
+	}
+	if status == "completed" {
+		r.failTitle, r.failStreak, r.stuckSent = "", 0, false
+		return ""
+	}
+	if title != r.failTitle {
+		r.failTitle, r.failStreak, r.stuckSent = title, 0, false
+	}
+	r.failStreak++
+	if r.failStreak >= stuckFailures && !r.stuckSent {
+		r.stuckSent = true
+		return fmt.Sprintf("「%s」连续失败了 %d 次", truncate(firstNonEmpty(title, "同一个操作"), 120), r.failStreak)
+	}
+	return ""
+}
+
+// endWith reports a run's end as given, with the run's refusals.
+func (r *run) endWith(e proto.RunEnded) {
+	if r.isShutdown() {
+		return
+	}
+	e.RunID = r.spec.RunID
+	r.mu.Lock()
+	e.Refused = append([]string(nil), r.refusedAll...)
+	r.mu.Unlock()
+	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
+	r.d.forget(r.spec.RunID)
+	slog.Info("daemon: run ended", "run", r.spec.RunID, "status", e.Status, "outcome", e.Outcome, "kind", e.ErrorKind)
 }
 
 // prepare creates or reuses the run's working directory. All runs of a
@@ -626,9 +716,22 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 	case "agent_thought_chunk":
 		r.d.ob.ephemeral(proto.New(proto.TRunOutput, proto.RunUpdate{RunID: id, Kind: proto.UpdateThought, Text: u.Text}))
 	case "tool_call", "tool_call_update":
-		r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{
-			RunID: id, Kind: proto.UpdateTool, ToolCallID: u.ToolCallID, Title: u.Title, Status: u.Status, ToolKind: u.ToolKind,
-		}))
+		if u.ToolCallID != "" {
+			r.mu.Lock()
+			r.toolCalls[u.ToolCallID] = true
+			if u.Title != "" {
+				r.toolTitles[u.ToolCallID] = u.Title
+			}
+			r.mu.Unlock()
+		}
+		up := proto.RunUpdate{RunID: id, Kind: proto.UpdateTool, ToolCallID: u.ToolCallID, Title: u.Title, Status: u.Status, ToolKind: u.ToolKind}
+		if u.Status == "completed" || u.Status == "failed" {
+			up.Output = toolOutput(u.Raw)
+		}
+		r.d.ob.reliable(proto.New(proto.TRunUpdate, up))
+		if what := r.trackFailure(u.ToolCallID, u.Title, u.Status); what != "" {
+			r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{RunID: id, Kind: proto.UpdateStuck, Text: what}))
+		}
 	case "plan":
 		plan := make([]proto.PlanEntry, len(u.Plan))
 		for i, e := range u.Plan {
@@ -676,7 +779,11 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 	if note := assess.Note(); note != "" {
 		why = strings.TrimSpace(note + "\n" + why)
 	}
-	opt, note := r.ask(title, req.ToolCall.Kind, permissionDetail(why, req.ToolCall.RawInput), cat, review, toOptions(req.Options))
+	detail := permissionDetail(why, req.ToolCall.RawInput)
+	if script := scriptPreview(policy.CommandOf(preq), workdir); script != "" {
+		detail = truncate(detail, detailRunes) + "\n\n" + script
+	}
+	opt, note := r.ask(title, req.ToolCall.Kind, detail, cat, review, toOptions(req.Options))
 	if kind := optionKind(req.Options, opt); kind == "reject_once" || kind == "reject_always" {
 		r.noteRefusal(title, note)
 	}
@@ -711,6 +818,7 @@ func (r *run) noteRefusal(title, note string) {
 	}
 	r.mu.Lock()
 	r.refused = append(r.refused, s)
+	r.refusedAll = append(r.refusedAll, s)
 	r.mu.Unlock()
 }
 
@@ -784,15 +892,53 @@ func (r *run) ask(title, toolKind, detail string, cat policy.Category, review st
 		ApprovalID: approvalID, RunID: r.spec.RunID, Title: title, ToolKind: toolKind,
 		Detail: detail, Options: opts, Category: string(cat), Review: review,
 	}))
+	// Waiting for the user can take hours: give the machine's slot to other
+	// runs meanwhile, and take one again once answered.
+	released := review == "user" && r.releaseSlot()
 	select {
 	case opt := <-ch:
 		r.mu.Lock()
 		note := r.notes[approvalID]
 		r.mu.Unlock()
+		if released && !r.takeSlot() {
+			return "", ""
+		}
 		return opt, note
 	case <-r.ctx.Done():
 		return "", ""
 	}
+}
+
+// takeSlot waits for one of the machine's slots; false when the run was
+// stopped meanwhile. A run that holds one already keeps it.
+func (r *run) takeSlot() bool {
+	r.mu.Lock()
+	held := r.slot
+	r.mu.Unlock()
+	if held {
+		return true
+	}
+	select {
+	case r.d.sem <- struct{}{}:
+		r.mu.Lock()
+		r.slot = true
+		r.mu.Unlock()
+		return true
+	case <-r.ctx.Done():
+		return false
+	}
+}
+
+// releaseSlot gives the run's slot back; false when it held none.
+func (r *run) releaseSlot() bool {
+	r.mu.Lock()
+	held := r.slot
+	r.slot = false
+	r.mu.Unlock()
+	if held {
+		<-r.d.sem
+	}
+	return held
 }
 
 func (r *run) decide(approvalID, optionID, note string) {

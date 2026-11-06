@@ -256,6 +256,7 @@ const (
 	UpdateTool    = "tool"    // a tool call started or changed
 	UpdatePlan    = "plan"    // the agent's plan
 	UpdateStatus  = "status"  // a short status line from sous itself
+	UpdateStuck   = "stuck"   // the node saw the agent fail the same tool call again and again (Text: what)
 	UpdateText    = "text"    // agent message text (run.output)
 	UpdateThought = "thought" // agent reasoning text (run.output)
 	// UpdatePermission records what the node's policy decided on its own:
@@ -279,6 +280,9 @@ type RunUpdate struct {
 	ToolKind   string      `json:"tool_kind,omitempty"`
 	Plan       []PlanEntry `json:"plan,omitempty"`
 	Category   string      `json:"category,omitempty"`
+	// Output is what a finished tool call returned, cut short and with
+	// secrets masked. It goes to the run's log only, not the event log.
+	Output string `json:"output,omitempty"`
 }
 
 // RunDiff carries the run's diff in chunks; Final marks the last one.
@@ -305,7 +309,26 @@ type RunEnded struct {
 	// to load when the next question comes.
 	Git       *GitResult `json:"git,omitempty"`
 	SessionID string     `json:"session_id,omitempty"`
+	// Outcome qualifies a work run that "succeeded": no_action when the
+	// agent ended its turn without doing anything (no tool call, no change).
+	Outcome string `json:"outcome,omitempty"`
+	// ErrorKind classifies a failure: agent_quota, agent_rate_limit,
+	// agent_not_logged_in, agent_unavailable (empty: anything else).
+	ErrorKind string `json:"error_kind,omitempty"`
+	// Refused lists the operations refused during the run (by the user,
+	// the approver or the policy), with the reason when one was given.
+	Refused []string `json:"refused,omitempty"`
 }
+
+// Run outcomes and error kinds (RunEnded).
+const (
+	OutcomeNoAction = "no_action"
+
+	ErrAgentQuota       = "agent_quota"
+	ErrAgentRateLimit   = "agent_rate_limit"
+	ErrAgentNotLoggedIn = "agent_not_logged_in"
+	ErrAgentUnavailable = "agent_unavailable"
+)
 
 type Option struct {
 	OptionID string `json:"option_id"`

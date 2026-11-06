@@ -54,7 +54,12 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 	s := &Server{cfg: cfg, log: log, auth: a, mux: http.NewServeMux(), files: attach.Open(filepath.Join(cfg.DataDir, "attachments"))}
 	a.Routes(s.mux)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version.Version})
+		// Both builds, so a stale page (an old build/web) shows (review 4.23).
+		out := map[string]any{"status": "ok", "version": version.Version, "commit": version.BuildCommit()}
+		if web, ok := version.ReadWeb(cfg.WebDir); ok {
+			out["web"] = web
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 	protect := func(pattern string, h http.HandlerFunc) { s.mux.Handle(pattern, a.Require(h)) }
 	protect("GET /api/v1/threads", s.listThreads)
@@ -336,7 +341,12 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": days, "since": since.UnixMilli(), "usage": rows, "daily": daily})
+	byProject, err := s.log.Store.UsageByProject(r.Context(), since)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "since": since.UnixMilli(), "usage": rows, "daily": daily, "by_project": byProject})
 }
 
 // static serves the built PWA with a fallback to index.html for client routes.

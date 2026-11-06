@@ -41,6 +41,9 @@ type Repo struct {
 	// Heads are the remote-tracking branches of origin and their commits
 	// ("main": "<sha>"), as of the last fetch or push; for deploy branches.
 	Heads map[string]string `json:"heads,omitempty"`
+	// HeadTimes are the commit times (unix seconds) of Heads: which machine
+	// knows the newest commit of a deploy branch.
+	HeadTimes map[string]int64 `json:"head_times,omitempty"`
 }
 
 // GitState is where a checkout stands against its upstream
@@ -60,6 +63,9 @@ type GitState struct {
 const (
 	OpRepoSync = "repo.sync" // {root} -> RepoResult
 	OpRepoWIP  = "repo.wip"  // {root} -> RepoResult
+	// OpRepoFetch fetches origin (remote-tracking branches only) and
+	// reports a new scan: "check the deploy branch now".
+	OpRepoFetch = "repo.fetch" // {root} -> RepoResult
 )
 
 type RepoArgs struct {
@@ -135,6 +141,7 @@ const (
 	GitUndo    = "undo"    // undo the last operation sous did on Branch that is not pushed
 	GitDiscard = "discard" // delete the task's worktree and branch
 	GitRestore = "restore" // put an in-place task's directory back to its snapshot
+	GitHealth  = "health"  // run a deploy's health check (Command) in the deploy directory
 )
 
 // GitOp is what a git run does. Repository is RunStart.RepoPath; a task's
@@ -151,6 +158,7 @@ type GitOp struct {
 	Body       string `json:"body,omitempty"`        // pr
 	BaseCommit string `json:"base_commit,omitempty"` // where the task started (squash, restore)
 	InPlace    bool   `json:"in_place,omitempty"`    // the task worked in the project directory
+	Command    string `json:"command,omitempty"`     // health: the project's health check command
 }
 
 // GitResult is what a git run did.
@@ -166,7 +174,10 @@ type GitResult struct {
 	// TaskBranch is the task's branch as it was when a merge deleted it, so
 	// an undo can bring it back.
 	TaskBranch string `json:"task_branch,omitempty"`
-	Message    string `json:"message"` // one sentence for the user
+	// TaskTip is the task branch's commit before the merge rebased it: what
+	// an undo puts the branch back to (review L3).
+	TaskTip string `json:"task_tip,omitempty"`
+	Message string `json:"message"` // one sentence for the user
 }
 
 // GitStatus is where a checkout stands right now, for the supervisor to

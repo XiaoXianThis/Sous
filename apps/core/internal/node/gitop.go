@@ -37,6 +37,8 @@ func (r *run) gitOp() {
 		res, err = r.undoOp(ctx, op)
 	case op.Op == proto.GitRestore:
 		res, err = r.restoreOp(ctx, op)
+	case op.Op == proto.GitHealth:
+		res, err = r.healthOp(ctx, op)
 	default:
 		err = fmt.Errorf("不认识的 git 操作 %q", op.Op)
 	}
@@ -146,7 +148,7 @@ func (r *run) taskGitOp(ctx context.Context, op *proto.GitOp) (proto.GitResult, 
 		r.status("正在合并到 " + op.Into)
 		res, err = workspace.MergeTask(ctx, ws, op.Into, firstNonEmpty(op.Message, r.spec.Title), op.Squash)
 		if err == nil {
-			log.Add(workspace.GitLogEntry{Repo: ws.Repo, Op: proto.GitMerge, Branch: op.Into, Before: res.Before, After: res.After, TaskBranch: res.TaskBranch})
+			log.Add(workspace.GitLogEntry{Repo: ws.Repo, Op: proto.GitMerge, Branch: op.Into, Before: res.Before, After: res.After, TaskBranch: res.TaskBranch, TaskTip: res.TaskTip})
 		}
 		return res, err
 
@@ -242,10 +244,10 @@ func (r *run) commitInPlace(ctx context.Context, op *proto.GitOp) (proto.GitResu
 	dir := r.spec.RepoPath
 	r.markStarted(workspace.Prepared{Dir: dir})
 	if err := r.allow("在 "+dir+" 提交任务的改动", "git commit", dir,
-		"只提交这个任务改过的文件（和任务开始前的快照相比），提交到这个目录当前检出的分支；你自己的其他改动不动。"); err != nil {
+		"只提交这个任务改过的文件、按任务结束时的内容提交，提交到这个目录当前检出的分支；你自己的改动（包括任务结束后对同一文件的改动）留在工作区，不会被提交。"); err != nil {
 		return proto.GitResult{Op: proto.GitCommit}, err
 	}
-	res, err := workspace.CommitInPlace(ctx, r.d.root, dir, op.BaseCommit, firstNonEmpty(op.Message, r.spec.Title))
+	res, err := workspace.CommitInPlace(ctx, r.d.root, dir, op.BaseCommit, r.spec.TaskID, firstNonEmpty(op.Message, r.spec.Title))
 	if err == nil && res.Before != res.After && res.After != "" {
 		top := dir
 		if t, e := workspace.Run(ctx, dir, "git", "rev-parse", "--show-toplevel"); e == nil {
@@ -263,12 +265,12 @@ func (r *run) restoreOp(ctx context.Context, op *proto.GitOp) (proto.GitResult, 
 	if op.BaseCommit == "" {
 		return res, errors.New("这个任务没有快照，无法撤销")
 	}
-	cmd := "git reset --hard " + op.BaseCommit
-	if err := r.allow("把 "+dir+" 恢复到任务开始前", cmd, dir,
-		"用任务开始前的快照恢复 "+dir+"：改过的文件恢复原样，任务新增的文件会被删除；被忽略的文件（依赖、构建产物）不动。"); err != nil {
+	cmd := "git checkout " + op.BaseCommit + " -- <任务改过的文件>; rm <任务新增的文件>"
+	if err := r.allow("把 "+dir+" 里这个任务的改动撤销", cmd, dir,
+		"只撤销这个任务改过的文件：改过的恢复成任务开始前的样子，任务新建的删除。你自己新建或改过的文件不动；任务结束后又被改过的文件也不动，会列出来。"); err != nil {
 		return res, err
 	}
-	stat, err := workspace.Restore(ctx, r.d.root, dir, op.BaseCommit)
+	stat, err := workspace.Restore(ctx, r.d.root, dir, op.BaseCommit, r.spec.TaskID)
 	if err != nil {
 		return res, err
 	}

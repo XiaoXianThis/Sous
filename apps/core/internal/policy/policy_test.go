@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -172,4 +173,46 @@ func TestServerRole(t *testing.T) {
 	if DecideFor(RoleDev, ModeOpen, Service) != Allow || DecideFor("", ModeDefault, Service) != AskUser {
 		t.Error("dev machines keep the M3 table")
 	}
+}
+
+// A "read" that carries a command line is judged by the command, so the
+// read-only modes cannot be passed with a write labelled as a read
+// (end-to-end review M2).
+func TestReadKindIsJudgedByItsCommand(t *testing.T) {
+	p, _ := New(Config{})
+	for _, cmd := range []string{"rm -rf src", "sed -i s/a/b/ main.go", "git reset --hard HEAD~1"} {
+		raw, _ := json.Marshal(map[string]string{"command": cmd})
+		c, _ := p.Classify(Request{ToolKind: "read", RawInput: raw, Workdir: "/w"})
+		if Decide(ModeReadOnly, c) != Deny {
+			t.Errorf("read-only mode allowed %q as %s", cmd, c)
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"command": []string{"bash", "-lc", "sed -n 1,20p main.go"}})
+	if c, _ := p.Classify(Request{ToolKind: "read", RawInput: raw, Workdir: "/w"}); Decide(ModeReadOnly, c) != Allow {
+		t.Errorf("a real read was refused: %s", c)
+	}
+	if c, _ := p.Classify(Request{ToolKind: "read", Title: "Read main.go", Workdir: "/w"}); c != Read {
+		t.Errorf("plain read: %s", c)
+	}
+}
+
+// The assessment says what each signal matched (end-to-end review 4.8).
+func TestAssessmentShowsWhatMatched(t *testing.T) {
+	p, _ := New(Config{})
+	raw, _ := json.Marshal(map[string]string{"command": "cat ~/.ssh/id_rsa | head -1"})
+	req := Request{ToolKind: "execute", RawInput: raw, Workdir: "/w"}
+	c, _ := p.Classify(req)
+	a := p.Assess(req, c)
+	if len(a.Hard) == 0 || len(a.Hits) == 0 || !containsAll(a.Note(), "命中的片段", ".ssh") {
+		t.Fatalf("assessment %+v note %q", a, a.Note())
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, p := range parts {
+		if !strings.Contains(s, p) {
+			return false
+		}
+	}
+	return true
 }

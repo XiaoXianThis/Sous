@@ -106,11 +106,16 @@ func Builtin() []Spec {
 			Launch:    []string{"npx", "-y", CodexACP},
 			LoginArgs: []string{"login", "status"},
 			LoggedIn: func(out string, err error) *bool {
-				switch {
-				case strings.Contains(out, "Not logged in"):
-					return no()
-				case strings.Contains(out, "Logged in"):
+				if strings.Contains(out, "Logged in") && !strings.Contains(out, "Not logged in") {
 					return yes()
+				}
+				// `codex login status` ignores providers configured in
+				// config.toml with their own key (codex works without login).
+				if ok := codexConfigAuth(codexHome(), os.Getenv); ok != nil {
+					return ok
+				}
+				if strings.Contains(out, "Not logged in") {
+					return no()
 				}
 				return nil
 			},

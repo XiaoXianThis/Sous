@@ -13,6 +13,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
@@ -78,6 +79,15 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	}
 	switch r.Status {
 	case event.RunStatusSucceeded:
+		if r.Outcome == proto.OutcomeNoAction && r.Purpose == event.PurposeWork {
+			return e.noAction(ctx, t, r)
+		}
+		if len(r.Refused) > 0 && r.DiffStat == "" && r.Purpose == event.PurposeWork {
+			return e.refusedNothingDone(ctx, t, r)
+		}
+		if t.Kind == event.TaskKindOps && t.DeployCommit != "" && r.Purpose == event.PurposeWork {
+			return e.checkDeploy(ctx, t, r)
+		}
 		switch t.Review {
 		case event.ReviewModel:
 			if t.Status != event.TaskReview {
@@ -102,15 +112,78 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 		return e.transition(ctx, t, event.TaskPlanned, "执行被取消："+firstNonEmpty(r.Error, "已取消"), "", event.ActorSystem)
 	default:
 		reason := firstNonEmpty(r.Error, r.Summary, "agent 没有完成")
+		if text := ErrorKindText(r.ErrorKind, r.Agent); text != "" {
+			reason = text
+		}
 		if r.Status == event.RunStatusInterrupted {
 			reason = "执行被中断：" + reason
 		}
+		reason = truncate(reason, 300)
 		if err := e.transition(ctx, t, event.TaskFailed, reason, "", event.ActorSystem); err != nil {
 			return err
 		}
-		e.report(ctx, t, fmt.Sprintf("任务「%s」失败了：%s\n\n可以让我重试，或者换一个 agent、换一台机器再做。", t.Title, reason))
+		e.report(ctx, t, fmt.Sprintf("任务「%s」失败了：%s%s\n\n可以让我重试，或者换一个 agent、换一台机器再做。", t.Title, reason, refusedNote(r)))
 		return nil
 	}
+}
+
+// ErrorKindText says in plain words why an agent stopped (proto.ErrAgent*);
+// the agent's own message stays on the run.
+func ErrorKindText(kind, agent string) string {
+	who := firstNonEmpty(agent, "agent")
+	switch kind {
+	case proto.ErrAgentQuota:
+		return who + " 的额度用完了（套餐或用量上限），什么都没做。换一个 agent，或者等额度恢复后重试"
+	case proto.ErrAgentRateLimit:
+		return who + " 被限流了，什么都没做。稍后重试，或者换一个 agent"
+	case proto.ErrAgentNotLoggedIn:
+		return who + " 在这台机器上没有登录。在机器页登录后重试，或者换一个 agent"
+	case proto.ErrAgentUnavailable:
+		return who + " 的服务暂时不可用。稍后重试，或者换一个 agent"
+	}
+	return ""
+}
+
+// refusedNote lists what was refused in a run, for a report.
+func refusedNote(r store.Run) string {
+	if len(r.Refused) == 0 {
+		return ""
+	}
+	return "\n\n这次执行中被拒绝的操作：" + strings.Join(r.Refused, "；")
+}
+
+// refusedNothingDone stops a task whose run had operations refused and left
+// no change: the refusal may well mean "do not do this", which is not done
+// and not for an automatic retry either (end-to-end review 4.2).
+func (e *Engine) refusedNothingDone(ctx context.Context, t store.Task, r store.Run) error {
+	reason := truncate("执行中有操作被拒绝，没有留下改动："+strings.Join(r.Refused, "；"), 300)
+	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
+		return err
+	}
+	e.followup(ctx, t, "refused:"+r.ID, "任务的操作被拒绝",
+		fmt.Sprintf("任务 %s「%s」执行中这些操作被拒绝了：%s。agent 没有留下改动就停了，所以没有算作完成。它说：%s\n\n"+
+			"拒绝可能就是用户不想这么做：不要直接重试，先问用户想怎么办（换个做法、取消任务，还是允许后重试）。（这是 sous 的自动提醒，不是用户发的消息。）",
+			t.ID, t.Title, strings.Join(r.Refused, "；"), truncate(firstNonEmpty(r.Summary, "（什么也没说）"), 200)))
+	return nil
+}
+
+// noAction stops a task whose agent ended its turn without doing anything:
+// no tool call, no change, a few words. That is neither done nor worth
+// reviewing; the supervisor decides what next (report 4.1).
+func (e *Engine) noAction(ctx context.Context, t store.Task, r store.Run) error {
+	said := truncate(strings.TrimSpace(r.Summary), 200)
+	reason := "agent 没做任何操作就结束了"
+	if said != "" {
+		reason += "，它说：" + said
+	}
+	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
+		return err
+	}
+	e.followup(ctx, t, "no-action:"+r.ID, "任务没有实际执行",
+		fmt.Sprintf("任务 %s「%s」的 agent（%s）没调用任何工具、没有改动就结束了这一轮，所以没有算作完成。它说：%s\n\n"+
+			"判断怎么继续：如果是 agent 的额度、登录或服务出了问题，换一个 agent 或机器重试（task_dispatch）；如果它其实是在等更清楚的说明，补充说明后重试；需要用户决定时用 notify 简短提醒一次。（这是 sous 的自动提醒，不是用户发的消息。）",
+			t.ID, t.Title, firstNonEmpty(r.Agent, "agent"), firstNonEmpty(said, "（什么也没说）")))
+	return nil
 }
 
 // finish closes a task whose work is done (and reviewed, if it was to be).
@@ -381,15 +454,22 @@ func (e *Engine) applyVerdict(ctx context.Context, t store.Task, work store.Run,
 		e.report(ctx, t, fmt.Sprintf("任务「%s」受阻：%s\n\n需要你看一下改动，决定怎么继续。", t.Title, reason))
 		return nil
 	}
-	if byUser || t.OnFail == event.OnFailRework {
+	if byUser || (t.OnFail == event.OnFailRework && len(work.Refused) == 0) {
 		return e.queueNext(ctx, t, event.PurposeWork)
 	}
 	reason := "验收没有通过：" + v.Reason
+	hint := ""
+	if len(work.Refused) > 0 {
+		// Something was refused in this round: doing it again would ask the
+		// same thing again. What the refusal meant is for the user to say.
+		reason += "（执行中有操作被拒绝，没有自动返工）"
+		hint = "执行中被拒绝的操作：" + strings.Join(work.Refused, "；") + "。拒绝可能就是用户不想这么做，不要直接让它照原样返工；先问用户想怎么办。\n\n"
+	}
 	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
 		return err
 	}
 	e.followup(ctx, t, "review-failed:"+work.ID, "任务验收没有通过",
-		fmt.Sprintf("任务 %s「%s」验收没有通过：%s\n\n判断怎么继续：让它照着意见返工（task_dispatch），换一个 agent 或岗位，或者问用户。"+
+		fmt.Sprintf("任务 %s「%s」验收没有通过：%s\n\n"+hint+"判断怎么继续：让它照着意见返工（task_dispatch），换一个 agent 或岗位，或者问用户。"+
 			"需要用户决定时用 notify 简短提醒一次；能自己推进就直接做。（这是 sous 的自动提醒，不是用户发的消息。）", t.ID, t.Title, v.Reason))
 	return nil
 }
@@ -400,6 +480,9 @@ func (e *Engine) verdict(ctx context.Context, t store.Task, r store.Run) (event.
 	fmt.Fprintf(&b, "## 任务\n%s\n\n%s\n\n", t.Title, t.Detail)
 	fmt.Fprintf(&b, "## 交给 agent 的说明\n%s\n\n", r.Prompt)
 	fmt.Fprintf(&b, "## agent 的总结\n%s\n\n", firstNonEmpty(r.Summary, "（没有总结）"))
+	if len(r.Refused) > 0 {
+		fmt.Fprintf(&b, "## 执行中被拒绝的操作\n%s\n\n（被拒绝的操作是用户或安全规则不允许的；agent 因此没做的部分，不要当成偷懒。）\n\n", strings.Join(r.Refused, "\n"))
+	}
 	if t.Place == event.PlaceWorktree || t.Place == event.PlaceInPlace {
 		diff, _ := os.ReadFile(e.Nodes.DiffPath(r.ID))
 		fmt.Fprintf(&b, "## 改动统计\n%s\n\n", firstNonEmpty(r.DiffStat, "没有改动"))
@@ -490,11 +573,17 @@ func (e *Engine) doneReport(ctx context.Context, t store.Task, work store.Run) s
 	if work.DiffStat != "" {
 		fmt.Fprintf(&b, "\n\n改动：%s", work.DiffStat)
 	}
+	if t.Kind == event.TaskKindOps && t.DeployCommit != "" {
+		if proj, err := e.store().Project(ctx, t.ProjectID); err == nil && (proj.Deploy == nil || proj.Deploy.Health == "") {
+			b.WriteString("\n\n项目没有配置健康检查，部署结果没有经过验证；可以在项目设置里加一条健康检查命令。")
+		}
+	}
 	if note := firstNonEmpty(t.ReviewNote, work.Summary); note != "" {
 		fmt.Fprintf(&b, "\n\n%s", truncate(note, 800))
 	} else if t.Kind == event.TaskKindOps {
 		b.WriteString("\n\nagent 没有写总结")
 	}
+	b.WriteString(refusedNote(work))
 	return b.String()
 }
 
@@ -620,4 +709,60 @@ func (e *Engine) reviewPrompt(ctx context.Context, t store.Task) string {
 	b.WriteString("\n你只能读文件和运行测试、构建这类安全命令，不能改任何东西。按任务说明和完成标准检查：该跑的测试跑一遍，看改动是不是做了要求的事、有没有明显的问题。\n" +
 		"最后单独一行输出结论 JSON：{\"pass\": true 或 false, \"reason\": \"一两句话，不通过时写清楚要改什么\"}")
 	return b.String()
+}
+
+// checkDeploy follows a deploy's agent run with the project's health check,
+// run by the node itself; only a passing check makes the deploy done and
+// records the commit as deployed. Without a health check the deploy is done
+// unverified, and the report says so.
+func (e *Engine) checkDeploy(ctx context.Context, t store.Task, work store.Run) error {
+	proj, err := e.store().Project(ctx, t.ProjectID)
+	if err != nil || proj.Deploy == nil || strings.TrimSpace(proj.Deploy.Health) == "" {
+		return e.finish(ctx, t, work, "")
+	}
+	thread := t.OriginThreadID
+	if thread == "" {
+		thread, _ = e.store().MainThreadID(ctx)
+	}
+	cr := nodehub.CreateRun{
+		ThreadID: thread, Purpose: event.PurposeGit, TaskID: t.ID, NodeID: work.NodeID, RepoPath: work.RepoPath,
+		Title: t.Title, Agent: "sous",
+		PermissionMode: firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault),
+		Git:            &proto.GitOp{Op: proto.GitHealth, Command: strings.TrimSpace(proj.Deploy.Health)},
+	}
+	if _, err := e.Nodes.Create(ctx, cr); err != nil {
+		return e.healthFailed(ctx, t, "健康检查没能开始："+err.Error())
+	}
+	return e.transition(ctx, t, event.TaskRunning, "部署命令执行完了，正在做健康检查", "", event.ActorSystem, waiting("", "health"))
+}
+
+// afterHealth finishes a deploy by its health check.
+func (e *Engine) afterHealth(ctx context.Context, r store.Run) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, err := e.store().Task(ctx, r.TaskID)
+	if err != nil || final(t.Status) {
+		return nil
+	}
+	if r.Status == event.RunStatusSucceeded {
+		msg := "部署完成"
+		if r.GitResult != nil && r.GitResult.Message != "" {
+			msg += "，" + r.GitResult.Message
+		}
+		return e.finish(ctx, t, e.lastRun(ctx, t.ID, event.PurposeWork), truncate(msg, 300))
+	}
+	why := firstNonEmpty(r.Error, r.Summary, "原因不明")
+	if r.GitResult != nil && r.GitResult.Message != "" {
+		why = r.GitResult.Message
+	}
+	return e.healthFailed(ctx, t, why)
+}
+
+func (e *Engine) healthFailed(ctx context.Context, t store.Task, why string) error {
+	reason := truncate("部署后的健康检查没有通过："+why, 300)
+	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
+		return err
+	}
+	e.report(ctx, t, fmt.Sprintf("部署任务「%s」没有完成：%s\n\n这个提交没有记成已部署。可以看一下服务器上的情况，修好后让我重试这个任务。", t.Title, why))
+	return nil
 }

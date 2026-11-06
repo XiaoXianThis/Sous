@@ -323,6 +323,10 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 			payload.Plan = plan
 		}
 		c.appendLog(p)
+		if p.Kind == proto.UpdateStuck {
+			go c.hub.stuck(context.WithoutCancel(ctx), ref, p.RunID, p.Text)
+			return nil
+		}
 		if f.T == proto.TRunOutput {
 			c.hub.log.Emit(ref.stamp(event.New(event.RunOutput, event.ActorSystem, "", payload), p.RunID))
 			return nil
@@ -354,6 +358,7 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		ev := event.New(event.RunEnded, event.ActorSystem, "", event.RunEndedPayload{
 			Status: p.Status, StopReason: p.StopReason, Summary: p.Summary, DiffStat: p.DiffStat, Error: p.Error,
 			PRURL: p.PRURL, Conflict: p.Conflict, Git: p.Git, SessionID: p.SessionID,
+			Outcome: p.Outcome, ErrorKind: p.ErrorKind, Refused: p.Refused,
 		})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 
@@ -459,6 +464,9 @@ func (c *nodeConn) appendLog(p proto.RunUpdate) {
 		return
 	case proto.UpdateTool:
 		line = fmt.Sprintf("\n[%s] %s %s\n", p.Status, p.ToolKind, p.Title)
+		if p.Output != "" {
+			line += indent(p.Output) + "\n"
+		}
 	case proto.UpdatePlan:
 		var b strings.Builder
 		b.WriteString("\n[plan]\n")
@@ -468,6 +476,8 @@ func (c *nodeConn) appendLog(p proto.RunUpdate) {
 		line = b.String()
 	case proto.UpdateStatus:
 		line = "\n[sous] " + p.Text + "\n"
+	case proto.UpdateStuck:
+		line = "\n[sous] 卡住了：" + p.Text + "\n"
 	case proto.UpdatePermission:
 		line = fmt.Sprintf("\n[sous] 权限：%s（%s）%s\n", map[string]string{"allow": "自动放行", "deny": "拒绝"}[p.Status], p.Category, p.Title)
 	}
@@ -521,4 +531,14 @@ func (c *nodeConn) updateResult(ctx context.Context, f proto.Frame, p proto.Node
 		return err
 	}
 	return nil
+}
+
+// indent prefixes every line of a tool's output, so it reads as part of the
+// tool call above it in the run's log.
+func indent(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = "    " + l
+	}
+	return strings.Join(lines, "\n")
 }

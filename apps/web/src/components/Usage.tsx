@@ -79,6 +79,24 @@ export default function UsagePanel({ onClose }: { onClose: () => void }) {
             )}
             <p className="text-muted text-[13px] m-0">这里只统计 sous 自己的模型调用（主管、验收、审批、巡检）。编程 agent 的用量在各自的账户里。</p>
           </section>
+
+          {!!data.by_project?.length && (
+            <section className="grid gap-1.5">
+              <h3 className="m-0 text-[14px]">按项目</h3>
+              <table className="border-collapse text-[13px] w-full">
+                <thead><tr><th className="text-left text-muted font-medium py-[3px] pr-2.5">项目</th><th className="text-left text-muted font-medium py-[3px] pr-2.5">调用</th><th className="text-left text-muted font-medium py-[3px] pr-2.5">输入</th><th className="text-left text-muted font-medium py-[3px] pr-2.5">输出</th></tr></thead>
+                <tbody>
+                  {data.by_project.map((u) => (
+                    <tr key={u.project_id || 'main'}>
+                      <td className="py-[3px] pr-2.5">{u.project_id === 'misc' ? '杂项' : u.project_id ? u.name || u.project_id : '主线对话和其他'}</td>
+                      <td className="py-[3px] pr-2.5">{u.calls}</td><td className="py-[3px] pr-2.5">{tokens(u.input_tokens)}</td><td className="py-[3px] pr-2.5">{tokens(u.output_tokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-muted text-[13px] m-0">任务的验收、审批算在任务的项目上；项目对话里主管的调用算在那个项目上。</p>
+            </section>
+          )}
         </>
       )}
     </Sheet>

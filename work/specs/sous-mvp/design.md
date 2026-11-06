@@ -239,7 +239,7 @@ agent 选择：task.agent_pref > 项目默认 > 全局默认（可配置）
 | agent | 启动方式（`internal/agents`） | 握手 | 登录检测 | 备注 |
 |---|---|---|---|---|
 | Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.100.0` | ✅ session/new 返回 modes：`default`（每步询问）、`acceptEdits`、`plan`、`auto`、`bypassPermissions` | `claude auth status` 的 JSON `loggedIn` | 命令行版要单独登录，桌面 App 的登录不通用 |
-| Codex | `npx -y @agentclientprotocol/codex-acp@2.5.0` | ✅ | `codex login status`（"Logged in" / "Not logged in"） | |
+| Codex | `npx -y @agentclientprotocol/codex-acp@2.5.0` | ✅ | `codex login status`（"Logged in" / "Not logged in"）；说未登录时再看 `config.toml` 选中的 provider：`requires_openai_auth` 不为 true 且带 `experimental_bearer_token`、`env_key` 已设或无需凭据时算已登录（2026-11-06 在 Mac 上用自定义 provider 实测 codex-acp 能正常会话） | |
 | Cursor | `cursor-agent acp` | ✅ 需要先调用 `authenticate`（methodId `cursor_login`）；`initialize` 的 `clientInfo` 必须带 `version` | `cursor-agent status` | 模式是 `agent` / `plan` / `ask`，其中 `ask` 是只读问答，不能当“每步询问”用，sous 固定用 `agent`（它在执行 shell 命令前会请求权限）。免费账号的默认模型不可用，要在 `node.json` 里覆盖成 `["cursor-agent", "--model", "auto", "acp"]`，否则只报 `WritableIterable is closed`。认证要读钥匙串，daemon 必须以用户身份在沙盒外运行（2026-11-04 实测跑通一般任务） |
 | OpenCode | `opencode acp`，并通过 `OPENCODE_CONFIG_CONTENT` 把 edit、bash、webfetch、external_directory 设成 `ask` | ✅ 返回 `configOptions`（可选模型），没有 `modes` | 无法预先判断 | 免费模型有额度限制（2026-11-04 实测全部用完）。审批选项 id 是 `once` / `always` / `reject`。模型在 opencode.json 或 `OPENCODE_CONFIG=<文件>` 里选 |
 | Kiro | `kiro-cli acp`（未验证） | — | — | 本机只装了 Kiro IDE，没有 Kiro CLI |

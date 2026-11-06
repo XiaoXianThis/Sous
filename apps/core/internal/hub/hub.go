@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/mcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -228,7 +229,8 @@ func (h *Hub) Run(ctx context.Context) error {
 		}
 		errCh <- srv.ListenAndServe()
 	}()
-	slog.Info("sous-hub listening", "addr", h.Cfg.Listen, "public_url", h.Cfg.PublicURL, "dev", h.Cfg.Dev)
+	slog.Info("sous-hub listening", "addr", h.Cfg.Listen, "public_url", h.Cfg.PublicURL, "dev", h.Cfg.Dev, "commit", version.BuildCommit())
+	logWebBuild(h.Cfg.WebDir)
 
 	select {
 	case err := <-errCh:
@@ -276,4 +278,22 @@ func webTools(cfg *config.Hub) []tool.Tool {
 	}
 	slog.Info("web_search ready", "engine", s.Name())
 	return append(tools, tool.WebSearch{Searcher: s})
+}
+
+// logWebBuild says which build of the page the Hub serves, and warns when it
+// is not from the Hub's own commit: a stale build/web (review 4.23).
+func logWebBuild(dir string) {
+	if dir == "" {
+		return
+	}
+	web, ok := version.ReadWeb(dir)
+	if !ok {
+		slog.Warn("sous-hub: the page has no build-info.json; it was built before build info existed, rebuild it with `wok build web`", "web_dir", dir)
+		return
+	}
+	slog.Info("sous-hub: serving the page", "web_commit", web.Commit, "web_dirty", web.Dirty, "built_at", web.BuiltAt)
+	hub := strings.TrimSuffix(version.BuildCommit(), "-dirty")
+	if hub != "" && web.Commit != "" && !strings.HasPrefix(hub, web.Commit) && !strings.HasPrefix(web.Commit, hub) {
+		slog.Warn("sous-hub: the page was built from another commit than the Hub; rebuild it with `wok build web`", "hub_commit", hub, "web_commit", web.Commit)
+	}
 }

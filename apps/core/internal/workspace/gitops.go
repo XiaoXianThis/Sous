@@ -103,6 +103,7 @@ func MergeTask(ctx context.Context, p Prepared, into, message string, squash boo
 	if _, err := Commit(ctx, p, message); err != nil {
 		return res, fmt.Errorf("提交剩下的改动失败：%w", err)
 	}
+	res.TaskTip, _ = git(ctx, p.Dir, "rev-parse", "HEAD")
 	before, _ := git(ctx, p.Repo, "rev-parse", "refs/heads/"+into)
 	res.Before = before
 	if n, _ := git(ctx, p.Dir, "rev-list", "--count", into+"..HEAD"); n == "0" {
@@ -302,21 +303,27 @@ func Status(ctx context.Context, dir string) (proto.GitStatus, error) {
 	return st, nil
 }
 
-// Heads lists origin's remote-tracking branches and their commits, at most
-// 50, newest first.
-func Heads(ctx context.Context, dir string) map[string]string {
-	out, err := git(ctx, dir, "for-each-ref", "--sort=-committerdate", "--count=50", "--format=%(refname:strip=3) %(objectname)", "refs/remotes/origin")
+// Heads lists origin's remote-tracking branches with their commits and the
+// commits' times (unix seconds), at most 50, newest first.
+func Heads(ctx context.Context, dir string) (map[string]string, map[string]int64) {
+	out, err := git(ctx, dir, "for-each-ref", "--sort=-committerdate", "--count=50", "--format=%(refname:strip=3) %(objectname) %(committerdate:unix)", "refs/remotes/origin")
 	if err != nil || out == "" {
-		return nil
+		return nil, nil
 	}
-	heads := map[string]string{}
+	heads, times := map[string]string{}, map[string]int64{}
 	for _, line := range strings.Split(out, "\n") {
-		name, sha, ok := strings.Cut(line, " ")
-		if ok && name != "HEAD" {
-			heads[name] = sha
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] == "HEAD" {
+			continue
+		}
+		heads[f[0]] = f[1]
+		if len(f) > 2 {
+			if t, err := strconv.ParseInt(f[2], 10, 64); err == nil {
+				times[f[0]] = t
+			}
 		}
 	}
-	return heads
+	return heads, times
 }
 
 // GitLog is the record of git operations sous did on one machine, kept to
@@ -335,6 +342,7 @@ type GitLogEntry struct {
 	Before     string `json:"before"`
 	After      string `json:"after"`
 	TaskBranch string `json:"task_branch,omitempty"` // merge: the task branch it deleted
+	TaskTip    string `json:"task_tip,omitempty"`    // merge: the task branch's commit before the rebase
 	Dir        string `json:"dir,omitempty"`         // commit: the worktree where the branch is
 	Undone     bool   `json:"undone,omitempty"`
 }
@@ -438,7 +446,9 @@ func (l *GitLog) Undo(ctx context.Context, top, branch string) (proto.GitResult,
 	}
 	if e.TaskBranch != "" {
 		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+e.TaskBranch); err != nil {
-			git(ctx, top, "branch", e.TaskBranch, e.After)
+			// The branch as the task left it, not the rebased copy on top
+			// of the target (which carries the target's history too).
+			git(ctx, top, "branch", e.TaskBranch, firstNonEmpty(e.TaskTip, e.After))
 		}
 	}
 	es[idx].Undone = true
@@ -465,4 +475,13 @@ func Branches(ctx context.Context, top string) []string {
 
 func execGit(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+}
+
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

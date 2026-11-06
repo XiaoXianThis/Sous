@@ -53,8 +53,8 @@ func TestInPlaceSnapshotWithoutGit(t *testing.T) {
 		t.Fatalf("diff:\n%s\nstat %s", diff, stat)
 	}
 
-	changed, err := Restore(ctx, root, dir, p.Base)
-	if err != nil || !strings.Contains(changed, "2 files changed") {
+	changed, err := Restore(ctx, root, dir, p.Base, "01JINPLACEAAAAAAAAAAAAAAAA")
+	if err != nil || !strings.Contains(changed, "恢复了 1 个文件，删除了任务新增的 1 个文件") {
 		t.Fatalf("restore %q %v", changed, err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "notes.txt")); string(b) != "old\n" {
@@ -336,8 +336,13 @@ func TestCommitInPlaceTakesOnlyTheTasksFiles(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hi\n"), 0o644)
 	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("changed by the task\n"), 0o644)
+	if err := MarkEnd(ctx, p, "01JINPLACECOMMITAAAAAAAAAA"); err != nil {
+		t.Fatal(err)
+	}
+	// After the task: the user goes on editing a file the task changed.
+	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("changed by the task\nand then by the user\n"), 0o644)
 
-	res, err := CommitInPlace(ctx, root, repo, p.Base, "加 hello")
+	res, err := CommitInPlace(ctx, root, repo, p.Base, "01JINPLACECOMMITAAAAAAAAAA", "加 hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,9 +356,87 @@ func TestCommitInPlaceTakesOnlyTheTasksFiles(t *testing.T) {
 	if st := gitT(t, repo, "status", "--porcelain"); !strings.Contains(st, "A  staged.txt") || !strings.Contains(st, "?? mine.txt") {
 		t.Fatalf("the user's changes moved: %s", st)
 	}
+	// The commit has a.txt as the task left it; the user's later edit stays
+	// in the work tree, uncommitted (review M3).
+	if got := gitT(t, repo, "show", "HEAD:a.txt"); got != "changed by the task" {
+		t.Fatalf("committed a.txt: %q", got)
+	}
+	if unstaged, staged := gitT(t, repo, "diff", "--name-only"), gitT(t, repo, "diff", "--cached", "--name-only"); unstaged != "a.txt" || strings.Contains(staged, "a.txt") {
+		t.Fatalf("the user's edit of a.txt: unstaged %q staged %q", unstaged, staged)
+	}
 	// Nothing left to commit the second time.
-	again, err := CommitInPlace(ctx, root, repo, gitT(t, repo, "rev-parse", "HEAD"), "x")
+	again, err := CommitInPlace(ctx, root, repo, gitT(t, repo, "rev-parse", "HEAD"), "01JINPLACECOMMITAAAAAAAAAA", "x")
 	if err == nil && again.After != "" {
 		t.Fatalf("committed again: %+v", again)
+	}
+}
+
+// An undo of an in-place task touches only the task's files: a file the user
+// created meanwhile stays, and a file the user changed again after the task
+// finished is left alone and listed (review H1).
+func TestRestoreKeepsTheUsersFiles(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old a\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("old b\n"), 0o644)
+	key := "01JRESTOREUSERAAAAAAAAAAAA"
+	p, err := PrepareInPlaceTask(ctx, root, dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The task changes a and b and adds c.
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("task a\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("task b\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("task c\n"), 0o644)
+	if err := MarkEnd(ctx, p, key); err != nil {
+		t.Fatal(err)
+	}
+	// Then the user writes notes and edits b again.
+	os.WriteFile(filepath.Join(dir, "notes.md"), []byte("mine\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("user b\n"), 0o644)
+
+	msg, err := Restore(ctx, root, dir, p.Base, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(n string) string { b, _ := os.ReadFile(filepath.Join(dir, n)); return string(b) }
+	if read("a.txt") != "old a\n" {
+		t.Fatalf("a.txt %q", read("a.txt"))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c.txt")); !os.IsNotExist(err) {
+		t.Fatal("the task's new file is still there")
+	}
+	if read("notes.md") != "mine\n" {
+		t.Fatal("the undo deleted the user's new file")
+	}
+	if read("b.txt") != "user b\n" || !strings.Contains(msg, "b.txt") {
+		t.Fatalf("b.txt %q, message %q", read("b.txt"), msg)
+	}
+}
+
+// Committing an in-place task in a repository without any commit yet makes
+// its first commit, and says "no commits" rather than "detached" when there
+// is no branch at all (review L1).
+func TestCommitInPlaceInAnEmptyRepo(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q", "-b", "main")
+	key := "01JEMPTYREPOAAAAAAAAAAAAAA"
+	p, err := PrepareInPlaceTask(ctx, root, repo, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hi\n"), 0o644)
+	if err := MarkEnd(ctx, p, key); err != nil {
+		t.Fatal(err)
+	}
+	res, err := CommitInPlace(ctx, root, repo, p.Base, key, "first")
+	if err != nil || res.Before != "" || res.After == "" || res.Branch != "main" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got := gitT(t, repo, "show", "HEAD:hello.txt"); got != "hi" {
+		t.Fatalf("hello.txt %q", got)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -143,7 +145,39 @@ func (e *Engine) StartGit(ctx context.Context, in GitInput) (store.Run, error) {
 		return store.Run{}, fmt.Errorf("%w: %s 现在不在线，git 操作要在那台机器上做", ErrConflict, e.nodeName(ctx, cr.NodeID))
 	}
 	cr.Git = op
+	// One git operation at a time per task and per checkout: two at once
+	// fight over the index lock, and the undo log would not match what
+	// happened (review M4). The check and the creation go together.
+	gitStartMu.Lock()
+	defer gitStartMu.Unlock()
+	if busy := e.gitBusy(ctx, cr); busy != "" {
+		return store.Run{}, fmt.Errorf("%w: %s", ErrConflict, busy)
+	}
 	return e.Nodes.Create(ctx, cr)
+}
+
+var gitStartMu sync.Mutex
+
+// gitBusy says which git operation of the same task or the same checkout is
+// still under way, or "".
+func (e *Engine) gitBusy(ctx context.Context, cr nodehub.CreateRun) string {
+	runs, err := e.store().Runs(ctx, store.RunFilter{NodeID: cr.NodeID, Statuses: []string{event.RunStatusQueued, event.RunStatusRunning}})
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Purpose != event.PurposeGit {
+			continue
+		}
+		if (cr.TaskID != "" && r.TaskID == cr.TaskID) || (r.RepoPath != "" && filepath.Clean(r.RepoPath) == filepath.Clean(cr.RepoPath)) {
+			name := gitOpName[gitOpOf(r)]
+			if name == "" {
+				name = "git 操作"
+			}
+			return "上一个「" + name + "」还没结束，等它完成再做下一个"
+		}
+	}
+	return ""
 }
 
 var placeDoing = map[string]string{event.PlaceInPlace: "是就地执行的", event.PlaceScratch: "在临时目录里做的", "": "还没定在哪儿做"}
@@ -262,6 +296,9 @@ func (e *Engine) onRunEvent(ev event.Event) {
 // afterGit records what a git operation did to its task and, when no tool
 // call waits for it any more, reports it in the thread.
 func (e *Engine) afterGit(ctx context.Context, r store.Run) error {
+	if gitOpOf(r) == proto.GitHealth && r.TaskID != "" {
+		return e.afterHealth(ctx, r)
+	}
 	res := r.GitResult
 	if res == nil {
 		res = &proto.GitResult{Op: firstNonEmpty(gitOpOf(r), "git")}
@@ -326,7 +363,7 @@ func GitReport(r store.Run) string {
 }
 
 var gitOpName = map[string]string{proto.GitCommit: "提交", proto.GitMerge: "合并", proto.GitPush: "推送", proto.GitPR: "开 PR",
-	proto.GitUndo: "撤回", proto.GitDiscard: "删除分支", proto.GitRestore: "恢复快照"}
+	proto.GitUndo: "撤回", proto.GitDiscard: "删除分支", proto.GitRestore: "撤销改动", proto.GitHealth: "健康检查"}
 
 // postThread posts a report in a thread (the main thread when empty).
 func (e *Engine) postThread(ctx context.Context, thread, taskID, text string) {

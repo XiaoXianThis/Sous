@@ -80,6 +80,7 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
         paused: false,
         status: p.status, summary: p.summary ?? '', diffstat: p.diffstat ?? '', error: p.error ?? '', ended_at: ev.ts,
         pr_url: p.pr_url ?? '', conflict: !!p.conflict, git_result: p.git ?? v.run.git_result,
+        outcome: p.outcome, error_kind: p.error_kind, refused: p.refused,
       })
       v.statusLine = ''
       for (const a of v.approvals) if (a.status === 'pending') a.status = 'expired'

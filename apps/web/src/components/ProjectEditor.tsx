@@ -5,6 +5,7 @@ import { setArchived } from '../lib/projects'
 import { modeText } from '../lib/tasks'
 import { isArchived } from '../lib/workbench'
 import type { Deploy, Project, ProjectNode } from '../lib/types'
+import Icon from './Icon'
 import Sheet from './Sheet'
 
 export default function ProjectEditor({ project = null, preset = null, onClose }: {
@@ -30,6 +31,19 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
   const [deploy, setDeploy] = useState<Deploy>(project?.deploy ? { ...project.deploy } : { node_id: '', path: '', command: '', health: '', branch: '', auto_on_merge: false })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [checkNote, setCheckNote] = useState('')
+
+  async function checkDeploy() {
+    if (!project) return
+    setCheckNote('正在检查…')
+    try {
+      const r = await api.checkDeploy(project.id)
+      const failed = r.failures?.length ? `；${r.failures.length} 台机器没能拉取：${r.failures.join('；')}` : ''
+      setCheckNote(`已从 ${r.fetched} 台机器拉取最新的分支信息${failed}。有新提交时会马上开始部署。`)
+    } catch (e) {
+      setCheckNote((e as Error).message)
+    }
+  }
 
   const nodes = wb.data?.nodes ?? []
   const personas = wb.data?.personas ?? []
@@ -225,6 +239,15 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                       onChange={(e) => setDeploy({ ...deploy, auto_on_merge: e.currentTarget.checked })}
                     />部署分支有新提交时自动部署
                   </label>
+                  {!isNew && project?.deploy?.branch && project.deploy.auto_on_merge && (
+                    <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+                      <button type="button" className="btn small ghost" onClick={() => void checkDeploy()}>
+                        <Icon name="refresh" size={14} />立即检查新提交
+                      </button>
+                      <span>平时每 10 分钟检查一次；sous 自己推送时马上检查。</span>
+                      {checkNote && <span className="basis-full" role="status">{checkNote}</span>}
+                    </div>
+                  )}
                 </>
               )}
             </>

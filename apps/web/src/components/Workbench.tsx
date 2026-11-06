@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { go, ui, useUi, useWb } from '../lib/app'
 import { taskState, taskStateDetail } from '../lib/status'
 import { latestRun, projectCards, taskSummary, type CardTask, type ProjectCard } from '../lib/workbench'
@@ -6,19 +6,21 @@ import ApprovalCard from './ApprovalCard'
 import ArchiveModal from './ArchiveModal'
 import Icon from './Icon'
 import ProjectCardComponent, { type ProjectTab } from './ProjectCard'
-import ProjectModal from './ProjectModal'
+const ProjectModal = lazy(() => import('./ProjectModal'))
 import ProjectSetupSheet from './ProjectSetupSheet'
 import PhoneHeader from './PhoneHeader'
 import TaskRow from './TaskRow'
 import { usePhone } from '../lib/phone'
 
-function Stat({ icon, value, label, tone, onClick, expanded }: {
+function Stat({ icon, value, label, tone, onClick, expanded, tip }: {
   icon: string
   value: string | number
   label: string
   tone: string
   onClick?: () => void
   expanded?: boolean
+  /** What the number counts. */
+  tip?: string
 }) {
   return (
     <button
@@ -26,14 +28,15 @@ function Stat({ icon, value, label, tone, onClick, expanded }: {
         onClick ? 'hover:shadow-[0_0_0_1px_var(--line-strong)]' : 'cursor-default'
       }`}
       onClick={onClick}
-      aria-label={`${label} ${value}`}
+      aria-label={`${label}：${value}`}
       aria-haspopup={expanded === undefined ? undefined : 'dialog'}
       aria-expanded={expanded}
-      data-tip={label}
+      data-tip={tip ?? label}
       data-tip-pos="bottom"
     >
-      <span className={`tone-${tone} grid`}><Icon name={icon} size={16} /></span>
-      {value}
+      <span className={`tone-${tone} grid`} aria-hidden="true"><Icon name={icon} size={16} /></span>
+      <span aria-hidden="true">{value}</span>
+      <span className="font-medium text-muted" aria-hidden="true">{label}</span>
     </button>
   )
 }
@@ -44,13 +47,13 @@ function Tile({ icon, value, label, tone, onClick }: { icon: string; value: stri
     <button
       className={`grid gap-1 content-start text-left p-2.5 rounded-[14px] border-0 bg-panel shadow-soft min-w-0 transition-transform ${onClick ? 'active:scale-[.97]' : 'cursor-default'}`}
       onClick={onClick}
-      aria-label={`${label} ${value}`}
+      aria-label={`${label}：${value}`}
     >
-      <span className="flex items-center justify-between gap-1">
+      <span className="flex items-center justify-between gap-1" aria-hidden="true">
         <span className={`grid place-items-center w-7 h-7 rounded-full tone-${tone} bg-[color-mix(in_srgb,currentColor_14%,transparent)]`}><Icon name={icon} size={16} /></span>
         <span className="text-[20px] font-semibold tabular-nums leading-none tracking-tight">{value}</span>
       </span>
-      <span className="text-[11.5px] font-medium text-muted truncate">{label}</span>
+      <span className="text-[11.5px] font-medium text-muted truncate" aria-hidden="true">{label}</span>
     </button>
   )
 }
@@ -82,7 +85,10 @@ export default function Workbench() {
   const archivedCount = allCards.length - cards.length
   const approvals = (wbState.inbox?.approvals ?? []).filter((a) => a.review === 'user')
   const pending = approvals.length + inboxTasks.length
-  const running = data?.runs.filter((r) => r.status === 'running').length ?? 0
+  // "In progress" counts tasks the way the cards do: executing, queued for
+  // a run, or being reviewed by a model or an agent. Waiting for the user
+  // is in "needs you" instead (end-to-end review 4.19).
+  const running = cards.reduce((n, c) => n + c.counts.active, 0)
   const todo = cards.reduce((n, c) => n + c.counts.todo, 0)
   const online = data?.nodes.filter((n) => n.online).length ?? 0
   const projectOf = (id: string) => data?.projects.find((p) => p.id === (id || 'misc'))
@@ -93,7 +99,9 @@ export default function Workbench() {
     : undefined
   const modalCard = allCards.find((c) => c.project.id === (routeTask ? routeTask.project_id || 'misc' : open?.id))
   const attentionRows: CardTask[] = data
-    ? inboxTasks.map((t) => ({ task: t, state: taskState(t), detail: taskStateDetail(t), summary: taskSummary(data, t), stages: [], ...latestRun(data, t.id) }))
+    ? inboxTasks
+      .map((t) => ({ task: t, state: taskState(t), detail: taskStateDetail(t), summary: taskSummary(data, t), stages: [], ...latestRun(data, t.id) }))
+      .sort((a, b) => (projectOf(a.task.project_id)?.name ?? '').localeCompare(projectOf(b.task.project_id)?.name ?? '') || b.task.updated_at - a.task.updated_at)
     : []
 
   // A link to a project chat opens its project's dialog.
@@ -130,13 +138,17 @@ export default function Workbench() {
     {approvals.map((a) => <ApprovalCard key={a.id} approval={a} context={taskTitle(a.task_id)} />)}
     {attentionRows.length > 0 && (
       <div className="grid gap-0.5">
-        {attentionRows.map((t) => {
+        {attentionRows.map((t, i) => {
           const p = projectOf(t.task.project_id)
+          const first = i === 0 || attentionRows[i - 1].task.project_id !== t.task.project_id
           return (
-            <div key={t.task.id} className="flex items-center gap-1 pl-1 min-w-0">
+            <div key={t.task.id} className="grid min-w-0">
+            {first && <p className="m-0 mt-1 pl-3 text-[11.5px] font-semibold text-faint">{p?.id === 'misc' ? '杂项' : p?.name ?? '杂项'}</p>}
+            <div className="flex items-center gap-1 pl-1 min-w-0">
               <div className="flex-1 min-w-0">
                 <TaskRow task={t} onOpen={() => { setAttention(false); go({ view: 'task', id: t.task.id }) }} />
               </div>
+            </div>
             </div>
           )
         })}
@@ -184,7 +196,7 @@ export default function Workbench() {
         >
           {data && (
             <div className="grid grid-cols-4 gap-2 px-4 pb-1" aria-label="概况">
-              <Tile icon="play" value={running} label="执行中" tone="accent" />
+              <Tile icon="play" value={running} label="进行中" tone="accent" />
               <Tile icon="hand" value={pending} label="要你处理" tone="warning" onClick={pending ? () => setAttention(true) : undefined} />
               <Tile icon="circle-dashed" value={todo} label="待办" tone="neutral" />
               <Tile icon="laptop" value={`${online}/${data.nodes.length}`} label="机器在线" tone="success" onClick={openMachines} />
@@ -198,9 +210,9 @@ export default function Workbench() {
           <span className="flex-1"></span>
           {data && (
             <div className="flex items-center flex-wrap gap-2" aria-label="概况">
-              <Stat icon="play" value={running} label="正在执行" tone="accent" />
+              <Stat icon="play" value={running} label="进行中" tone="accent" tip="正在执行、排队或由模型 / 审查岗位验收的任务" />
               <div className="relative" ref={popRef}>
-                <Stat icon="hand" value={pending} label="要你处理" tone="warning" expanded={attention} onClick={pending ? () => setAttention((v) => !v) : undefined} />
+                <Stat icon="hand" value={pending} label="要你处理" tone="warning" tip="等你审批、验收，或受阻、失败、等机器的任务" expanded={attention} onClick={pending ? () => setAttention((v) => !v) : undefined} />
                 {attention && pending > 0 && !phone && (
                   <div
                     id="attention"
@@ -256,6 +268,7 @@ export default function Workbench() {
       )}
       {archive && <ArchiveModal cards={allCards} renderCard={renderCard} onClose={closeArchive} />}
       {modalCard && (
+        <Suspense fallback={null}>
         <ProjectModal
           key={modalCard.project.id}
           card={modalCard}
@@ -282,6 +295,7 @@ export default function Workbench() {
             if (routeTask) go({ view: 'overview', id: '' })
           }}
         />
+        </Suspense>
       )}
       {setup && <ProjectSetupSheet onClose={() => setSetup(false)} />}
     </>

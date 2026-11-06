@@ -42,8 +42,11 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 	} else if err != nil {
 		return err
 	}
-	if a.Status != "pending" || a.Review != "ai" {
+	if a.Status != "pending" {
 		return nil
+	}
+	if a.Review != "ai" {
+		return e.followUser(ctx, a)
 	}
 	allow, reject := optionOf(a, "allow_once", "allow_always"), optionOf(a, "reject_once", "reject_always")
 	if allow == "" {
@@ -208,4 +211,31 @@ func approverInput(t store.Task, r store.Run, a store.Approval, history []store.
 		b.WriteString("\n## 这个任务里最近的审批（新的在前）\n" + strings.Join(recent, "\n") + "\n")
 	}
 	return b.String()
+}
+
+// followUser answers an approval that waits for the user the way the user
+// already answered the very same operation in this task, so a retried run
+// does not ask again what was refused (report 4.2).
+func (e *Engine) followUser(ctx context.Context, a store.Approval) error {
+	if a.TaskID == "" {
+		return nil
+	}
+	history, err := e.store().TaskApprovals(ctx, a.TaskID)
+	if err != nil {
+		return err
+	}
+	prev, ok := userPrecedent(history, a)
+	if !ok {
+		return nil
+	}
+	if kindOfAnswer(prev) == "allow" {
+		// Only a refusal is followed without asking: an allowance given once
+		// is the user's to repeat (the agent may have changed meanwhile).
+		return nil
+	}
+	reject := optionOf(a, "reject_once", "reject_always")
+	if reject == "" {
+		return nil
+	}
+	return e.Nodes.DecideAs(ctx, a.ID, reject, "你之前在这个任务里拒绝过同样的操作", event.ActorApprover)
 }

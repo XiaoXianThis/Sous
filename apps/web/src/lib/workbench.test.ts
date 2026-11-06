@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { archivedCards, projectCards, runMeta, taskSummary } from './workbench'
+import { archivedCards, deployOf, projectCards, registerable, runMeta, taskSummary } from './workbench'
 import type { Overview } from './types'
 
 const node = (id: string, extra = {}) =>
@@ -187,5 +187,29 @@ describe('archived projects', () => {
     expect(archivedCards(cards, 'BLOG').map((c) => c.project.id)).toEqual(['old'])
     expect(archivedCards(cards, '网站 旧').map((c) => c.project.id)).toEqual(['old'])
     expect(archivedCards(cards, 'nothing')).toEqual([])
+  })
+})
+
+describe('deploys and registering (end-to-end review 4.5, 4.11)', () => {
+  it('shows where the project deploys stand', () => {
+    const p = project('p', ['mac'], { deploy: { node_id: 'srv', path: '/srv', command: './d.sh', branch: 'main' }, deployed_commit: 'aaaaaaaa11' })
+    const ops = (id: string, status: string, commit: string, created_at: number) => task(id, 'p', status, { kind: 'ops', deploy_commit: commit, created_at })
+    expect(deployOf(p, [])).toMatchObject({ state: 'done', text: '已部署 aaaaaaaa' })
+    expect(deployOf(p, [ops('d1', 'running', 'bbbbbbbb22', 2)])).toMatchObject({ state: 'running', text: '正在部署 bbbbbbbb' })
+    const failed = deployOf(p, [ops('d1', 'done', 'aaaaaaaa11', 1), ops('d2', 'blocked', 'cccccccc33', 3)])
+    expect(failed?.state).toBe('failed')
+    expect(failed?.text).toContain('线上仍是 aaaaaaaa')
+    expect(deployOf(project('q'), [])).toBeUndefined()
+  })
+  it('lists repositories once each, without servers', () => {
+    const scan = (node_id: string, path: string, remote_key: string) => ({ node_id, path, remote: remote_key ? 'git@x:' + remote_key : '', remote_key, branch: 'main', dirty: false, wokspace: false, seen_at: 1, project_id: '' })
+    const out = registerable(
+      [scan('mac', '/code/infra', 'x/infra'), scan('air', '/w/infra', 'x/infra'), scan('srv', '/srv/infra', 'x/infra'), scan('mac', '/code/tmp', '')],
+      [node('mac'), node('air'), node('srv', { role: 'server' })],
+    )
+    expect(out.map((r) => r.name)).toEqual(['infra', 'tmp'])
+    expect(out[0].places.map((p) => p.node_id)).toEqual(['mac', 'air'])
+    const local = registerable([{ ...scan('mac', '/a/infra', ''), remote: '/r/infra.git' }, { ...scan('air', '/b/infra', ''), remote: '/r/infra.git' }], [node('mac'), node('air')])
+    expect(local).toHaveLength(1)
   })
 })

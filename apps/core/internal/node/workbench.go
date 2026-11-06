@@ -379,9 +379,16 @@ func (a *admin) repoOp(ctx context.Context, op, root string) (any, error) {
 		return nil, err
 	}
 	var res proto.RepoResult
-	if op == proto.OpRepoSync {
+	switch op {
+	case proto.OpRepoFetch:
+		if _, ferr := workspace.Fetch(ctx, dir); ferr != nil {
+			err = ferr
+		} else {
+			res = proto.RepoResult{Outcome: "fetched", Message: "已从 origin 拉取最新的分支信息"}
+		}
+	case proto.OpRepoSync:
 		res, err = workspace.Sync(ctx, dir)
-	} else {
+	default:
 		res, err = workspace.WIP(ctx, dir, a.d.conf().Name)
 	}
 	if err != nil {

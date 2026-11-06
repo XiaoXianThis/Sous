@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { resolved, setTheme, useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
 import { barAfterScroll } from '../lib/gesture'
@@ -8,7 +8,7 @@ import Icon from './Icon'
 import ProjectSheet from './ProjectSheet'
 import ResizeHandle from './ResizeHandle'
 import RunSheet from './RunSheet'
-import SettingsModal from './SettingsModal'
+const SettingsModal = lazy(() => import('./SettingsModal'))
 import TaskDetail from './TaskDetail'
 import Workbench from './Workbench'
 
@@ -239,7 +239,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           }}
         />
       )}
-      {uiState.settings !== '' && <SettingsModal onLogout={onLogout} />}
+      {uiState.settings !== '' && <Suspense fallback={null}><SettingsModal onLogout={onLogout} /></Suspense>}
       {wb.error && !wb.data && (
         <p className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-panel shadow-pop text-danger px-4 py-2.5 rounded-[16px] m-0 z-40 flex items-center gap-2" role="alert">
           <Icon name="alert" size={16} />{wb.error}

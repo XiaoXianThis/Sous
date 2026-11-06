@@ -17,9 +17,9 @@ export const looks: Record<Look, LookInfo> = {
   review: { icon: 'eye', tone: 'accent', text: '验收中' },
   waiting: { icon: 'hand', tone: 'warning', text: '等你审批' },
   paused: { icon: 'pause', tone: 'warning', text: '已暂停' },
-  queued: { icon: 'clock', tone: 'neutral', text: '排队' },
+  queued: { icon: 'clock', tone: 'neutral', text: '排队中' },
   planned: { icon: 'circle-dashed', tone: 'neutral', text: '待开始' },
-  done: { icon: 'check', tone: 'success', text: '完成' },
+  done: { icon: 'check', tone: 'success', text: '已完成' },
   failed: { icon: 'alert', tone: 'danger', text: '失败或受阻' },
   cancelled: { icon: 'x', tone: 'neutral', text: '已取消' },
 }
@@ -92,11 +92,11 @@ export const gitStateText: Record<GitTaskState, string> = {
 export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason'> & Partial<Pick<Task, 'git_state'>>): string {
   switch (t.status) {
     case 'inbox':
-      return '收件箱'
+      return '待整理'
     case 'planned':
       return '待开始'
     case 'queued':
-      return t.status_reason.startsWith('等待机器') ? '等待机器' : '排队'
+      return t.status_reason.startsWith('等待机器') ? '等待机器' : '排队中'
     case 'running':
       return t.status_reason.startsWith('已暂停') ? '已暂停' : '执行中'
     case 'review':
@@ -108,7 +108,7 @@ export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason'> & Part
     case 'failed':
       return '失败'
     case 'done':
-      return (t.git_state && gitStateText[t.git_state]) || '完成'
+      return (t.git_state && gitStateText[t.git_state]) || '已完成'
     case 'cancelled':
       return '已取消'
   }
@@ -154,8 +154,11 @@ export interface Stage {
   state: 'done' | 'current' | 'todo' | 'failed'
 }
 
+// A code task ends on its branch (decision 0022): merging and deploying are
+// the project's business, shown on the project card, not stages of the task
+// (end-to-end review 4.5).
 const stageNames: Record<Task['kind'], [string, string][]> = {
-  code: [['plan', '计划'], ['work', '编码'], ['review', '验收'], ['deploy', '部署']],
+  code: [['plan', '计划'], ['work', '编码'], ['review', '验收']],
   general: [['plan', '计划'], ['work', '执行'], ['review', '验收']],
   ops: [['work', '执行'], ['health', '健康检查']],
 }
@@ -163,17 +166,16 @@ const stageNames: Record<Task['kind'], [string, string][]> = {
 /**
  * stages turns a task into its stages. There is no delivery stage: what
  * happens to the branch is a separate step the user asks for (decision
- * 0022), and a task without a review has no review stage. deployed says
- * whether a later ops task of the project finished (only known to callers
- * with the whole project), and hasDeploy whether the project deploys at all.
+ * 0022), and a task without a review has no review stage. An ops task has a
+ * health check stage only when it deploys a commit (the Hub runs the
+ * project's health check before the deploy counts).
  */
 export function stages(
-  t: Pick<Task, 'kind' | 'status' | 'next' | 'status_reason'> & Partial<Pick<Task, 'review'>>,
-  opts: { hasDeploy?: boolean; deployed?: boolean } = {},
+  t: Pick<Task, 'kind' | 'status' | 'next' | 'status_reason'> & Partial<Pick<Task, 'review' | 'deploy_commit'>>,
 ): Stage[] {
   let names = stageNames[t.kind] ?? stageNames.general
-  if (t.kind === 'code' && !opts.hasDeploy) names = names.filter(([k]) => k !== 'deploy')
-  if (t.review === 'none') names = names.filter(([k]) => k !== 'review')
+  if (t.kind === 'ops' && !t.deploy_commit) names = names.filter(([k]) => k !== 'health')
+  if (t.review === 'none' || t.kind === 'ops') names = names.filter(([k]) => k !== 'review')
   const keys = names.map(([k]) => k)
   const at = (k: string) => {
     const i = keys.indexOf(k)
@@ -189,19 +191,18 @@ export function stages(
     case 'queued':
     case 'running':
     case 'waiting_approval':
-      current = at(t.next === 'review' ? 'review' : 'work')
+      current = at(t.next === 'review' ? 'review' : t.next === 'health' ? 'health' : 'work')
       break
     case 'review':
       current = at('review')
       break
     case 'done':
       current = keys.length
-      if (t.kind === 'code' && opts.hasDeploy && !opts.deployed) current = keys.indexOf('deploy')
       break
     case 'failed':
     case 'blocked':
       failed = true
-      current = at(t.status_reason.startsWith('验收') ? 'review' : 'work')
+      current = at(t.status_reason.startsWith('验收') ? 'review' : t.status_reason.startsWith('部署后的健康检查') ? 'health' : 'work')
       break
     case 'cancelled':
       current = -1

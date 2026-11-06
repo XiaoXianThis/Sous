@@ -31,6 +31,21 @@ export default function Locations({ locations, compact = false }: { locations: L
       </span>
     )
   }
+  // The full list names each kind: machines to work on, the deploy target,
+  // the remote (end-to-end review 4.28).
+  if (!compact && new Set(locations.map((l) => l.kind)).size > 1) {
+    const groups: [Location['kind'], string][] = [['node', '开发机'], ['deploy', '部署到'], ['remote', '远端']]
+    return (
+      <div className="grid gap-1.5 min-w-0" aria-label="项目位置">
+        {groups.filter(([k]) => locations.some((l) => l.kind === k)).map(([k, text]) => (
+          <div key={k} className="grid gap-0.5 min-w-0">
+            <span className="text-[11px] font-semibold text-faint">{text}</span>
+            <Locations locations={locations.filter((l) => l.kind === k)} />
+          </div>
+        ))}
+      </div>
+    )
+  }
   return (
     <div className="flex flex-wrap gap-1 items-center min-w-0" aria-label="项目位置">
       {locations.map((l) => {

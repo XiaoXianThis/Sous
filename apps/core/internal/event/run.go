@@ -109,6 +109,10 @@ type RunEndedPayload struct {
 	// next time.
 	Git       *proto.GitResult `json:"git,omitempty"`
 	SessionID string           `json:"session_id,omitempty"`
+	// See proto.RunEnded.
+	Outcome   string   `json:"outcome,omitempty"`
+	ErrorKind string   `json:"error_kind,omitempty"`
+	Refused   []string `json:"refused,omitempty"`
 }
 
 type ApprovalOption struct {

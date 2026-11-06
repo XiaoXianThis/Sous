@@ -106,11 +106,17 @@ func projectRun(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Git)
 			gitOp = string(raw)
 		}
-		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup,
+		if err := exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup,
 			base_from, git, project_id, resume_session)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, p.RecoveryNote, ev.TS, ev.TS, opts, p.Persona, setup,
-			p.BaseFrom, gitOp, p.ProjectID, p.ResumeSession)
+			p.BaseFrom, gitOp, p.ProjectID, p.ResumeSession); err != nil {
+			return err
+		}
+		if ev.TaskID != "" && (purpose == event.PurposeWork || purpose == event.PurposeRebase) {
+			return exec(`UPDATE tasks SET last_agent = ?, last_node = ? WHERE id = ?`, p.Agent, p.NodeID, ev.TaskID)
+		}
+		return nil
 	case event.RunStarted:
 		var p event.RunStartedPayload
 		if err := ev.Decode(&p); err != nil {
@@ -187,9 +193,14 @@ func projectRun(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Git)
 			gitResult = string(raw)
 		}
+		refused := ""
+		if len(p.Refused) > 0 {
+			raw, _ := json.Marshal(p.Refused)
+			refused = string(raw)
+		}
 		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ?, paused = 0,
-			git_result = ?, session = CASE WHEN ? = '' THEN session ELSE ? END WHERE id = ?`,
-			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, gitResult, p.SessionID, p.SessionID, ev.RunID); err != nil {
+			git_result = ?, session = CASE WHEN ? = '' THEN session ELSE ? END, outcome = ?, error_kind = ?, refused = ? WHERE id = ?`,
+			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, gitResult, p.SessionID, p.SessionID, p.Outcome, p.ErrorKind, refused, ev.RunID); err != nil {
 			return err
 		}
 		// Questions the run left open can no longer be answered.
@@ -360,22 +371,27 @@ type Run struct {
 	Session       string           `json:"session,omitempty"`
 	ResumeSession string           `json:"resume_session,omitempty"`
 	ConsultClosed bool             `json:"consult_closed,omitempty"`
+	// How the run ended beyond its status (proto.RunEnded).
+	Outcome   string   `json:"outcome,omitempty"`
+	ErrorKind string   `json:"error_kind,omitempty"`
+	Refused   []string `json:"refused,omitempty"`
 }
 
 const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at,
 	paused, pause_reason, archived, recovery_note, last_event, options, persona, setup,
-	base_from, base_commit, git, git_result, project_id, session, resume_session, consult_closed`
+	base_from, base_commit, git, git_result, project_id, session, resume_session, consult_closed, outcome, error_kind, refused`
 
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	defer rows.Close()
 	out := []Run{}
 	for rows.Next() {
 		var r Run
-		var opts, setup, gitOp, gitResult string
+		var opts, setup, gitOp, gitResult, refused string
 		if err := rows.Scan(&r.ID, &r.ThreadID, &r.TaskID, &r.Purpose, &r.Mode, &r.BaseBranch, &r.PRURL, &r.Conflict, &r.Title, &r.Force, &r.NodeID, &r.Agent, &r.Kind, &r.RepoPath, &r.Prompt, &r.Status,
 			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt,
 			&r.Paused, &r.PauseReason, &r.Archived, &r.RecoveryNote, &r.LastEvent, &opts, &r.Persona, &setup,
-			&r.BaseFrom, &r.BaseCommit, &gitOp, &gitResult, &r.ProjectID, &r.Session, &r.ResumeSession, &r.ConsultClosed); err != nil {
+			&r.BaseFrom, &r.BaseCommit, &gitOp, &gitResult, &r.ProjectID, &r.Session, &r.ResumeSession, &r.ConsultClosed,
+			&r.Outcome, &r.ErrorKind, &refused); err != nil {
 			return nil, err
 		}
 		if gitOp != "" {
@@ -389,6 +405,9 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 			if json.Unmarshal([]byte(gitResult), r.GitResult) != nil {
 				r.GitResult = nil
 			}
+		}
+		if refused != "" {
+			json.Unmarshal([]byte(refused), &r.Refused)
 		}
 		if opts != "" {
 			json.Unmarshal([]byte(opts), &r.Options)

@@ -90,18 +90,23 @@ func (a *admin) projectPath(args proto.ProjectArgs) (root, abs, rel string, err 
 	if rel == "." {
 		rel = ""
 	}
-	for _, part := range strings.Split(rel, "/") {
-		if part == ".git" {
-			return "", "", "", nodeErr(proto.ErrCodeInvalid, ".git 里的文件不能在页面上看")
-		}
+	if inGitDir(rel) {
+		return "", "", "", nodeErr(proto.ErrCodeInvalid, ".git 里的文件不能在页面上看")
 	}
 	abs = filepath.Join(root, filepath.FromSlash(rel))
-	// Resolve what exists, so a symlink cannot lead out of the root.
+	// Resolve what exists, so a symlink cannot lead out of the root, nor
+	// into its .git under another spelling (.GIT on a case-insensitive disk).
 	probe := abs
 	for {
 		if resolved, e := filepath.EvalSymlinks(probe); e == nil {
 			if !within(root, resolved) {
 				return "", "", "", nodeErr(proto.ErrCodeInvalid, "路径超出了项目目录")
+			}
+			if r, e := filepath.Rel(root, resolved); e == nil && inGitDir(filepath.ToSlash(r)) {
+				return "", "", "", nodeErr(proto.ErrCodeInvalid, ".git 里的文件不能在页面上看")
+			}
+			if gitDir, e := os.Stat(filepath.Join(root, ".git")); e == nil && gitDir.IsDir() && underSame(resolved, gitDir) {
+				return "", "", "", nodeErr(proto.ErrCodeInvalid, ".git 里的文件不能在页面上看")
 			}
 			break
 		}
@@ -112,6 +117,39 @@ func (a *admin) projectPath(args proto.ProjectArgs) (root, abs, rel string, err 
 		probe = next
 	}
 	return root, abs, rel, nil
+}
+
+// isGitName reports whether a path element names the .git directory in any
+// spelling a file system may accept for it: other case (macOS, Windows),
+// trailing dots or spaces and the 8.3 short name (Windows).
+func isGitName(part string) bool {
+	n := strings.ToLower(strings.TrimRight(part, ". "))
+	return n == ".git" || n == "git~1"
+}
+
+// inGitDir reports whether a slash-separated relative path is in .git.
+func inGitDir(rel string) bool {
+	for _, part := range strings.Split(rel, "/") {
+		if isGitName(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// underSame reports whether p is the directory dir (as os.SameFile sees it)
+// or inside it.
+func underSame(p string, dir os.FileInfo) bool {
+	for {
+		if fi, err := os.Stat(p); err == nil && os.SameFile(fi, dir) {
+			return true
+		}
+		next := filepath.Dir(p)
+		if next == p {
+			return false
+		}
+		p = next
+	}
 }
 
 func within(dir, p string) bool {
@@ -129,7 +167,7 @@ func listDir(abs, rel string) (proto.ProjectDir, error) {
 	}
 	out := proto.ProjectDir{Rel: rel, Entries: []proto.ProjectEntry{}}
 	for _, e := range ents {
-		if e.Name() == ".git" {
+		if isGitName(e.Name()) {
 			continue
 		}
 		fi, err := os.Stat(filepath.Join(abs, e.Name())) // follows symlinks
@@ -158,6 +196,10 @@ func readProjectFile(abs, rel string) (proto.ProjectFile, error) {
 	}
 	if fi.IsDir() {
 		return proto.ProjectFile{}, nodeErr(proto.ErrCodeInvalid, "%s 是一个目录", rel)
+	}
+	if !fi.Mode().IsRegular() {
+		// A FIFO or a device would block or never end.
+		return proto.ProjectFile{}, nodeErr(proto.ErrCodeInvalid, "%s 不是普通文件，不能读", rel)
 	}
 	out := proto.ProjectFile{Rel: rel, Size: fi.Size()}
 	if fi.Size() > maxFileBytes {
@@ -214,10 +256,13 @@ func (a *admin) grep(ctx context.Context, args proto.GrepArgs) (proto.GrepResult
 			return nil
 		}
 		if d.IsDir() {
-			if path != abs && grepSkip[d.Name()] {
+			if path != abs && (grepSkip[d.Name()] || isGitName(d.Name())) {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil // FIFOs, sockets, devices
 		}
 		if out.Files >= grepMaxFiles {
 			out.Truncated = true

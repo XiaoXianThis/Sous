@@ -189,22 +189,6 @@ func TestArchiveProject(t *testing.T) {
 	}
 }
 
-func TestDeployedSince(t *testing.T) {
-	ts := []store.Task{
-		{ProjectID: "p", Kind: "code", CreatedAt: 10},
-		{ProjectID: "p", Kind: "ops", CreatedAt: 5, Status: "done"},
-		{ProjectID: "q", Kind: "ops", CreatedAt: 20, Status: "done"},
-		{ProjectID: "p", Kind: "ops", CreatedAt: 30, Status: "cancelled"},
-	}
-	if task.DeployedSince(ts, "p", 10) {
-		t.Fatal("no deploy of p after 10")
-	}
-	ts = append(ts, store.Task{ProjectID: "p", Kind: "ops", CreatedAt: 12, Status: "running"})
-	if !task.DeployedSince(ts, "p", 10) {
-		t.Fatal("a deploy under way counts")
-	}
-}
-
 func TestProjectChatScope(t *testing.T) {
 	e, log := engine(t)
 	ctx := context.Background()

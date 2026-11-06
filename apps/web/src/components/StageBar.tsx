@@ -1,7 +1,7 @@
 import type { Stage } from '../lib/status'
 import Icon from './Icon'
 
-const stateText: Record<Stage['state'], string> = { done: '完成', current: '进行中', todo: '', failed: '失败' }
+const stateText: Record<Stage['state'], string> = { done: '已完成', current: '执行中', todo: '', failed: '失败' }
 const stageIcon: Record<string, string> = { plan: 'list', work: 'terminal', review: 'eye', pr: 'pr', deploy: 'rocket', health: 'pulse' }
 
 export default function StageBar({ stages, labels = false }: { stages: Stage[]; labels?: boolean }) {

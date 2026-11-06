@@ -19,6 +19,9 @@ type Assessment struct {
 	// Routine marks a well-known, bounded action the auto mode allows
 	// without calling the approver.
 	Routine string
+	// Hits are the pieces of the request each signal matched ("name：text"),
+	// so the card shows why, not only what (end-to-end review 4.8).
+	Hits []string
 }
 
 // Note is the assessment as text for the approval card and the approver.
@@ -30,7 +33,21 @@ func (a Assessment) Note() string {
 	if len(a.Soft) > 0 {
 		parts = append(parts, "需要留意："+strings.Join(a.Soft, "、"))
 	}
+	if len(a.Hits) > 0 {
+		parts = append(parts, "命中的片段："+strings.Join(a.Hits, "；"))
+	}
 	return strings.Join(parts, "\n")
+}
+
+// hit records what a signal matched, cut short.
+func (a *Assessment) hit(name, text string) {
+	text = strings.Join(strings.Fields(text), " ")
+	if r := []rune(text); len(r) > 60 {
+		text = string(r[:60]) + "…"
+	}
+	if text != "" {
+		a.Hits = append(a.Hits, name+"「"+text+"」")
+	}
 }
 
 type signal struct {
@@ -122,8 +139,9 @@ func (p *Policy) Assess(r Request, cat Category) Assessment {
 		return a
 	}
 	for _, s := range hardSignals {
-		if s.re.MatchString(text) {
+		if m := s.re.FindString(text); m != "" || s.re.MatchString(text) {
 			a.Hard = append(a.Hard, s.name)
+			a.hit(s.name, m)
 		}
 	}
 	for _, re := range p.extraHard {
@@ -144,6 +162,7 @@ func (p *Policy) Assess(r Request, cat Category) Assessment {
 	for _, s := range softSignals {
 		if s.re.MatchString(text) && !(s.name == "读写 .env 文件" && envFileExample.MatchString(text)) {
 			a.Soft = append(a.Soft, s.name)
+			a.hit(s.name, s.re.FindString(text))
 		}
 	}
 	if len(a.Hard) == 0 && !p.noRoutine {

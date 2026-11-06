@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -28,6 +29,7 @@ func (e *Engine) workbenchRoutes(protect func(string, http.HandlerFunc)) {
 
 	protect("POST /api/v1/projects/{id}/locations/{node}/sync", e.repoOp(proto.OpRepoSync))
 	protect("POST /api/v1/projects/{id}/locations/{node}/wip", e.repoOp(proto.OpRepoWIP))
+	protect("POST /api/v1/projects/{id}/deploy/check", e.checkDeployNow)
 	protect("GET /api/v1/projects/{id}/shells", e.listShells)
 	protect("POST /api/v1/projects/{id}/shells", e.openShell)
 
@@ -62,6 +64,56 @@ func (e *Engine) repoOp(op string) http.HandlerFunc {
 			ProjectID: p.ID, NodeID: nodeID, Path: root, Op: op, Outcome: out.Outcome, Message: what + "：" + out.Message, Branch: out.Branch}))
 		writeJSON(w, http.StatusOK, out)
 	}
+}
+
+// checkDeployNow fetches the project's checkouts on its online machines and
+// looks for a new commit on the deploy branch right away, instead of at the
+// next background fetch (review 4.30).
+func (e *Engine) checkDeployNow(w http.ResponseWriter, r *http.Request) {
+	p, err := e.store().Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "项目不存在")
+		return
+	}
+	if p.Deploy == nil || p.Deploy.Branch == "" {
+		writeError(w, http.StatusBadRequest, "invalid", "项目没有设置部署分支")
+		return
+	}
+	places := map[string]string{}
+	for _, pn := range p.Nodes {
+		if pn.Path != "" && e.Nodes.Online(pn.NodeID) {
+			places[pn.NodeID] = pn.Path
+		}
+	}
+	if d := p.Deploy; d.NodeID != "" && d.Path != "" && e.Nodes.Online(d.NodeID) {
+		if _, ok := places[d.NodeID]; !ok {
+			places[d.NodeID] = d.Path
+		}
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	fetched := 0
+	var failures []string
+	for nodeID, root := range places {
+		wg.Add(1)
+		go func(nodeID, root string) {
+			defer wg.Done()
+			_, err := e.Nodes.Request(r.Context(), nodeID, proto.OpRepoFetch, proto.RepoArgs{Root: root}, time.Minute)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failures = append(failures, err.Error())
+				return
+			}
+			fetched++
+		}(nodeID, root)
+	}
+	wg.Wait()
+	// The machines report new scans, which check the deploy branch; this
+	// check covers the case where a scan arrived before the answer.
+	e.CheckDeploys(r.Context())
+	p, _ = e.store().Project(r.Context(), p.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"fetched": fetched, "failures": failures, "deployed_commit": p.DeployedCommit})
 }
 
 // locationRoot is the project's directory on a machine, or "".

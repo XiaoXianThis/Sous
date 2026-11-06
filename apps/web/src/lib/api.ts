@@ -163,6 +163,9 @@ export const api = {
   jobResize: (id: string, job: string, cols: number, rows: number) =>
     request<{ ok: boolean }>('POST', `/api/v1/nodes/${id}/jobs/${job}/resize`, { cols, rows }),
   jobCancel: (id: string, job: string) => request<{ ok: boolean }>('POST', `/api/v1/nodes/${id}/jobs/${job}/cancel`),
+  /** Fetch the project's checkouts now and look for a new deploy commit. */
+  checkDeploy: (projectId: string) =>
+    request<{ fetched: number; failures: string[] | null; deployed_commit: string }>('POST', `/api/v1/projects/${projectId}/deploy/check`),
   repoSync: (projectId: string, nodeId: string) => request<RepoResult>('POST', `/api/v1/projects/${projectId}/locations/${nodeId}/sync`),
   repoWip: (projectId: string, nodeId: string) => request<RepoResult>('POST', `/api/v1/projects/${projectId}/locations/${nodeId}/wip`),
   models: () => request<ModelsView>('GET', '/api/v1/models'),

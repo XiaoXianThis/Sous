@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import { gitOpText, isActive, type RunView } from '../lib/runs'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import ApprovalCard from './ApprovalCard'
+import { errorKindText } from '../lib/tasks'
 import Icon from './Icon'
 import { PlanList, ToolList } from './RunSteps'
 import TextViewer from './TextViewer'
@@ -106,7 +107,23 @@ export default function RunCard({ view, nodeName, full = false }: { view: RunVie
         {!isActive(run) && (
           <>
             {run.summary && <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-[13.5px]">{run.summary}</p>}
-            {run.error && <p className="m-0 text-danger text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>}
+            {run.error && (run.error_kind && errorKindText[run.error_kind] ? (
+              <div className="grid gap-1">
+                <p className="m-0 text-danger text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{errorKindText[run.error_kind]}</p>
+                <details className="text-[12px] text-muted">
+                  <summary className="cursor-pointer">原始错误</summary>
+                  <pre className="m-0 mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px]">{run.error}</pre>
+                </details>
+              </div>
+            ) : (
+              <p className="m-0 text-danger text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>
+            ))}
+            {run.outcome === 'no_action' && (
+              <p className="m-0 text-warm text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />agent 没调用任何工具、没有改动就结束了，没有算作完成。</p>
+            )}
+            {!!run.refused?.length && (
+              <p className="m-0 text-muted text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="x" size={14} className="mt-[2px]" />被拒绝的操作：{run.refused.join('；')}</p>
+            )}
             {run.diffstat && <p className="m-0 text-[12px] font-mono text-muted [overflow-wrap:anywhere] flex gap-1.5 items-center"><Icon name="diff" size={13} />{run.diffstat}</p>}
             {run.pr_url && (
               <a className="inline-flex gap-1.5 items-center text-[12.5px] text-accent font-semibold justify-self-start" href={run.pr_url} target="_blank" rel="noreferrer">

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
 import { go, loadOverview, ui, useWb } from '../lib/app'
-import type { RepoScan } from '../lib/types'
+import { registerable } from '../lib/workbench'
 import Icon from './Icon'
 import ProjectEditor from './ProjectEditor'
 import Sheet from './Sheet'
@@ -18,10 +18,9 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
   const [editor, setEditor] = useState<null | { name: string; repo_url: string; node_id?: string; path?: string }>(null)
 
   const devs = (wb.data?.nodes ?? []).filter((n) => n.role !== 'server' && n.online && (n.workspaces?.length ?? 0) > 0)
-  const discovered = wb.data?.discovered ?? []
+  const discovered = registerable(wb.data?.discovered ?? [], wb.data?.nodes ?? [])
   const validName = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)
   const nodeName = (id: string) => wb.data?.nodes.find((n) => n.id === id)?.name ?? '未知机器'
-  const repoName = (r: RepoScan) => r.path.split(/[\\/]/).pop() ?? r.path
 
   async function create() {
     if (!validName) return
@@ -114,16 +113,20 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
           {discovered.length > 0 ? (
             <div className="grid gap-1.5">
               {discovered.map((r) => (
-                <div key={r.node_id + r.path} className="grid grid-cols-[minmax(90px,1fr)_minmax(0,1.6fr)_minmax(0,1.6fr)_auto] gap-2.5 items-center border border-line rounded-[12px] px-2.5 py-[7px] bg-panel max-[760px]:grid-cols-1 max-[760px]:gap-0.5">
-                  <span className="flex gap-[5px] items-center min-w-0">
-                    <strong>{repoName(r)}</strong>
-                    {r.wokspace && <span className="text-muted inline-grid" title="wokspace"><Icon name="wok" size={12} /></span>}
-                  </span>
-                  <span className="text-[12px] text-muted overflow-hidden text-ellipsis whitespace-nowrap inline-flex gap-1 items-center" title={r.path}>
-                    <Icon name="laptop" size={12} />{nodeName(r.node_id)} · {r.path}
-                  </span>
-                  <span className="text-[12px] text-muted overflow-hidden text-ellipsis whitespace-nowrap inline-flex gap-1 items-center">{r.remote || '没有远端'}</span>
-                  <button className="link accent" onClick={() => setEditor({ name: repoName(r), repo_url: r.remote, node_id: r.node_id, path: r.path })}>登记</button>
+                <div key={r.remote || r.places[0].node_id + r.places[0].path} className="flex gap-2.5 items-start border border-line rounded-[12px] px-2.5 py-2 bg-panel min-w-0">
+                  <div className="grid gap-0.5 min-w-0 flex-1">
+                    <span className="flex gap-[5px] items-center min-w-0">
+                      <strong className="overflow-hidden text-ellipsis whitespace-nowrap">{r.name}</strong>
+                      {r.wokspace && <span className="text-muted inline-grid" title="wokspace"><Icon name="wok" size={12} /></span>}
+                    </span>
+                    <span className="text-[12px] text-muted [overflow-wrap:anywhere]">{r.remote || '没有远端（只能在本机做，不能推送或开 PR）'}</span>
+                    {r.places.map((pl) => (
+                      <span key={pl.node_id + pl.path} className="text-[12px] text-muted inline-flex gap-1 items-start [overflow-wrap:anywhere]">
+                        <Icon name="laptop" size={12} className="mt-[3px] flex-none" />{nodeName(pl.node_id)} · {pl.path}
+                      </span>
+                    ))}
+                  </div>
+                  <button className="link accent flex-none" onClick={() => setEditor({ name: r.name, repo_url: r.remote, node_id: r.places[0].node_id, path: r.places[0].path })}>登记</button>
                 </div>
               ))}
             </div>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { useChat } from '../lib/app'
-import { agentChoices, isOpen, modeText, statusText } from '../lib/tasks'
+import { agentChoices, agentUnavailable, isOpen, modeText, nodeLabel, statusText } from '../lib/tasks'
 import type { Node, Persona, Project, Run, Task } from '../lib/types'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import Avatar from './Avatar'
@@ -152,7 +152,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
   const nodeName = (nid: string) => nodes.find((n) => n.id === nid)?.name ?? '未知机器'
   const purposeText: Record<string, string> = { work: '开发', rebase: 'rebase', deliver: '交付', review: '验收', git: 'git 操作' }
   const runStatus: Record<string, string> = {
-    queued: '排队中', running: '进行中', succeeded: '成功', failed: '失败', cancelled: '已取消', interrupted: '已中断',
+    queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
   }
   const canDispatch = task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
   const when = (ts: number) => new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -218,22 +218,26 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
             <div className="grid gap-1.5 text-[13px] text-muted" role="radiogroup" aria-label="agent">
               agent
               <div className="flex gap-1.5 flex-wrap">
-                {['', ...agents].map((x) => (
+                {['', ...agents].map((x) => {
+                  const why = agentUnavailable(x, nodes, node)
+                  return (
                   <button
                     key={x || 'default'}
                     type="button"
                     role="radio"
                     aria-checked={agent === x}
-                    title={x ? agentTitle(x) : '按项目或全局默认'}
+                    aria-disabled={!!why && agent !== x}
+                    title={x ? agentTitle(x) + (why ? `：${why}` : '') : '按项目或全局默认'}
                     className={`flex items-center gap-1.5 h-9 pl-1.5 pr-2.5 rounded-[12px] border-0 text-[12.5px] font-medium transition-shadow ${
                       agent === x ? 'bg-panel text-ink shadow-[0_0_0_2px_var(--accent)]' : 'bg-sunken text-muted hover:text-ink'
-                    }`}
-                    onClick={() => { setAgent(x); setDirty(true) }}
+                    } ${why ? 'opacity-45' : ''}`}
+                    onClick={() => { if (why && agent !== x) { setError(`${agentTitle(x)}：${why}`); return } setAgent(x); setDirty(true) }}
                   >
                     {x ? <AgentIcon name={x} size={24} /> : <span className="grid place-items-center w-6 h-6 rounded-[9px] bg-hover"><Icon name="sparkles" size={14} /></span>}
                     {x ? agentTitle(x) : '默认'}
                   </button>
-                ))}
+                  )
+                })}
               </div>
             </div>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
@@ -246,7 +250,12 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                   disabled={!isNew && !!task && task.status !== 'inbox' && task.status !== 'planned'}
                 >
                   <option value="">杂项（一般任务）</option>
-                  {projects.filter((p) => p.id !== 'misc').map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {projects.filter((p) => p.id !== 'misc' && !p.archived_at).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {projects.some((p) => p.archived_at) && (
+                    <optgroup label="已归档（在这里建任务会重新激活项目）">
+                      {projects.filter((p) => p.id !== 'misc' && p.archived_at).map((p) => <option key={p.id} value={p.id}>{p.name}（已归档）</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </label>
 
@@ -322,7 +331,16 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                 机器
                 <select className={inputCls} value={node} onChange={(e) => setNode(e.currentTarget.value)}>
                   <option value="">按项目的优先级</option>
-                  {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}{n.online ? '' : '（离线）'}</option>)}
+                  {nodes.filter((n) => n.role !== 'server').length > 0 && (
+                    <optgroup label="开发机">
+                      {nodes.filter((n) => n.role !== 'server').map((n) => <option key={n.id} value={n.id}>{nodeLabel(n, place).text}</option>)}
+                    </optgroup>
+                  )}
+                  {nodes.some((n) => n.role === 'server') && (
+                    <optgroup label="服务器">
+                      {nodes.filter((n) => n.role === 'server').map((n) => <option key={n.id} value={n.id}>{nodeLabel(n, place).text}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </label>
               <label className="grid gap-1 text-[13px] text-muted">

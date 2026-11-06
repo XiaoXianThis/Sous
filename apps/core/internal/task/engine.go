@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -117,6 +118,9 @@ func (e *Engine) Start(ctx context.Context) {
 				e.Sweep() // dependents may be free now
 			}
 		case event.ApprovalRequested, event.ApprovalDecided, event.RunPaused, event.RunResumed:
+			if ev.Type == event.ApprovalRequested {
+				e.Sweep() // a run waiting for the user gave its slot up
+			}
 			if ev.TaskID != "" {
 				select {
 				case approvals <- ev:
@@ -678,10 +682,50 @@ func (e *Engine) tryStart(ctx context.Context, id string) (bool, error) {
 	} else if err != nil {
 		return false, err
 	}
+	if t.Place == event.PlaceInPlace {
+		if other := e.inPlaceHolder(ctx, t.ID, choice.NodeID, choice.Path); other != "" {
+			// One in-place task per directory at a time: a second one would
+			// take the first one's half-done work into its snapshot, and an
+			// undo of one would touch the other's files (review H2).
+			reason := fmt.Sprintf("等待同一目录（%s）里的就地任务「%s」结束", choice.Path, other)
+			if t.Status == event.TaskQueued && t.StatusReason == reason {
+				return false, nil
+			}
+			return false, e.transition(ctx, t, event.TaskQueued, reason, "", event.ActorSystem, waiting(event.WaitingMachine, next))
+		}
+	}
 	if err := e.startRun(ctx, t, next, choice); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// inPlaceHolder is the title of another task that works in place in the
+// same directory of the same machine right now, or "".
+func (e *Engine) inPlaceHolder(ctx context.Context, taskID, nodeID, path string) string {
+	if path == "" {
+		return ""
+	}
+	runs, err := e.store().Runs(ctx, store.RunFilter{NodeID: nodeID, Statuses: []string{event.RunStatusQueued, event.RunStatusRunning}})
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.TaskID == "" || r.TaskID == taskID || r.Purpose == event.PurposeConsult {
+			continue
+		}
+		if r.Kind != proto.KindInPlace && r.Kind != proto.KindOps {
+			continue
+		}
+		if filepath.Clean(r.RepoPath) != filepath.Clean(path) {
+			continue
+		}
+		if t, err := e.store().Task(ctx, r.TaskID); err == nil {
+			return t.Title
+		}
+		return r.TaskID
+	}
+	return ""
 }
 
 // route picks the machine for the task's next run. Later runs of a task stay

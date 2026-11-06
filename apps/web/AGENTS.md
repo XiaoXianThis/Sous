@@ -22,6 +22,9 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 - `npm run dev` 在 5173 端口启动，把 `/api`、`/ws` 代理到 `SOUS_HUB`（默认 `http://127.0.0.1:8787`，先 `wok dev core`）。也可以 `wok build web` 之后直接打开 Hub 的 8787 端口。
 - 状态变化写成纯函数放在 `src/lib/reduce.ts`，并配上 `*.test.ts` 单元测试；组件里不写事件处理逻辑。
 - 共享状态在 `src/lib/app.ts`：`chat`、`ui`、`wb` 是可变的 store。改完字段后必须调用对应的 `emit()`，组件用 `useChat()` / `useUi()` / `useWb()` 订阅；不调用 `emit()` 的修改不会重绘。
+- 构建时 `vite.config.ts` 写出 `build-info.json`（commit、是否有未提交改动、构建时间），并把同样的信息定义成 `__BUILD__`；Hub 的 `/healthz` 和设置页的“版本”据此提示旧构建。首包只放 React、图标和 Markdown：设置、项目对话框、终端日志用 `lazy()` 加载，`highlight.js` 在第一次出现代码块时才加载（`Markdown.tsx` 的 `useHljs`）；新加的大依赖也要这样分出去。
+- 状态词统一用 `src/lib/status.ts` 和 `src/lib/tasks.ts` 里的词表（待整理、待开始、排队中、执行中、等你审批、验收中、受阻、失败、已完成、已取消），不要在组件里另写一套。数字旁边要有文字（工作台统计、卡片底部计数），不能只靠悬停提示。
+- 次要文字的颜色（`--muted`、`--faint`）在浅色和深色下都要对背景有 4.5:1 的对比度；页面允许缩放（不要在 viewport 里加 `user-scalable=no`），iOS 聚焦放大靠输入框 16px 字号避免。
 - 界面只做中文。中文输入法组合输入时（`isComposing`）按 Enter 不能发送消息。
 - 配色参照 Cursor 主题（开源复刻 BioHazard786/cursor-theme-vscode）：灰色是框架（`bg-rail`、`bg-chrome`：左栏、聊天栏、设置导航），近白是内容区（`bg-page`），白色是卡片（`bg-panel`），层级靠深浅和 1px 细线（`--line`）区分；整体只用黑白灰：状态色 `--warm`、`--danger`、`--ok`、`--done`、`--info` 都映射到灰阶（靠字重和深浅区分，`tone-*` 只改文字色，胶囊统一中性底），岗位头像 `c-<颜色>` 全部是同一种灰；唯一的彩色是天蓝 `--accent`，只用于主要按钮、选中态和特殊需求，链接色也是它。项目和任务的标题前不放图标。深色模式由 `src/lib/theme.ts` 写在 `<html data-theme>` 上（跟随系统 / 浅色 / 深色，存在 localStorage `sous.theme`；`index.html` 里的内联脚本在加载前先套上），深色变量写在 `:root[data-theme='dark']`，不要用 `prefers-color-scheme` 媒体查询。
 - 颜色只用 `src/app.css` 里的 CSS 变量（Tailwind 主题映射成 `bg-page`、`bg-panel`、`bg-sunken`、`bg-hover`、`text-ink`、`text-muted`、`text-faint`、`border-line`、`bg-accent`、`shadow-card`、`shadow-soft`、`shadow-pop` 等），浅色和深色都要能看。

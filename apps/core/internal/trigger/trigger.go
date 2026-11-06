@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -226,12 +227,22 @@ func (s *Scheduler) Followups(ctx context.Context) {
 	}
 
 	stuck, _ := st.Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskBlocked, event.TaskFailed}})
+	archived := map[string]bool{}
+	if ps, err := st.Projects(ctx); err == nil {
+		for _, p := range ps {
+			if p.Archived() {
+				archived[p.ID] = true
+			}
+		}
+	}
 	for _, t := range stuck {
-		if t.Dismissed || now.Sub(time.UnixMilli(t.UpdatedAt)) < s.opt.BlockedAfter {
+		if t.Dismissed || archived[t.ProjectID] || now.Sub(time.UnixMilli(t.UpdatedAt)) < s.opt.BlockedAfter {
 			continue
 		}
 		what := map[string]string{event.TaskBlocked: "受阻", event.TaskFailed: "失败"}[t.Status]
-		s.once(ctx, fmt.Sprintf("task:%s:%d", t.ID, t.UpdatedAt), t.OriginThreadID, "跟进任务",
+		// Once per task and reason: editing the task (its priority, say)
+		// does not make the same news again (review 4.27).
+		s.once(ctx, fmt.Sprintf("task:%s:%s:%x", t.ID, t.Status, sha256.Sum256([]byte(t.StatusReason)))[:80], t.OriginThreadID, "跟进任务",
 			fmt.Sprintf("【跟进】任务「%s」（id %s）已经%s %s，原因：%s。可以用 task_dispatch 重试或换 agent、换机器，也可以修改任务；需要用户拿主意时提醒用户。",
 				t.Title, t.ID, what, hours(t.UpdatedAt), t.StatusReason)+followupTail)
 	}

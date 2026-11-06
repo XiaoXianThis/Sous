@@ -20,6 +20,9 @@
 //	reject like write, but a refused permission ends the turn as
 //	       "cancelled" (as OpenCode does); a later prompt in the same
 //	       session writes hello.txt another way and ends the turn
+//	quota  say "Upgrade your plan to continue" and end the turn, without
+//	       a tool call (an agent out of its plan's usage)
+//	noop   say a few words and end the turn, without a tool call
 //	answer answer every prompt in words (a consultant or a reviewer): ask
 //	       to read README.md first; when the prompt contains "改一下",
 //	       also ask to edit it; when it asks for a verdict ("结论 JSON"),
@@ -189,6 +192,16 @@ func runFake(mode string) {
 		if wasLoaded {
 			os.WriteFile(filepath.Join(cwd, "hello.txt"), []byte("hi\n"), 0o644)
 			chunk(sid, "从中断的地方继续，已经创建 hello.txt。")
+			result(id, map[string]string{"stopReason": "end_turn"})
+			return
+		}
+		if mode == "quota" {
+			chunk(sid, "Upgrade your plan to continue")
+			result(id, map[string]string{"stopReason": "end_turn"})
+			return
+		}
+		if mode == "noop" {
+			chunk(sid, "好的，我看了一下。")
 			result(id, map[string]string{"stopReason": "end_turn"})
 			return
 		}

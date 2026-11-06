@@ -5,7 +5,7 @@ import {
   runLook, stages, taskState, taskStateDetail, taskStateRank,
   type Look, type Stage, type TaskState,
 } from './status'
-import type { AgentInfo, Node, Overview, Persona, Project, Run, Task, GitState } from './types'
+import type { AgentInfo, Node, Overview, Persona, Project, RepoScan, Run, Task, GitState } from './types'
 
 const MISC = 'misc'
 
@@ -52,6 +52,8 @@ export interface CardTask {
 
 export interface ProjectCard {
   project: Project
+  /** Where its deploys stand, when it deploys. */
+  deploy?: DeployState
   /** Archived projects stay off the workbench; the archive dialog lists them. */
   archived: boolean
   /** When the project or any of its tasks last changed (unix ms). */
@@ -153,7 +155,7 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
   const out: ProjectCard[] = []
   for (const p of o.projects) {
     const mine = [...tasks.values()].filter((t) => (t.project_id || MISC) === p.id)
-    const all = mine.map((t) => cardTask(o, t, mine, projects.get(p.id) ?? p))
+    const all = mine.map((t) => cardTask(o, t))
     const allAgents = [...(agentsByProject.get(p.id) ?? [])].sort((a, b) => a.run.created_at - b.run.created_at)
     const activeTaskIds = new Set(allAgents.map((a) => a.task?.id).filter(Boolean))
     const byUrgency = (a: CardTask, b: CardTask) => taskStateRank(a.state) - taskStateRank(b.state) || b.task.updated_at - a.task.updated_at
@@ -176,6 +178,7 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
       tasks: listed,
       counts,
       unmerged: mine.filter((t) => t.status === 'done' && t.git_state === 'unmerged').length,
+      deploy: deployOf(projects.get(p.id) ?? p, mine),
       rank,
       allAgents,
       allTasks,
@@ -188,6 +191,33 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
   // Attention first, then active, todo, idle; misc always last.
   const score = (c: ProjectCard) => (c.project.id === MISC ? 10 : 0) + taskStateRank(c.rank)
   return out.sort((a, b) => score(a) - score(b) || a.project.name.localeCompare(b.project.name))
+}
+
+/** Where a project's deploys stand, for its card (end-to-end review 4.5). */
+export interface DeployState {
+  /** done: the last deploy passed; running / failed: the newest one. */
+  state: 'done' | 'running' | 'failed' | 'none'
+  /** The commit deployed last (verified when the project has a health check). */
+  commit: string
+  /** The newest deploy task. */
+  task?: Task
+  text: string
+}
+
+/** deployOf reads the project's deploy tasks (ops tasks with a commit). */
+export function deployOf(p: Project, mine: Task[]): DeployState | undefined {
+  if (!p.deploy) return undefined
+  const commit = (p.deployed_commit ?? '').slice(0, 8)
+  const latest = mine.filter((t) => t.kind === 'ops' && t.deploy_commit).sort((a, b) => b.created_at - a.created_at)[0]
+  const short = latest?.deploy_commit?.slice(0, 8) ?? ''
+  if (latest && ['queued', 'running', 'waiting_approval', 'review'].includes(latest.status)) {
+    return { state: 'running', commit, task: latest, text: `正在部署 ${short}` }
+  }
+  if (latest && (latest.status === 'failed' || latest.status === 'blocked')) {
+    return { state: 'failed', commit, task: latest, text: `部署 ${short} 没有完成` + (commit ? `，线上仍是 ${commit}` : '') }
+  }
+  if (commit) return { state: 'done', commit, task: latest, text: `已部署 ${commit}` }
+  return { state: 'none', commit: '', task: latest, text: p.deploy.branch ? `还没有部署过 ${p.deploy.branch}` : '没有设置部署分支' }
 }
 
 export function isArchived(p: Project): boolean {
@@ -210,10 +240,6 @@ export function archivedCards(cards: ProjectCard[], query = ''): ProjectCard[] {
     .sort((a, b) => b.touchedAt - a.touchedAt)
 }
 
-/** Whether a project's latest ops task finished after the given time. */
-export function deployedAfter(tasks: Task[], projectId: string, ts: number): boolean {
-  return tasks.some((t) => t.project_id === projectId && t.kind === 'ops' && t.status === 'done' && t.updated_at >= ts)
-}
 
 /** The newest run of a task, with how it looks right now. */
 export function latestRun(o: Overview, taskId: string): { run?: Run; runLook?: Look } {
@@ -224,17 +250,14 @@ export function latestRun(o: Overview, taskId: string): { run?: Run; runLook?: L
   return { run, runLook: runLook(run, waiting) }
 }
 
-function cardTask(o: Overview, t: Task, mine: Task[], p: Project): CardTask {
+function cardTask(o: Overview, t: Task): CardTask {
   return {
     ...latestRun(o, t.id),
     task: t,
     state: taskState(t),
     detail: taskStateDetail(t),
     summary: taskSummary(o, t),
-    stages: stages(t, {
-      hasDeploy: !!p.deploy,
-      deployed: t.status === 'done' && deployedAfter(mine, p.id, t.updated_at),
-    }),
+    stages: stages(t),
   }
 }
 
@@ -324,4 +347,36 @@ function remoteURL(repo: string): string {
   if (/^https?:\/\//.test(repo)) return repo
   const m = repo.match(/^git@([^:]+):(.+?)(?:\.git)?$/)
   return m ? `https://${m[1]}/${m[2].replace(/\.git$/, '')}` : ''
+}
+
+/** One repository the machines found that no project claims yet. */
+export interface Registerable {
+  name: string
+  remote: string
+  wokspace: boolean
+  places: { node_id: string; path: string }[]
+}
+
+/**
+ * The discovered repositories a user can register as projects: one entry per
+ * repository (the same remote on several machines is one project), without
+ * the deploy checkouts on servers, which are not where work happens (end-to-end
+ * review 4.11).
+ */
+export function registerable(found: RepoScan[], nodes: Node[]): Registerable[] {
+  const servers = new Set(nodes.filter((n) => n.role === 'server').map((n) => n.id))
+  const groups = new Map<string, Registerable>()
+  for (const r of found) {
+    if (servers.has(r.node_id)) continue
+    // A remote with no key (a local path) still names one repository.
+    const key = r.remote_key || r.remote || `${r.node_id}\u0000${r.path}`
+    const name = r.path.split(/[\\/]/).pop() || r.path
+    let g = groups.get(key)
+    if (!g) {
+      g = { name, remote: r.remote, wokspace: r.wokspace, places: [] }
+      groups.set(key, g)
+    }
+    if (!g.places.some((p) => p.node_id === r.node_id && p.path === r.path)) g.places.push({ node_id: r.node_id, path: r.path })
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name))
 }

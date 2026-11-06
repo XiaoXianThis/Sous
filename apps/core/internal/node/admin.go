@@ -201,7 +201,7 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 			return a.openShell(args)
 		}
 		return a.listShells(args)
-	case proto.OpRepoSync, proto.OpRepoWIP:
+	case proto.OpRepoSync, proto.OpRepoWIP, proto.OpRepoFetch:
 		var args proto.RepoArgs
 		json.Unmarshal(req.Args, &args)
 		return a.repoOp(ctx, req.Op, args.Root)

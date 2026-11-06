@@ -12,6 +12,7 @@ import PhoneHeader, { BackButton } from './PhoneHeader'
 import Schedules from './Schedules'
 import Settings from './Settings'
 import Usage from './Usage'
+import Versions from './Versions'
 
 // group is for the phone's grouped list, after iOS Settings.
 const tabs = [
@@ -128,6 +129,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
             </span>
           </div>
         </div>
+        <Versions />
         <button className="btn ghost hover:!text-danger" onClick={onLogout}><Icon name="logout" size={15} />退出登录</button>
       </div>
     )

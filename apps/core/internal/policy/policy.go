@@ -226,6 +226,12 @@ func (p *Policy) Classify(r Request) (Category, string) {
 		if out := outside(paths, r.Workdir); out != "" {
 			return OutsideWorktree, "读取工作目录之外的 " + out
 		}
+		if cmd != "" {
+			// A "read" that carries a command line is judged by the command:
+			// the kind is the agent's word, the command is what runs (review
+			// M2; the read-only modes rely on this).
+			return classifyCommand(cmd, r.Workdir)
+		}
 		return Read, ""
 	case "edit", "move":
 		if out := outside(paths, r.Workdir); out != "" {
@@ -247,6 +253,16 @@ func (p *Policy) Classify(r Request) (Category, string) {
 		return classifyCommand(cmd, r.Workdir)
 	}
 	return ExecOther, "未知类型的操作"
+}
+
+// CommandOf is the command line a request runs, as Classify reads it ("" for
+// a request that is not a command).
+func CommandOf(r Request) string {
+	cmd := parseInput(r.RawInput).command
+	if cmd == "" && r.ToolKind == "execute" {
+		cmd = r.Title
+	}
+	return cmd
 }
 
 func (p *Policy) floorHit(cmd string) string {

@@ -3,8 +3,9 @@ import { api } from '../lib/api'
 import { chat, go, openThread, ui, useChat, useWb } from '../lib/app'
 import { runFromHistory, type RunView } from '../lib/runs'
 import { avatarOf, gitStateText, kindText, looks, placeText, reviewText, stages, taskLook, userReviewing } from '../lib/status'
-import { deployedAfter, personaFor } from '../lib/workbench'
+import { personaFor } from '../lib/workbench'
 import type { Run, Task } from '../lib/types'
+import { agentTitle } from './AgentIcon'
 import Icon from './Icon'
 import RunCard from './RunCard'
 import StageBar from './StageBar'
@@ -77,7 +78,25 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
     }
   }
 
+  async function act(fn: () => Promise<unknown>) {
+    setError('')
+    try {
+      await fn()
+      await load()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   const info = looks[look]
+  const isOpenTask = !!task && task.status !== 'done' && task.status !== 'cancelled'
+  const stuck = !!task && (task.status === 'failed' || task.status === 'blocked')
+  const canDispatch = !!task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
+  const dispatchText = !task ? '' : stuck ? '重试' : task.status === 'queued' ? '重新派发' : task.status === 'done' || task.status === 'cancelled' ? '再做一轮' : '派发'
+  const onlineNodes = (data?.nodes ?? []).filter((n) => n.online)
+  const whoAgent = task?.last_agent || task?.agent_pref || ''
+  const whoNode = task?.last_node || task?.node_pref || ''
+  const latestDiff = [...runs].reverse().find((r) => r.diffstat)
   const kindIcon: Record<string, string> = { code: 'terminal', general: 'sparkles', ops: 'server' }
 
   return (
@@ -98,6 +117,11 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
               <p className="m-0 flex flex-wrap gap-1.5 items-center">
                 <span className={`pill tone-${info.tone}`}><Icon name={info.icon} size={12} stroke={2.2} />{info.text}</span>
                 <span className="pill" title={a.title}><Icon name="user" size={12} />{a.title}</span>
+                {whoAgent && (
+                  <span className="pill" title={task.last_agent ? '最近一次执行的 agent 和机器' : '指定的 agent 和机器'}>
+                    <Icon name="terminal" size={12} />{agentTitle(whoAgent)}{whoNode ? ` · ${nodeName(whoNode)}` : ''}
+                  </span>
+                )}
                 <span className="pill" title={`${kindText[task.kind]}任务`}><Icon name={kindIcon[task.kind] ?? 'dot'} size={12} />{kindText[task.kind]}</span>
                 {task.status === 'done' && task.git_state && (
                   <span className="pill" title="改动的去向"><Icon name="branch" size={12} />{gitStateText[task.git_state]}</span>
@@ -106,8 +130,43 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
             </div>
           </header>
 
+          <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="任务操作">
+            {canDispatch && (
+              <button className="btn small" onClick={() => void act(() => api.dispatchTask(task.id))}>
+                <Icon name={stuck ? 'refresh' : 'send'} size={14} stroke={2.2} />{dispatchText}
+              </button>
+            )}
+            {canDispatch && onlineNodes.length > 1 && (
+              <label className="btn small ghost relative cursor-pointer" title="换一台机器重新派发">
+                <Icon name="server" size={14} />换机器
+                <select
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  aria-label="换一台机器重新派发"
+                  value=""
+                  onChange={(e) => { const n = e.currentTarget.value; if (n) void act(() => api.dispatchTask(task.id, n)) }}
+                >
+                  <option value="">选机器…</option>
+                  {onlineNodes.map((n) => <option key={n.id} value={n.id}>{n.name}{n.role === 'server' ? '（服务器）' : ''}</option>)}
+                </select>
+              </label>
+            )}
+            {latestDiff && (
+              <a className="btn small ghost no-underline" href={`/api/v1/runs/${latestDiff.id}/diff`} target="_blank" rel="noreferrer" title={latestDiff.diffstat}>
+                <Icon name="branch" size={14} />看改动
+              </a>
+            )}
+            {isOpenTask && (
+              <button className="btn small ghost" onClick={() => { if (confirm('取消这个任务？正在执行的 Run 会被停止，未完成的子任务也会一起取消。')) void act(() => api.cancelTask(task.id)) }}>
+                <Icon name="x" size={14} />取消
+              </button>
+            )}
+            <button className="btn small ghost" onClick={() => setShowForm(true)} aria-label="说明与设置">
+              <Icon name="settings" size={14} />设置
+            </button>
+          </div>
+
           <div className="card px-3 pt-4 pb-3">
-            <StageBar stages={stages(task, { hasDeploy: !!project?.deploy, deployed: task.status === 'done' && !!data && deployedAfter(data.tasks, task.project_id, task.updated_at) })} labels />
+            <StageBar stages={stages(task)} labels />
           </div>
 
           <dl className="card m-0 px-4 py-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]" aria-label="怎么做">

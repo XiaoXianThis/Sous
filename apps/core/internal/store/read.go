@@ -225,3 +225,42 @@ func (s *Store) DeleteSetting(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key)
 	return err
 }
+
+// UsageProject is token usage of one project ("" for the main conversation
+// and anything not tied to a project).
+type UsageProject struct {
+	ProjectID    string `json:"project_id"`
+	Name         string `json:"name"`
+	Calls        int    `json:"calls"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	CachedTokens int    `json:"cached_tokens"`
+}
+
+// UsageByProject sums token usage since t by project: a call of a task
+// counts for the task's project, a call in a project chat for that project
+// (end-to-end review 4.22).
+func (s *Store) UsageByProject(ctx context.Context, t time.Time) ([]UsageProject, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT pid, COALESCE((SELECT name FROM projects WHERE id = pid), ''), COUNT(*), SUM(i), SUM(o), SUM(c) FROM (
+			SELECT COALESCE(NULLIF(k.project_id, ''), NULLIF(th.project_id, ''), '') AS pid,
+				u.input_tokens AS i, u.output_tokens AS o, u.cached_tokens AS c
+			FROM usage u
+			LEFT JOIN tasks k ON k.id = u.task_id
+			LEFT JOIN threads th ON th.id = u.thread_id
+			WHERE u.ts >= ?)
+		 GROUP BY pid ORDER BY SUM(i) + SUM(o) DESC`, t.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UsageProject{}
+	for rows.Next() {
+		var u UsageProject
+		if err := rows.Scan(&u.ProjectID, &u.Name, &u.Calls, &u.InputTokens, &u.OutputTokens, &u.CachedTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}

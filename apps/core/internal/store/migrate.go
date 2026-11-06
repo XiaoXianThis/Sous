@@ -442,6 +442,18 @@ ALTER TABLE repo_scans ADD COLUMN heads TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
 `,
+	// End-to-end review fixes: how a run ended beyond its status.
+	`
+ALTER TABLE runs ADD COLUMN outcome TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN error_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN refused TEXT NOT NULL DEFAULT '';
+ALTER TABLE repo_scans ADD COLUMN head_times TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN last_agent TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN last_node TEXT NOT NULL DEFAULT '';
+UPDATE tasks SET
+	last_agent = COALESCE((SELECT r.agent FROM runs r WHERE r.task_id = tasks.id AND r.purpose IN ('work', 'rebase') ORDER BY r.created_at DESC LIMIT 1), ''),
+	last_node = COALESCE((SELECT r.node_id FROM runs r WHERE r.task_id = tasks.id AND r.purpose IN ('work', 'rebase') ORDER BY r.created_at DESC LIMIT 1), '');
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -2,7 +2,7 @@ import { ui } from '../lib/app'
 import { setArchived } from '../lib/projects'
 import { taskStates } from '../lib/status'
 import { ago, fullTime } from '../lib/time'
-import type { ProjectCard as Card } from '../lib/workbench'
+import type { ProjectCard as Card, DeployState } from '../lib/workbench'
 import AgentCard from './AgentCard'
 import FileTree from './FileTree'
 import Icon from './Icon'
@@ -40,6 +40,31 @@ export function ProjectTabs({ tab, onTab, tasks, shell = false }: { tab: Project
       {item('tasks', 'list', '任务', tasks)}
       {item('details', 'folder', '详情')}
       {shell && item('shell', 'terminal', '终端')}
+    </div>
+  )
+}
+
+const deployTone: Record<DeployState['state'], string> = { done: 'tone-success', running: 'tone-accent', failed: 'tone-danger', none: '' }
+
+/** One line on where the project's deploys stand (end-to-end review 4.5). */
+function DeployLine({ deploy, onOpenTask }: { deploy: DeployState; onOpenTask: (id: string) => void }) {
+  const t = deploy.task
+  return (
+    <div className="flex items-center gap-1.5 min-w-0 text-[12.5px]" aria-label="部署">
+      <span className={`pill flex-none ${deployTone[deploy.state]}`}>
+        <Icon name="rocket" size={12} stroke={2.2} />部署
+      </span>
+      {t && deploy.state !== 'none' ? (
+        <button
+          className="border-0 bg-transparent p-0 text-left text-muted hover:text-ink overflow-hidden text-ellipsis whitespace-nowrap min-w-0"
+          onClick={() => onOpenTask(t.id)}
+          title={t.status_reason || t.title}
+        >
+          {deploy.text}
+        </button>
+      ) : (
+        <span className="text-muted overflow-hidden text-ellipsis whitespace-nowrap min-w-0">{deploy.text}</span>
+      )}
     </div>
   )
 }
@@ -158,11 +183,15 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
       </div>
       )}
 
-      <footer className="flex items-center gap-1.5 pt-0.5 min-h-[22px]">
+      {card.deploy && !card.archived && (
+        <DeployLine deploy={card.deploy} onOpenTask={onOpenTask} />
+      )}
+
+      <footer className="flex items-center flex-wrap gap-1.5 pt-0.5 min-h-[22px]">
           {p.id !== 'misc' && <LocationsChip locations={card.locations} />}
           {counts.map((k) => (
-            <span key={k} className={`pill tone-${taskStates[k].tone}`} title={taskStates[k].text}>
-              <Icon name={taskStates[k].icon} size={12} stroke={2.2} />{card.counts[k]}
+            <span key={k} className={`pill tone-${taskStates[k].tone}`} title={`${card.counts[k]} 个任务${taskStates[k].text}`}>
+              <Icon name={taskStates[k].icon} size={12} stroke={2.2} />{card.counts[k]} {taskStates[k].text}
             </span>
           ))}
           {card.unmerged > 0 && (

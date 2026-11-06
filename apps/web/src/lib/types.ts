@@ -230,6 +230,10 @@ export interface Run {
   project_id?: string
   session?: string
   resume_session?: string
+  /** How the run ended beyond its status (end-to-end review 4.1, 4.2, 4.14). */
+  outcome?: 'no_action'
+  error_kind?: 'agent_quota' | 'agent_rate_limit' | 'agent_not_logged_in' | 'agent_unavailable'
+  refused?: string[]
 }
 
 export interface GitOp {
@@ -318,6 +322,9 @@ export interface Task {
   base_commit: string
   git_state: GitTaskState | ''
   deploy_commit?: string
+  /** Who did the latest work run, and on which machine (end-to-end review 4.4). */
+  last_agent?: string
+  last_node?: string
 }
 
 export type TaskPlace = 'worktree' | 'in_place' | 'scratch'
@@ -586,6 +593,8 @@ export interface Usage {
   since: number
   usage: UsageRow[]
   daily: UsageDay[]
+  /** By project; project_id '' is the main conversation and the rest. */
+  by_project?: { project_id: string; name: string; calls: number; input_tokens: number; output_tokens: number; cached_tokens: number }[]
 }
 
 export interface NodeVersion {

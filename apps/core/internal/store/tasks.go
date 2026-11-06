@@ -44,7 +44,9 @@ func enqueueEffects(w *Writer, ev event.Event) error {
 		}
 	case event.ApprovalRequested:
 		var p event.ApprovalRequestedPayload
-		if ev.Decode(&p) == nil && p.Review == "ai" {
+		// The approver decides "ai" ones; a task's "user" ones are checked
+		// against what the user already answered in the task.
+		if ev.Decode(&p) == nil && (p.Review == "ai" || ev.TaskID != "") {
 			return w.Enqueue(EffectApprove, p.ApprovalID, nil)
 		}
 	}
@@ -273,11 +275,15 @@ type Task struct {
 	// DeployCommit is the deploy branch's commit an automatic deploy task
 	// deploys.
 	DeployCommit string `json:"deploy_commit,omitempty"`
+	// LastAgent and LastNode are who did the task's latest work run, and
+	// where: what a finished task shows (end-to-end review 4.4).
+	LastAgent string `json:"last_agent,omitempty"`
+	LastNode  string `json:"last_node,omitempty"`
 }
 
 const taskCols = `id, parent_id, origin_thread_id, kind, title, detail, status, status_reason, priority, project_id,
 	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at, persona_id,
-	place, review, on_fail, base_from, base_commit, git_state, handoff, deploy_commit`
+	place, review, on_fail, base_from, base_commit, git_state, handoff, deploy_commit, last_agent, last_node`
 
 func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 	out := []Task{}
@@ -287,7 +293,7 @@ func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 		if err := rows.Scan(&t.ID, &t.ParentID, &t.OriginThreadID, &t.Kind, &t.Title, &t.Detail, &t.Status, &t.StatusReason,
 			&t.Priority, &t.ProjectID, &t.AgentPref, &t.NodePref, &t.PermissionMode, &t.Branch, &t.BaseBranch, &t.PRURL,
 			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt, &t.PersonaID,
-			&t.Place, &t.Review, &t.OnFail, &t.BaseFrom, &t.BaseCommit, &t.GitState, &handoff, &t.DeployCommit); err != nil {
+			&t.Place, &t.Review, &t.OnFail, &t.BaseFrom, &t.BaseCommit, &t.GitState, &handoff, &t.DeployCommit, &t.LastAgent, &t.LastNode); err != nil {
 			rows.Close()
 			return nil, err
 		}

@@ -301,8 +301,21 @@ func (e *Engine) inbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attention, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskBlocked, event.TaskFailed, event.TaskQueued, event.TaskReview}})
+	// Tasks of archived projects wait until the project is active again;
+	// they are not news (review 4.20).
+	archived := map[string]bool{}
+	if ps, err := e.store().Projects(ctx); err == nil {
+		for _, p := range ps {
+			if p.Archived() {
+				archived[p.ID] = true
+			}
+		}
+	}
 	var tasks []store.Task
 	for _, t := range attention {
+		if archived[t.ProjectID] {
+			continue
+		}
 		if t.Dismissed || t.Status == event.TaskQueued && !strings.HasPrefix(t.StatusReason, "等待机器") {
 			continue
 		}
