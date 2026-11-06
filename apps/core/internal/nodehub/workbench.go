@@ -49,6 +49,51 @@ func (h *Hub) PRState(ctx context.Context, nodeID, url string) (proto.PRState, e
 	return st, err
 }
 
+// GitStatus reads where a project checkout stands on a machine, right now
+// (decision 0022).
+func (h *Hub) GitStatus(ctx context.Context, nodeID, root string) (proto.GitStatus, error) {
+	raw, err := h.Request(ctx, nodeID, proto.OpGitStatus, proto.RepoArgs{Root: root}, time.Minute)
+	if err != nil {
+		return proto.GitStatus{}, err
+	}
+	var st proto.GitStatus
+	err = json.Unmarshal(raw, &st)
+	return st, err
+}
+
+// Grep searches a project directory on a machine.
+func (h *Hub) Grep(ctx context.Context, nodeID string, args proto.GrepArgs) (proto.GrepResult, error) {
+	raw, err := h.Request(ctx, nodeID, proto.OpProjectGrep, args, time.Minute)
+	if err != nil {
+		return proto.GrepResult{}, err
+	}
+	var res proto.GrepResult
+	err = json.Unmarshal(raw, &res)
+	return res, err
+}
+
+// ProjectFile reads one file of a project directory on a machine.
+func (h *Hub) ProjectFile(ctx context.Context, nodeID string, args proto.ProjectArgs) (proto.ProjectFile, error) {
+	raw, err := h.Request(ctx, nodeID, proto.OpProjectRead, args, time.Minute)
+	if err != nil {
+		return proto.ProjectFile{}, err
+	}
+	var f proto.ProjectFile
+	err = json.Unmarshal(raw, &f)
+	return f, err
+}
+
+// ProjectDir lists one directory of a project on a machine.
+func (h *Hub) ProjectDir(ctx context.Context, nodeID string, args proto.ProjectArgs) (proto.ProjectDir, error) {
+	raw, err := h.Request(ctx, nodeID, proto.OpProjectLs, args, time.Minute)
+	if err != nil {
+		return proto.ProjectDir{}, err
+	}
+	var d proto.ProjectDir
+	err = json.Unmarshal(raw, &d)
+	return d, err
+}
+
 // CanRequest reports whether a machine is online and answers node.request.
 func (h *Hub) CanRequest(nodeID string) bool { return h.AdminState(nodeID) == "on" }
 

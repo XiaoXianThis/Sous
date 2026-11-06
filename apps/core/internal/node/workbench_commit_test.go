@@ -21,11 +21,13 @@ func TestInitialCommitMakesRepoUsable(t *testing.T) {
 	if _, err := workspace.Run(ctx, dir, "git", "init", "-q"); err != nil {
 		t.Fatal(err)
 	}
+	workspace.Run(ctx, dir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+	start := workspace.Start{Branch: "main", From: workspace.FromLocal}
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := workspace.PrepareTask(ctx, t.TempDir(), dir, "task-1", "", ""); err == nil {
+	if _, err := workspace.PrepareTaskOn(ctx, t.TempDir(), dir, "task-1", "", "", start); err == nil {
 		t.Fatal("PrepareTask on a repository without commits should fail with a clear error")
 	}
 
@@ -35,7 +37,7 @@ func TestInitialCommitMakesRepoUsable(t *testing.T) {
 	if err := initialCommit(ctx, dir); err != nil {
 		t.Fatalf("second initialCommit should be a no-op: %v", err)
 	}
-	ws, err := workspace.PrepareTask(ctx, t.TempDir(), dir, "task-1", "", "")
+	ws, err := workspace.PrepareTaskOn(ctx, t.TempDir(), dir, "task-1", "", "", start)
 	if err != nil {
 		t.Fatalf("PrepareTask after initial commit: %v", err)
 	}

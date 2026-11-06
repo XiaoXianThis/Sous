@@ -62,10 +62,16 @@ func projectTask(w *Writer, ev event.Event) error {
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
+		handoff := ""
+		if p.Handoff != nil {
+			raw, _ := json.Marshal(p.Handoff)
+			handoff = string(raw)
+		}
 		if err := exec(`INSERT INTO tasks(id, parent_id, origin_thread_id, kind, title, detail, status, priority, project_id,
-			agent_pref, node_pref, permission_mode, persona_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			agent_pref, node_pref, permission_mode, persona_id, created_at, updated_at, place, review, on_fail, base_branch, base_from, handoff, deploy_commit)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.TaskID, p.ParentID, ev.ThreadID, p.Kind, p.Title, p.Detail, p.Status, p.Priority, p.ProjectID,
-			p.AgentPref, p.NodePref, p.PermissionMode, p.PersonaID, ev.TS, ev.TS); err != nil {
+			p.AgentPref, p.NodePref, p.PermissionMode, p.PersonaID, ev.TS, ev.TS, p.Place, p.Review, p.OnFail, p.BaseBranch, p.BaseFrom, handoff, p.DeployCommit); err != nil {
 			return err
 		}
 		return setDeps(w, ev.TaskID, p.DependsOn)
@@ -108,6 +114,21 @@ func projectTask(w *Writer, ev event.Event) error {
 		if p.PersonaID != nil {
 			add("persona_id", *p.PersonaID)
 		}
+		if p.Place != nil {
+			add("place", *p.Place)
+		}
+		if p.Review != nil {
+			add("review", *p.Review)
+		}
+		if p.OnFail != nil {
+			add("on_fail", *p.OnFail)
+		}
+		if p.BaseBranch != nil {
+			add("base_branch", *p.BaseBranch)
+		}
+		if p.BaseFrom != nil {
+			add("base_from", *p.BaseFrom)
+		}
 		args = append(args, ev.TaskID)
 		if err := exec(`UPDATE tasks SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 			return err
@@ -131,6 +152,21 @@ func projectTask(w *Writer, ev event.Event) error {
 			return err
 		}
 		return exec(`UPDATE tasks SET review_note = ?, updated_at = ? WHERE id = ?`, p.Reason, ev.TS, ev.TaskID)
+
+	case event.TaskGit:
+		var p event.TaskGitPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`UPDATE tasks SET git_state = ?, pr_url = CASE WHEN ? = '' THEN pr_url ELSE ? END, updated_at = ? WHERE id = ?`,
+			p.State, p.PRURL, p.PRURL, ev.TS, ev.TaskID)
+
+	case event.ProjectDeployed:
+		var p event.ProjectDeployedPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`UPDATE projects SET deployed_commit = ? WHERE id = ?`, p.Commit, p.ProjectID)
 
 	case event.ProjectPut:
 		var p event.ProjectPayload
@@ -226,20 +262,40 @@ type Task struct {
 	DependsOn      []string `json:"depends_on"`
 	CreatedAt      int64    `json:"created_at"`
 	UpdatedAt      int64    `json:"updated_at"`
+	// Decision 0022.
+	Place      string         `json:"place"`
+	Review     string         `json:"review"`
+	OnFail     string         `json:"on_fail"`
+	BaseFrom   string         `json:"base_from"`
+	BaseCommit string         `json:"base_commit"`
+	GitState   string         `json:"git_state"`
+	Handoff    *event.Handoff `json:"handoff,omitempty"`
+	// DeployCommit is the deploy branch's commit an automatic deploy task
+	// deploys.
+	DeployCommit string `json:"deploy_commit,omitempty"`
 }
 
 const taskCols = `id, parent_id, origin_thread_id, kind, title, detail, status, status_reason, priority, project_id,
-	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at, persona_id`
+	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at, persona_id,
+	place, review, on_fail, base_from, base_commit, git_state, handoff, deploy_commit`
 
 func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 	out := []Task{}
 	for rows.Next() {
 		var t Task
+		var handoff string
 		if err := rows.Scan(&t.ID, &t.ParentID, &t.OriginThreadID, &t.Kind, &t.Title, &t.Detail, &t.Status, &t.StatusReason,
 			&t.Priority, &t.ProjectID, &t.AgentPref, &t.NodePref, &t.PermissionMode, &t.Branch, &t.BaseBranch, &t.PRURL,
-			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt, &t.PersonaID); err != nil {
+			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt, &t.PersonaID,
+			&t.Place, &t.Review, &t.OnFail, &t.BaseFrom, &t.BaseCommit, &t.GitState, &handoff, &t.DeployCommit); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if handoff != "" {
+			t.Handoff = &event.Handoff{}
+			if json.Unmarshal([]byte(handoff), t.Handoff) != nil {
+				t.Handoff = nil
+			}
 		}
 		t.DependsOn = []string{}
 		out = append(out, t)
@@ -348,6 +404,9 @@ type Project struct {
 	Deploy         *event.Deploy `json:"deploy"`
 	// ArchivedAt is when the project was archived; 0 means it is active.
 	ArchivedAt int64 `json:"archived_at"`
+	// DeployedCommit is the deploy branch's commit that is deployed (or the
+	// baseline recorded when automatic deploys started).
+	DeployedCommit string `json:"deployed_commit"`
 	// TouchedAt is when the project or any of its tasks last changed.
 	TouchedAt int64 `json:"touched_at"`
 }
@@ -359,7 +418,7 @@ func (p Project) Archived() bool { return p.ArchivedAt > 0 }
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, repo_url, default_mode, default_agent, created_at, updated_at, remote_key, default_persona, notes, layout, deploy,
-		   archived_at, MAX(updated_at, COALESCE((SELECT MAX(t.updated_at) FROM tasks t WHERE t.project_id = projects.id), 0))
+		   archived_at, deployed_commit, MAX(updated_at, COALESCE((SELECT MAX(t.updated_at) FROM tasks t WHERE t.project_id = projects.id), 0))
 		 FROM projects ORDER BY id = 'misc', name`)
 	if err != nil {
 		return nil, err
@@ -370,7 +429,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 		var p Project
 		var deploy string
 		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultMode, &p.DefaultAgent, &p.CreatedAt, &p.UpdatedAt,
-			&p.RemoteKey, &p.DefaultPersona, &p.Notes, &p.Layout, &deploy, &p.ArchivedAt, &p.TouchedAt); err != nil {
+			&p.RemoteKey, &p.DefaultPersona, &p.Notes, &p.Layout, &deploy, &p.ArchivedAt, &p.DeployedCommit, &p.TouchedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}

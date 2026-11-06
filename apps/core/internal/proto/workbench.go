@@ -18,7 +18,10 @@ const (
 
 // Run kinds beyond code and general.
 const (
-	KindOps = "ops" // in place, in a project's directory on a server
+	KindOps = "ops" // in place, in a project's directory (kept for old runs)
+	// KindInPlace works in a project's directory itself; the node takes a
+	// snapshot first so the changes can be shown and undone (decision 0022).
+	KindInPlace = "in_place"
 )
 
 // Purposes of setup runs: the node itself runs fixed commands, with no agent.
@@ -35,6 +38,9 @@ type Repo struct {
 	Dirty    bool      `json:"dirty,omitempty"`
 	Wokspace bool      `json:"wokspace,omitempty"` // AGENTS.md plus apps/ build/ docs/ work/
 	Git      *GitState `json:"git,omitempty"`
+	// Heads are the remote-tracking branches of origin and their commits
+	// ("main": "<sha>"), as of the last fetch or push; for deploy branches.
+	Heads map[string]string `json:"heads,omitempty"`
 }
 
 // GitState is where a checkout stands against its upstream
@@ -97,6 +103,9 @@ const (
 	OpSetRole       = "node.set_role"       // {role}
 	OpPRState       = "gh.pr_state"         // {url} -> PRState
 	OpScan          = "repos.scan"          // -> NodeRepos
+	// Decision 0022.
+	OpGitStatus   = "git.status"   // {root} -> GitStatus
+	OpProjectGrep = "project.grep" // {root, rel, pattern} -> GrepResult
 )
 
 type WorkspacesArgs struct {
@@ -114,4 +123,97 @@ type PRArgs struct {
 type PRState struct {
 	State    string `json:"state"` // OPEN / CLOSED / MERGED
 	MergedAt string `json:"merged_at,omitempty"`
+}
+
+// Git operations of a git run (decision 0022). Every parameter is explicit:
+// the node never picks a branch or a remote by itself.
+const (
+	GitCommit  = "commit"  // commit what is left in the task's worktree (Squash: one commit since BaseCommit)
+	GitMerge   = "merge"   // rebase the task branch onto Into, then fast-forward Into
+	GitPush    = "push"    // push Branch to Remote (no force)
+	GitPR      = "pr"      // push the task branch and open a pull request against Base
+	GitUndo    = "undo"    // undo the last operation sous did on Branch that is not pushed
+	GitDiscard = "discard" // delete the task's worktree and branch
+	GitRestore = "restore" // put an in-place task's directory back to its snapshot
+)
+
+// GitOp is what a git run does. Repository is RunStart.RepoPath; a task's
+// worktree and branch come from RunStart.TaskID and Branch.
+type GitOp struct {
+	Op         string `json:"op"`
+	Into       string `json:"into,omitempty"`        // merge: the branch to fast-forward
+	Base       string `json:"base,omitempty"`        // pr: the pull request's base branch
+	Branch     string `json:"branch,omitempty"`      // push, undo: the branch
+	Remote     string `json:"remote,omitempty"`      // push: the remote; empty only when it is unambiguous
+	Squash     bool   `json:"squash,omitempty"`      // commit, merge: fold the task's commits into one
+	Message    string `json:"message,omitempty"`     // commit, merge (squash): the commit message
+	Title      string `json:"title,omitempty"`       // pr
+	Body       string `json:"body,omitempty"`        // pr
+	BaseCommit string `json:"base_commit,omitempty"` // where the task started (squash, restore)
+	InPlace    bool   `json:"in_place,omitempty"`    // the task worked in the project directory
+}
+
+// GitResult is what a git run did.
+type GitResult struct {
+	Op        string   `json:"op"`
+	Branch    string   `json:"branch,omitempty"` // the branch that moved
+	Before    string   `json:"before,omitempty"`
+	After     string   `json:"after,omitempty"`
+	Commits   int      `json:"commits,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"` // merge: files in conflict; nothing was changed
+	PRURL     string   `json:"pr_url,omitempty"`
+	Remote    string   `json:"remote,omitempty"`
+	// TaskBranch is the task's branch as it was when a merge deleted it, so
+	// an undo can bring it back.
+	TaskBranch string `json:"task_branch,omitempty"`
+	Message    string `json:"message"` // one sentence for the user
+}
+
+// GitStatus is where a checkout stands right now, for the supervisor to
+// judge which branch is meant (decision 0022). Read without network access.
+type GitStatus struct {
+	Root          string      `json:"root"`
+	Branch        string      `json:"branch,omitempty"` // empty when detached
+	Detached      bool        `json:"detached,omitempty"`
+	Head          string      `json:"head,omitempty"`
+	Upstream      string      `json:"upstream,omitempty"`
+	Ahead         int         `json:"ahead"`
+	Behind        int         `json:"behind"`
+	Changes       int         `json:"changes"`
+	Untracked     int         `json:"untracked"`
+	RemoteDefault string      `json:"remote_default,omitempty"` // for reference only, never a default
+	Remotes       []string    `json:"remotes,omitempty"`
+	Branches      []GitBranch `json:"branches,omitempty"` // recently active local branches
+	FetchedAt     int64       `json:"fetched_at,omitempty"`
+}
+
+type GitBranch struct {
+	Name     string `json:"name"`
+	Upstream string `json:"upstream,omitempty"`
+	Ahead    int    `json:"ahead"`
+	Behind   int    `json:"behind"`
+	When     int64  `json:"when"` // unix seconds of the last commit
+	Subject  string `json:"subject,omitempty"`
+	// Worktree is where the branch is checked out, if anywhere.
+	Worktree string `json:"worktree,omitempty"`
+}
+
+// GrepArgs searches a project directory: Pattern is a Go regular
+// expression, Rel narrows the search to a subdirectory.
+type GrepArgs struct {
+	Root    string `json:"root"`
+	Rel     string `json:"rel,omitempty"`
+	Pattern string `json:"pattern"`
+}
+
+type GrepMatch struct {
+	Rel  string `json:"rel"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+type GrepResult struct {
+	Matches   []GrepMatch `json:"matches"`
+	Truncated bool        `json:"truncated,omitempty"`
+	Files     int         `json:"files"` // files searched
 }

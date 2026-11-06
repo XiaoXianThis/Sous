@@ -17,7 +17,11 @@ import (
 // Tools returns the supervisor's task tools.
 func (e *Engine) Tools() []tool.Tool {
 	return []tool.Tool{createTool{e}, updateTool{e}, cancelTool{e}, dispatchTool{e}, listTool{e}, runMessageTool{e}, runCancelTool{e},
-		projectPutTool{e}, projectCreateTool{e}, projectCloneTool{e}, projectArchiveTool{e}}
+		projectPutTool{e}, projectCreateTool{e}, projectCloneTool{e}, projectArchiveTool{e},
+		reviewTool{e}, verdictTool{e},
+		gitStatusTool{e}, gitTool{e, proto.GitCommit}, gitTool{e, proto.GitMerge}, gitTool{e, proto.GitPush}, gitTool{e, proto.GitPR},
+		gitTool{e, proto.GitUndo}, gitTool{e, proto.GitDiscard}, gitTool{e, proto.GitRestore},
+		consultTool{e}, projectReadTool{e}}
 }
 
 type createTool struct{ e *Engine }
@@ -25,16 +29,25 @@ type createTool struct{ e *Engine }
 func (createTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "task_create",
-		Description: "创建一个任务，分给一个岗位（persona），交给用户电脑上的编程 agent 去做。代码任务（改某个项目的代码）要给 project；" +
-			"一般任务（不涉及仓库，比如查磁盘占用、整理文件）不给 project，会归到“杂项”；运维任务（kind=ops，部署、重启、查服务器上的服务）给 project，会在服务器上项目的目录里执行。" +
-			"按任务性质选一个合适的岗位，用户点名某个岗位时用它。detail 要写清楚目标、范围和完成标准，agent 看不到这段对话。" +
-			"dispatch 为 true 时立刻派发：有空闲机器就开始，没有就排队，等机器上线再开始。完成后会先验收，代码任务再 push 并创建 PR，结果会自动汇报到这个对话。",
+		Description: "创建一个任务，分给一个岗位（persona），交给用户电脑上的编程 agent 去做。只在用户明确要你动手、范围也清楚时用；拿不准就先讨论。" +
+			"没有默认值：在哪儿做（place）、怎么验收（review）、不通过怎么办（on_fail）、在 worktree 里做时从哪个分支开始（base_branch + base_from），都按这次的场景定。" +
+			"不知道用户指的是哪个分支时，先用 git_status 看项目现在的状态，还拿不准就问用户。" +
+			"place：worktree 在任务自己的分支和 worktree 里做（可以并行，改动在分支上等用户决定怎么处理）；in_place 直接在项目目录里改（开始前拍快照，可以撤销；同一目录同时只跑一个）；scratch 在临时目录里做，不涉及项目。" +
+			"review：none 不验收，agent 的总结就是汇报；model 由验收模型看 diff；agent 由审查岗位在目录里只读地跑测试检查；user 交给用户。" +
+			"任务做完不会自动提交、合并、推送或开 PR，这些等用户说了再用 git_* 工具做。detail 要写清楚目标、范围和完成标准，agent 看不到这段对话。" +
+			"讨论是和项目顾问（consult）进行的、现在要动手时，from_consult=true 让读过代码的顾问会话接着做。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"title":{"type":"string","description":"一句话标题"},
 			"detail":{"type":"string","description":"完整的任务说明"},
-			"project":{"type":"string","description":"项目名或 id；一般任务不填"},
-			"kind":{"type":"string","enum":["code","general","ops"],"description":"不填时：给了 project 是 code，否则 general；部署和维护服务器用 ops"},
+			"project":{"type":"string","description":"项目名或 id；不涉及项目时不填（scratch）"},
+			"place":{"type":"string","enum":["worktree","in_place","scratch"],"description":"在哪儿做"},
+			"review":{"type":"string","enum":["none","model","agent","user"],"description":"怎么验收"},
+			"on_fail":{"type":"string","enum":["rework","ask"],"description":"验收不通过时：rework 照意见返工；ask 停下来由你或用户决定。review 不是 none 时必填"},
+			"base_branch":{"type":"string","description":"place=worktree：任务分支从哪个分支开始（看 git_status 和对话判断，常常是用户正在用的当前分支）"},
+			"base_from":{"type":"string","enum":["local","remote"],"description":"place=worktree：local 用本地分支（含没推送的提交），remote 先 fetch 再用 origin 上的"},
+			"kind":{"type":"string","enum":["code","general","ops"],"description":"标签：代码、一般、运维（部署和维护服务器）；不填按 place"},
 			"persona":{"type":"string","description":"岗位名或 id，见环境说明里的岗位列表；不填用项目的默认岗位"},
+			"from_consult":{"type":"boolean","description":"把这个项目和顾问的讨论会话交给这个任务"},
 			"dispatch":{"type":"boolean","description":"是否立刻派发，默认 true"},
 			"agent":{"type":"string","description":"指定 agent：claude / codex / cursor / opencode / kiro；不填按项目和全局默认"},
 			"machine":{"type":"string","description":"指定机器名或 id；不填按项目的机器优先级"},
@@ -42,14 +55,18 @@ func (createTool) Spec() provider.ToolSpec {
 			"priority":{"type":"integer","description":"越大越优先，默认 0"},
 			"parent":{"type":"string","description":"父任务 id，用于拆分子任务"},
 			"depends_on":{"type":"array","items":{"type":"string"},"description":"要等这些任务完成后才开始"}
-		},"required":["title","detail"]}`),
+		},"required":["title","detail","place","review"]}`),
 	}
 }
 
 func (t createTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Title, Detail, Project, Agent, Machine, Parent string
-		Kind, Persona                                  string
+		Kind, Persona, Place, Review                   string
+		OnFail                                         string `json:"on_fail"`
+		BaseBranch                                     string `json:"base_branch"`
+		BaseFrom                                       string `json:"base_from"`
+		FromConsult                                    bool   `json:"from_consult"`
 		PermissionMode                                 string `json:"permission_mode"`
 		Dispatch                                       *bool
 		Priority                                       int
@@ -60,7 +77,7 @@ func (t createTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 	}
 	in := Input{ThreadID: tool.TurnFrom(ctx).ThreadID, Title: a.Title, Detail: a.Detail, Agent: a.Agent, Mode: a.PermissionMode,
 		Priority: a.Priority, ParentID: a.Parent, DependsOn: a.DependsOn, Dispatch: a.Dispatch == nil || *a.Dispatch, Actor: event.ActorSupervisor,
-		Kind: a.Kind}
+		Kind: a.Kind, Place: a.Place, Review: a.Review, OnFail: a.OnFail, BaseBranch: a.BaseBranch, BaseFrom: a.BaseFrom, FromConsult: a.FromConsult}
 	if a.Persona != "" {
 		p, err := t.e.findPersona(ctx, a.Persona)
 		if err != nil {
@@ -101,12 +118,16 @@ type updateTool struct{ e *Engine }
 func (updateTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "task_update",
-		Description: "修改任务：标题、说明、优先级、指定的 agent 或机器、依赖；或者把状态改成 inbox / planned / blocked / done。只填要改的字段。" +
+		Description: "修改任务：标题、说明、优先级、指定的 agent 或机器、依赖、在哪儿做和怎么验收；或者把状态改成 inbox / planned / blocked / done。只填要改的字段。" +
 			"任务正在执行时，改说明会把新说明转给 agent；只是补充一两句要求时，用 run_message 更直接。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string"},
 			"title":{"type":"string"},"detail":{"type":"string"},"priority":{"type":"integer"},
 			"agent":{"type":"string"},"machine":{"type":"string"},
+			"place":{"type":"string","enum":["worktree","in_place","scratch"]},
+			"review":{"type":"string","enum":["none","model","agent","user"]},
+			"on_fail":{"type":"string","enum":["rework","ask"]},
+			"base_branch":{"type":"string"},"base_from":{"type":"string","enum":["local","remote"]},
 			"persona":{"type":"string","description":"岗位名或 id"},
 			"permission_mode":{"type":"string","enum":["default","auto","open"]},
 			"depends_on":{"type":"array","items":{"type":"string"}},
@@ -119,7 +140,10 @@ func (updateTool) Spec() provider.ToolSpec {
 func (t updateTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		ID, Title, Detail, Agent, Machine, Status, Reason *string
-		Persona                                           *string
+		Persona, Place, Review                            *string
+		OnFail                                            *string `json:"on_fail"`
+		BaseBranch                                        *string `json:"base_branch"`
+		BaseFrom                                          *string `json:"base_from"`
 		PermissionMode                                    *string `json:"permission_mode"`
 		Priority                                          *int
 		DependsOn                                         *[]string `json:"depends_on"`
@@ -133,7 +157,8 @@ func (t updateTool) Call(ctx context.Context, raw json.RawMessage) (string, erro
 	if err := t.e.checkScope(ctx, *a.ID); err != nil {
 		return "", err
 	}
-	f := event.TaskFields{Title: a.Title, Detail: a.Detail, Priority: a.Priority, AgentPref: a.Agent, PermissionMode: a.PermissionMode}
+	f := event.TaskFields{Title: a.Title, Detail: a.Detail, Priority: a.Priority, AgentPref: a.Agent, PermissionMode: a.PermissionMode,
+		Place: a.Place, Review: a.Review, OnFail: a.OnFail, BaseBranch: a.BaseBranch, BaseFrom: a.BaseFrom}
 	if a.Persona != nil {
 		id := ""
 		if *a.Persona != "" {
@@ -203,8 +228,8 @@ type dispatchTool struct{ e *Engine }
 func (dispatchTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "task_dispatch",
-		Description: "派发一个还没开始、失败了或受阻的任务（也用于重试）。可以换 agent 或换机器；不填就按任务原来的设置。" +
-			"没有可用机器时任务会排队，机器上线后自动开始。",
+		Description: "派发一个还没开始、失败了或受阻的任务（也用于重试、返工）。可以换 agent 或换机器；不填就按任务原来的设置。" +
+			"任务要先定下在哪儿做和怎么验收（用 task_update）。没有可用机器时任务会排队，机器上线后自动开始。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string"},"agent":{"type":"string"},"machine":{"type":"string"}
 		},"required":["id"]}`),
@@ -392,11 +417,32 @@ func describe(t store.Task) string {
 	if t.StatusReason != "" {
 		s += "（" + t.StatusReason + "）"
 	}
+	var attrs []string
+	if t.Place != "" {
+		attrs = append(attrs, placeShort[t.Place])
+	}
+	if t.Place == event.PlaceWorktree && t.Branch != "" {
+		attrs = append(attrs, "分支 "+t.Branch)
+	} else if t.Place == event.PlaceWorktree && t.BaseBranch != "" {
+		attrs = append(attrs, "从 "+t.BaseFrom+" 的 "+t.BaseBranch+" 开始")
+	}
+	if t.Review != "" {
+		attrs = append(attrs, "验收："+reviewShort[t.Review])
+	}
+	if t.GitState != "" {
+		attrs = append(attrs, "分支"+gitStateName[t.GitState])
+	}
+	if len(attrs) > 0 {
+		s += "；" + strings.Join(attrs, "，")
+	}
 	if t.PRURL != "" {
 		s += "，PR " + t.PRURL
 	}
 	return s
 }
+
+var placeShort = map[string]string{event.PlaceWorktree: "在 worktree 里", event.PlaceInPlace: "就地", event.PlaceScratch: "临时目录"}
+var reviewShort = map[string]string{event.ReviewNone: "不验收", event.ReviewModel: "模型看 diff", event.ReviewAgent: "审查岗位", event.ReviewUser: "用户"}
 
 // Environment describes personas, projects and the open tasks of a thread
 // for the supervisor's prompt, one line each.
@@ -451,6 +497,9 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		if p.Layout == projectkey.LayoutWokspace {
 			line += "，wokspace 结构"
 		}
+		if c := e.ConsultState(ctx, p.ID); c != "" {
+			line += "，" + c
+		}
 		if p.DefaultPersona != "" {
 			line += "，默认岗位 " + pname[p.DefaultPersona]
 		}
@@ -459,8 +508,8 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		}
 		if d := p.Deploy; d != nil {
 			line += fmt.Sprintf("，部署到 %s:%s（%s）", name[d.NodeID], d.Path, d.Command)
-			if d.AutoOnMerge {
-				line += "，PR 合并后自动部署"
+			if d.AutoOnMerge && d.Branch != "" {
+				line += "，" + d.Branch + " 有新提交时自动部署"
 			}
 		}
 		out = append(out, line)
@@ -472,9 +521,8 @@ func (e *Engine) Environment(ctx context.Context, threadID string) []string {
 		out = append(out, fmt.Sprintf("已归档的项目（用户没有明确提到时不要管它们，也不要往里派任务；在已归档的项目里建任务会让它重新激活）：%s", strings.Join(archived, "、")))
 	}
 	if active == 0 && len(archived) == 0 {
-		out = append(out, "还没有登记任何项目；可以用 project_put 登记已有的仓库，或者用 project_create 新建一个（默认 wokspace 结构）。")
+		out = append(out, "还没有登记任何项目；可以用 project_put 登记已有的仓库，或者用 project_create 新建一个。")
 	}
-	out = append(out, "新建项目默认使用 wokspace 规范（https://github.com/XiaoXianThis/wokspace）：用 project_create，除非用户明确要别的结构。")
 	tasks, _ := e.store().Tasks(ctx, store.TaskFilter{ThreadID: threadID, Statuses: openStatuses, Limit: 20})
 	for _, t := range tasks {
 		line := "这个对话里的" + describe(t)
@@ -530,7 +578,8 @@ func (projectPutTool) Spec() provider.ToolSpec {
 			"deploy":{"type":"object","properties":{
 				"machine":{"type":"string","description":"服务器名或 id"},
 				"path":{"type":"string"},"command":{"type":"string"},"health":{"type":"string"},
-				"auto_on_merge":{"type":"boolean"}}}
+				"branch":{"type":"string","description":"部署分支：origin 上这个分支有新提交时就是要部署的东西"},
+				"auto_on_merge":{"type":"boolean","description":"部署分支有新提交时自动部署（要有 branch）"}}}
 		}}`),
 	}
 }
@@ -543,8 +592,8 @@ func (t projectPutTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 		Notes          *string `json:"notes"`
 		DefaultPersona *string `json:"default_persona"`
 		Deploy         *struct {
-			Machine, Path, Command, Health string
-			AutoOnMerge                    bool `json:"auto_on_merge"`
+			Machine, Path, Command, Health, Branch string
+			AutoOnMerge                            bool `json:"auto_on_merge"`
 		} `json:"deploy"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -580,7 +629,11 @@ func (t projectPutTool) Call(ctx context.Context, raw json.RawMessage) (string, 
 			if err != nil {
 				return "", err
 			}
-			d = &event.Deploy{NodeID: id, Path: a.Deploy.Path, Command: a.Deploy.Command, Health: a.Deploy.Health, AutoOnMerge: a.Deploy.AutoOnMerge}
+			if a.Deploy.AutoOnMerge && strings.TrimSpace(a.Deploy.Branch) == "" {
+				return "", fmt.Errorf("%w: 自动部署要说明部署分支（deploy.branch）", ErrInvalid)
+			}
+			d = &event.Deploy{NodeID: id, Path: a.Deploy.Path, Command: a.Deploy.Command, Health: a.Deploy.Health,
+				Branch: strings.TrimSpace(a.Deploy.Branch), AutoOnMerge: a.Deploy.AutoOnMerge}
 		}
 		in.Deploy = &d
 	}
@@ -631,15 +684,15 @@ type projectCreateTool struct{ e *Engine }
 func (projectCreateTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "project_create",
-		Description: "新建一个项目：在一台开发机的工作空间里创建仓库，默认用 wokspace 规范（wok init）。" +
+		Description: "新建一个项目：在一台开发机的工作空间里创建仓库。结构（layout）按用户的说法或记下的习惯定：wokspace 用 wok init 建 wokspace 结构，plain 只 git init；不知道就先问用户。" +
 			"会请用户批准要执行的命令。owner 不为空时同时创建 GitHub 仓库并 push（也要用户批准）。完成后会在对话里汇报。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"name":{"type":"string","description":"项目名：小写字母、数字和连字符，比如 my-app"},
 			"machine":{"type":"string","description":"开发机名或 id；不填选第一台能用的"},
-			"layout":{"type":"string","enum":["wokspace","plain"],"description":"默认 wokspace；plain 只 git init"},
+			"layout":{"type":"string","enum":["wokspace","plain"],"description":"wokspace：wok init；plain：只 git init"},
 			"owner":{"type":"string","description":"GitHub 用户或组织；不填不建远端仓库"},
 			"private":{"type":"boolean","description":"GitHub 仓库是否私有，默认 true"}
-		},"required":["name"]}`),
+		},"required":["name","layout"]}`),
 	}
 }
 

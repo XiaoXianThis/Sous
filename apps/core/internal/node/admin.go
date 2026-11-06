@@ -219,6 +219,14 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		var args proto.PRArgs
 		json.Unmarshal(req.Args, &args)
 		return a.prState(ctx, args.URL)
+	case proto.OpGitStatus:
+		var args proto.RepoArgs
+		json.Unmarshal(req.Args, &args)
+		return a.gitStatus(ctx, args.Root)
+	case proto.OpProjectGrep:
+		var args proto.GrepArgs
+		json.Unmarshal(req.Args, &args)
+		return a.grep(ctx, args)
 	}
 	return nil, nodeErr(proto.ErrCodeInvalid, "不认识的操作 %q，可能需要更新 sous", req.Op)
 }

@@ -41,6 +41,12 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
   const [mode, setMode] = useState('')
   const [persona, setPersona] = useState('')
   const [kind, setKind] = useState<Task['kind'] | ''>('')
+  // Decision 0022: no defaults; a task gets these before it is dispatched.
+  const [place, setPlace] = useState<Task['place']>('')
+  const [review, setReview] = useState<Task['review']>('')
+  const [onFail, setOnFail] = useState<Task['on_fail']>('')
+  const [baseBranch, setBaseBranch] = useState('')
+  const [baseFrom, setBaseFrom] = useState<Task['base_from']>('')
   const [dirty, setDirtyState] = useState(false)
   const dirtyRef = useRef(false)
   const projectIdRef = useRef('')
@@ -84,6 +90,11 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
     setMode(t.permission_mode)
     setPersona(t.persona_id)
     setKind(t.kind)
+    setPlace(t.place ?? '')
+    setReview(t.review ?? '')
+    setOnFail(t.on_fail ?? '')
+    setBaseBranch(t.base_branch ?? '')
+    setBaseFrom(t.base_from ?? '')
   }
 
   useEffect(() => {
@@ -116,7 +127,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
         const t = await api.createTask({
           title, detail, project_id: pid(), priority, agent_pref: agent, node_pref: node,
           permission_mode: mode as Task['permission_mode'], persona_id: persona, dispatch,
-          kind: kind || (projectId && projectId !== 'misc' ? 'code' : 'general'),
+          kind: kind || undefined, place, review, on_fail: onFail, base_branch: baseBranch.trim(), base_from: baseFrom,
         })
         setDirty(false)
         onOpenTask(t.id)
@@ -125,6 +136,8 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
       await api.patchTask(id, {
         title, detail, project_id: pid(), priority, agent_pref: agent, node_pref: node,
         permission_mode: mode as Task['permission_mode'], persona_id: persona,
+        ...(task?.branch ? {} : { place, base_branch: baseBranch.trim(), base_from: baseFrom }),
+        review, on_fail: onFail,
       })
       setDirty(false)
       if (dispatch) await api.dispatchTask(id)
@@ -137,11 +150,11 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
   }
 
   const nodeName = (nid: string) => nodes.find((n) => n.id === nid)?.name ?? '未知机器'
-  const purposeText: Record<string, string> = { work: '开发', rebase: 'rebase', deliver: '交付' }
+  const purposeText: Record<string, string> = { work: '开发', rebase: 'rebase', deliver: '交付', review: '验收', git: 'git 操作' }
   const runStatus: Record<string, string> = {
     queued: '排队中', running: '进行中', succeeded: '成功', failed: '失败', cancelled: '已取消', interrupted: '已中断',
   }
-  const canDispatch = task && !['running', 'waiting_approval', 'review'].includes(task.status) && !(task.status === 'done' && task.pr_url)
+  const canDispatch = task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
   const when = (ts: number) => new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const badgeCls = task
     ? task.status === 'blocked' || task.status === 'failed'
@@ -164,7 +177,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                 {task.status_reason && <span className="text-muted text-[13px] [overflow-wrap:anywhere]">{task.status_reason}</span>}
               </div>
               {task.pr_url && (
-                <p className="m-0 text-[14px] [overflow-wrap:anywhere]">PR：<a className="text-accent" href={task.pr_url} target="_blank" rel="noreferrer">{task.pr_url}</a>（sous 不会合并，请你评审后合并）</p>
+                <p className="m-0 text-[14px] [overflow-wrap:anywhere]">PR：<a className="text-accent" href={task.pr_url} target="_blank" rel="noreferrer">{task.pr_url}</a></p>
               )}
               {task.review_note && !task.status_reason.includes(task.review_note) && (
                 <p className="m-0 text-[14px] [overflow-wrap:anywhere]"><strong>验收：</strong>{task.review_note}</p>
@@ -237,14 +250,59 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                 </select>
               </label>
 
+              <label className="grid gap-1 text-[13px] text-muted">
+                在哪儿做
+                <select className={inputCls} value={place} onChange={(e) => setPlace(e.currentTarget.value as Task['place'])} disabled={!!task?.branch}>
+                  <option value="">还没定</option>
+                  <option value="worktree">独立分支（worktree）</option>
+                  <option value="in_place">就地修改（有快照）</option>
+                  <option value="scratch">临时目录</option>
+                </select>
+              </label>
+              {place === 'worktree' && (
+                <>
+                  <label className="grid gap-1 text-[13px] text-muted">
+                    从哪个分支开始
+                    <input className={inputCls} value={baseBranch} onChange={(e) => setBaseBranch(e.currentTarget.value)} placeholder="比如当前分支" disabled={!!task?.branch} />
+                  </label>
+                  <label className="grid gap-1 text-[13px] text-muted">
+                    用本地还是远端的
+                    <select className={inputCls} value={baseFrom} onChange={(e) => setBaseFrom(e.currentTarget.value as Task['base_from'])} disabled={!!task?.branch}>
+                      <option value="">还没定</option>
+                      <option value="local">本地（含没推送的提交）</option>
+                      <option value="remote">远端（先 fetch）</option>
+                    </select>
+                  </label>
+                </>
+              )}
+              <label className="grid gap-1 text-[13px] text-muted">
+                验收
+                <select className={inputCls} value={review} onChange={(e) => setReview(e.currentTarget.value as Task['review'])}>
+                  <option value="">还没定</option>
+                  <option value="none">不验收</option>
+                  <option value="model">验收模型看 diff</option>
+                  <option value="agent">审查岗位跑测试</option>
+                  <option value="user">我来验收</option>
+                </select>
+              </label>
+              {review && review !== 'none' && (
+                <label className="grid gap-1 text-[13px] text-muted">
+                  不通过时
+                  <select className={inputCls} value={onFail} onChange={(e) => setOnFail(e.currentTarget.value as Task['on_fail'])}>
+                    <option value="">还没定</option>
+                    <option value="rework">照意见返工</option>
+                    <option value="ask">停下来商量</option>
+                  </select>
+                </label>
+              )}
               {isNew && (
                 <label className="grid gap-1 text-[13px] text-muted">
-                  类型
+                  标签
                   <select className={inputCls} value={kind} onChange={(e) => setKind(e.currentTarget.value as Task['kind'] | '')}>
-                    <option value="">自动</option>
-                    <option value="code">代码任务</option>
-                    <option value="general">一般任务</option>
-                    <option value="ops">运维任务（服务器）</option>
+                    <option value="">按在哪儿做</option>
+                    <option value="code">代码</option>
+                    <option value="general">一般</option>
+                    <option value="ops">运维</option>
                   </select>
                 </label>
               )}
@@ -341,7 +399,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                           title="在对话里查看"
                         >
                           <span className="font-semibold text-warm">{purposeText[r.purpose] ?? r.purpose}</span>
-                          <span>{r.purpose === 'deliver' ? 'sous' : r.agent} @ {nodeName(r.node_id)} · {runStatus[r.status] ?? r.status}</span>
+                          <span>{r.purpose === 'deliver' || r.purpose === 'git' ? 'sous' : r.agent} @ {nodeName(r.node_id)} · {runStatus[r.status] ?? r.status}</span>
                           <span className="text-muted text-[13px] m-0">{when(r.created_at)} · {modeText[r.permission_mode] ?? r.permission_mode}</span>
                           {r.error && <span className="text-danger text-[13px] m-0 [overflow-wrap:anywhere]">{r.error}</span>}
                           {r.diffstat && <span className="text-muted text-[13px] m-0">{r.diffstat}</span>}
@@ -349,7 +407,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                       </li>
                     ))}
                   </ul>
-                  {task.branch && <p className="text-muted text-[13px] m-0">分支：{task.branch}{task.base_branch ? ` → ${task.base_branch}` : ''}</p>}
+                  {task.branch && <p className="text-muted text-[13px] m-0">分支：{task.branch}{task.base_branch ? `（从 ${task.base_branch} 开始）` : ''}</p>}
                 </section>
               )}
             </>

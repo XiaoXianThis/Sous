@@ -1,7 +1,11 @@
 // Package task owns tasks (docs/decisions/0011): their state machine and
 // dependencies, dispatching them to machines through the router, and what
-// happens when a run ends — review, rework, delivery as a pull request,
-// rebase on conflict, and the report back to the thread the task came from.
+// happens when a run ends — the review the supervisor chose, rework, and the
+// report back to the thread the task came from. Since decision 0022 a task
+// ends with its changes on its branch (or in place): committing, merging,
+// pushing and pull requests are separate git operations the supervisor runs
+// when the user asks (git.go), and the supervisor can discuss a project with
+// a read-only consultant (consult.go).
 //
 // The engine reacts to stored events through the effects queue, so a step
 // that was due when the Hub stopped runs after it restarts. Every step is
@@ -29,10 +33,9 @@ import (
 )
 
 const (
-	// MaxWorkRuns bounds how often a task is sent back for rework.
+	// MaxWorkRuns bounds how often a task is sent back for rework: a hard
+	// limit, whatever the supervisor chose for failed reviews.
 	MaxWorkRuns = 3
-	// MaxRebases bounds automatic rebases of a conflicting pull request.
-	MaxRebases = 2
 	// MaxRecoveries bounds automatic restarts of interrupted runs per dispatch.
 	MaxRecoveries = 1
 	// sweepEvery retries queued tasks even when no event wakes the engine.
@@ -67,10 +70,24 @@ type Engine struct {
 
 	mu   sync.Mutex // serializes dispatching, so a run slot is never given twice
 	kick chan struct{}
+
+	// waiters receive the run.turn and run.ended events of runs a tool call
+	// waits for (git operations, consultant questions).
+	deployMu sync.Mutex // one deploy check at a time
+
+	wmu     sync.Mutex
+	waiters map[string]chan event.Event
+	asks    map[string]consultAsk // consultant run -> where its next answer goes
+	// consultMu holds one lock per project: questions to its consultant
+	// go one at a time.
+	consultMu map[string]*sync.Mutex
 }
 
 func New(log *eventlog.Log, nodes *nodehub.Hub) *Engine {
-	return &Engine{Log: log, Nodes: nodes, kick: make(chan struct{}, 1)}
+	e := &Engine{Log: log, Nodes: nodes, kick: make(chan struct{}, 1), waiters: map[string]chan event.Event{}, asks: map[string]consultAsk{},
+		consultMu: map[string]*sync.Mutex{}}
+	log.Listen(e.onRunEvent)
+	return e
 }
 
 func (e *Engine) store() *store.Store { return e.Log.Store }
@@ -81,10 +98,11 @@ func (e *Engine) Start(ctx context.Context) {
 	if err := e.Seed(ctx); err != nil {
 		slog.Error("task: seed the misc project and built-in personas", "err", err)
 	}
-	go e.watchMerges(ctx)
 	approvals := make(chan event.Event, 256)
 	e.Log.Listen(func(ev event.Event) {
 		switch ev.Type {
+		case event.NodeRepos:
+			go e.CheckDeploys(ctx) // a deploy branch may have new commits
 		case event.NodeOnline, event.NodeInventory, event.RunEnded, event.TaskCreated, event.ProjectPut:
 			e.Sweep()
 			if ev.Type == event.NodeOnline {
@@ -229,7 +247,7 @@ func waiting(what, next string) func(*event.TaskStatusPayload) {
 type Input struct {
 	ThreadID  string
 	ParentID  string
-	Kind      string // code / general; empty: code when a project is given
+	Kind      string // a label: code / general / ops; empty: from Place
 	Title     string
 	Detail    string
 	Priority  int
@@ -241,6 +259,17 @@ type Input struct {
 	DependsOn []string
 	Dispatch  bool // start right away (or queue)
 	Actor     string
+
+	// Decision 0022: no defaults. A task can be created without them (the
+	// user files one on the page) but not dispatched.
+	Place      string // worktree / in_place / scratch
+	Review     string // none / model / agent / user
+	OnFail     string // rework / ask
+	BaseBranch string // worktree: the branch it starts from
+	BaseFrom   string // worktree: local / remote
+	// FromConsult hands the project's consultant session to the task.
+	FromConsult  bool
+	DeployCommit string // an automatic deploy: the commit it deploys
 }
 
 // Create validates and stores a new task, and dispatches it when asked.
@@ -250,16 +279,13 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		return store.Task{}, fmt.Errorf("%w: 任务需要标题", ErrInvalid)
 	}
 	if in.Kind == "" {
-		in.Kind = event.TaskKindGeneral
-		if in.ProjectID != "" && in.ProjectID != projectkey.MiscID {
-			in.Kind = event.TaskKindCode
-		}
+		in.Kind = kindOfPlace(in.Place)
 	}
 	if in.Kind != event.TaskKindCode && in.Kind != event.TaskKindGeneral && in.Kind != event.TaskKindOps {
 		return store.Task{}, fmt.Errorf("%w: kind 只能是 code、general 或 ops", ErrInvalid)
 	}
-	if in.Kind == event.TaskKindOps && (in.ProjectID == "" || in.ProjectID == projectkey.MiscID) {
-		return store.Task{}, fmt.Errorf("%w: 运维任务需要指定项目", ErrInvalid)
+	if err := validAttrs(in.Place, in.Review, in.OnFail, in.BaseFrom); err != nil {
+		return store.Task{}, err
 	}
 	if in.ProjectID == "" {
 		if _, err := e.store().Project(ctx, projectkey.MiscID); err == nil {
@@ -274,8 +300,22 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	if err := validMode(in.Mode); err != nil {
 		return store.Task{}, err
 	}
-	if in.Kind == event.TaskKindCode && in.ProjectID == "" {
-		return store.Task{}, fmt.Errorf("%w: 代码任务需要指定项目", ErrInvalid)
+	if (in.Place == event.PlaceWorktree || in.Place == event.PlaceInPlace) && (in.ProjectID == "" || in.ProjectID == projectkey.MiscID) {
+		return store.Task{}, fmt.Errorf("%w: %s需要指定项目", ErrInvalid, placeLabel[in.Place])
+	}
+	var handoff *event.Handoff
+	if in.FromConsult {
+		h, err := e.takeConsultant(ctx, in.ProjectID)
+		if err != nil {
+			return store.Task{}, err
+		}
+		handoff = h
+		if in.Node == "" {
+			in.Node = h.NodeID // the session lives on that machine
+		}
+		if in.Agent == "" {
+			in.Agent = h.Agent
+		}
 	}
 	var archived bool
 	if in.ProjectID != "" {
@@ -305,6 +345,8 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	ev := event.New(event.TaskCreated, in.Actor, in.ThreadID, event.TaskCreatedPayload{
 		ParentID: in.ParentID, Kind: in.Kind, Title: in.Title, Detail: strings.TrimSpace(in.Detail), Priority: in.Priority,
 		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, PersonaID: in.Persona, DependsOn: in.DependsOn, Status: status,
+		Place: in.Place, Review: in.Review, OnFail: in.OnFail, BaseBranch: strings.TrimSpace(in.BaseBranch), BaseFrom: in.BaseFrom,
+		Handoff: handoff, DeployCommit: in.DeployCommit,
 	})
 	ev.TaskID = ids.New()
 	if archived {
@@ -322,6 +364,75 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	}
 	return e.store().Task(ctx, ev.TaskID)
 }
+
+// kindOfPlace is the label of a task that names none.
+func kindOfPlace(place string) string {
+	if place == event.PlaceScratch {
+		return event.TaskKindGeneral
+	}
+	return event.TaskKindCode
+}
+
+var placeLabel = map[string]string{event.PlaceWorktree: "在 worktree 里做的任务", event.PlaceInPlace: "就地执行的任务", event.PlaceScratch: "临时目录里的任务"}
+
+// validAttrs checks the attributes that are set; empty ones are checked at
+// dispatch (ready).
+func validAttrs(place, review, onFail, baseFrom string) error {
+	switch place {
+	case "", event.PlaceWorktree, event.PlaceInPlace, event.PlaceScratch:
+	default:
+		return fmt.Errorf("%w: place 只能是 worktree、in_place 或 scratch", ErrInvalid)
+	}
+	switch review {
+	case "", event.ReviewNone, event.ReviewModel, event.ReviewAgent, event.ReviewUser:
+	default:
+		return fmt.Errorf("%w: review 只能是 none、model、agent 或 user", ErrInvalid)
+	}
+	switch onFail {
+	case "", event.OnFailRework, event.OnFailAsk:
+	default:
+		return fmt.Errorf("%w: on_fail 只能是 rework 或 ask", ErrInvalid)
+	}
+	switch baseFrom {
+	case "", event.BaseLocal, event.BaseRemote:
+	default:
+		return fmt.Errorf("%w: base_from 只能是 local 或 remote", ErrInvalid)
+	}
+	return nil
+}
+
+// ready says what a task still lacks before it can run (decision 0022:
+// nothing is filled in by default).
+func (e *Engine) ready(ctx context.Context, t store.Task) error {
+	var missing []string
+	if t.Place == "" {
+		missing = append(missing, "在哪儿做（place）")
+	}
+	if t.Review == "" {
+		missing = append(missing, "怎么验收（review）")
+	} else if t.Review != event.ReviewNone && t.OnFail == "" {
+		missing = append(missing, "验收不通过怎么办（on_fail）")
+	}
+	if t.Place == event.PlaceWorktree && t.Branch == "" && (t.BaseBranch == "" || t.BaseFrom == "") {
+		missing = append(missing, "从哪个分支开始（base_branch 和 base_from）")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: 派发前还要定下%s", ErrInvalid, strings.Join(missing, "、"))
+	}
+	if t.Place == event.PlaceWorktree || t.Place == event.PlaceInPlace {
+		if t.ProjectID == "" || t.ProjectID == projectkey.MiscID {
+			return fmt.Errorf("%w: %s需要指定项目", ErrInvalid, placeLabel[t.Place])
+		}
+	}
+	switch t.GitState {
+	case event.GitMerged, event.GitDiscarded, event.GitPR:
+		return fmt.Errorf("%w: 任务的分支已经%s，请新建一个任务", ErrConflict, gitStateName[t.GitState])
+	}
+	return nil
+}
+
+var gitStateName = map[string]string{event.GitUnmerged: "还没合并", event.GitMerged: "合并了", event.GitPR: "开了 PR",
+	event.GitDiscarded: "丢弃了", event.GitRestored: "撤销了"}
 
 func validMode(m string) error {
 	switch m {
@@ -346,6 +457,12 @@ func (e *Engine) Update(ctx context.Context, id string, f event.TaskFields, acto
 		if err := validMode(*f.PermissionMode); err != nil {
 			return store.Task{}, err
 		}
+	}
+	if err := validAttrs(deref(f.Place), deref(f.Review), deref(f.OnFail), deref(f.BaseFrom)); err != nil {
+		return store.Task{}, err
+	}
+	if (f.Place != nil || f.BaseBranch != nil || f.BaseFrom != nil) && t.Branch != "" && active(t.Status) {
+		return store.Task{}, fmt.Errorf("%w: 任务正在执行，不能改它在哪儿做或从哪儿开始", ErrConflict)
 	}
 	if f.ProjectID != nil && *f.ProjectID != "" {
 		if _, err := e.store().Project(ctx, *f.ProjectID); err != nil {
@@ -374,7 +491,7 @@ func (e *Engine) Update(ctx context.Context, id string, f event.TaskFields, acto
 	}
 	// The agent at work only reads its prompt once: tell it what changed.
 	if f.Detail != nil && *f.Detail != t.Detail {
-		if r, err := e.activeRun(ctx, id); err == nil && r.Status == event.RunStatusRunning && r.Purpose != event.PurposeDeliver {
+		if r, err := e.activeRun(ctx, id); err == nil && r.Status == event.RunStatusRunning && r.Purpose == event.PurposeWork {
 			if err := e.Nodes.Message(ctx, r.ID, "任务说明更新了，请按新的说明继续：\n\n"+*f.Detail); err != nil {
 				slog.Warn("task: forward the new detail", "task", id, "err", err)
 			}
@@ -489,11 +606,10 @@ func (e *Engine) Dispatch(ctx context.Context, id, node, agent, actor string) (s
 	if active(t.Status) && t.Status != event.TaskQueued {
 		return store.Task{}, fmt.Errorf("%w: 任务正在执行", ErrConflict)
 	}
-	if t.Status == event.TaskDone || t.Status == event.TaskCancelled {
-		// Reopening a closed task is allowed: it gets a fresh round of work.
-		if t.Status == event.TaskDone && t.PRURL != "" {
-			return store.Task{}, fmt.Errorf("%w: 任务已经交付了 PR，请新建一个任务", ErrConflict)
-		}
+	// Reopening a closed task is allowed: it gets a fresh round of work on
+	// the same branch, unless the branch was merged, discarded or sent off.
+	if err := e.ready(ctx, t); err != nil {
+		return store.Task{}, err
 	}
 	if node != "" || agent != "" {
 		f := event.TaskFields{}
@@ -511,8 +627,6 @@ func (e *Engine) Dispatch(ctx context.Context, id, node, agent, actor string) (s
 	next := event.PurposeWork
 	if t.Status == event.TaskQueued && t.Next != "" {
 		next = t.Next
-	} else if last := e.lastRun(ctx, id, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver); last.Purpose == event.PurposeDeliver {
-		next = event.PurposeDeliver // the work passed review; only the delivery is left
 	}
 	err = e.transition(ctx, t, event.TaskQueued, "等待派发", "", actor, waiting("", next))
 	e.mu.Unlock()
@@ -570,8 +684,8 @@ func (e *Engine) tryStart(ctx context.Context, id string) (bool, error) {
 	return true, nil
 }
 
-// route picks the machine for the task's next run. Later runs of a code task
-// stay on the machine that holds its branch.
+// route picks the machine for the task's next run. Later runs of a task stay
+// on the machine that holds its branch or snapshot; a review goes there too.
 func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (router.Choice, error) {
 	st := e.store()
 	var proj store.Project
@@ -582,21 +696,24 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 		}
 		proj = p
 	}
-	req := router.Request{Kind: t.Kind, ProjectNodes: proj.Nodes, NodePref: t.NodePref, Role: "dev"}
+	req := router.Request{Place: t.Place, ProjectNodes: proj.Nodes, NodePref: t.NodePref, Prefer: proto.RoleDev}
 	persona := e.personaOf(ctx, t, proj)
 	req.Agent = firstNonEmpty(t.AgentPref, persona.Agent, proj.DefaultAgent, e.setting(ctx, SettingDefaultAgent))
-	if t.Kind == event.TaskKindOps {
-		req.Role = "server"
+	if t.Kind == event.TaskKindOps && t.Place == event.PlaceInPlace {
+		req.Prefer = proto.RoleServer
 		if d := proj.Deploy; d != nil && d.NodeID != "" && (t.NodePref == "" || t.NodePref == d.NodeID) {
 			req.NodePref, req.Path = d.NodeID, d.Path
 		}
 	}
 	last := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase)
-	if t.Kind == event.TaskKindCode && t.Branch != "" && last.NodeID != "" {
+	if last.NodeID != "" && (t.Branch != "" || t.Place == event.PlaceInPlace) {
 		req.Sticky = last.NodeID
+		if t.Place == event.PlaceInPlace && last.RepoPath != "" {
+			req.Path = last.RepoPath // the snapshot belongs to that directory
+		}
 	}
-	if purpose != event.PurposeWork && last.Agent != "" && t.AgentPref == "" {
-		req.Agent = last.Agent // a rebase goes to the agent that wrote the code
+	if purpose == event.PurposeReview {
+		req.Agent = firstNonEmpty(e.reviewerPersona(ctx).Agent, req.Agent)
 	}
 
 	nodes, err := st.Nodes(ctx)
@@ -610,15 +727,6 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 			Running: e.Nodes.Busy(ctx, n.ID), Capacity: n.Concurrency, Role: n.Role,
 		})
 	}
-	if purpose == event.PurposeDeliver {
-		// Delivery needs no agent: it runs on the machine with the branch.
-		for i := range rn {
-			if rn[i].ID == req.Sticky {
-				rn[i].Agents = append(rn[i].Agents, proto.AgentInfo{Name: "sous", Installed: true})
-			}
-		}
-		req.Agent = "sous"
-	}
 	return router.Route(req, rn)
 }
 
@@ -626,6 +734,9 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c router.Choice) error {
 	proj, _ := e.store().Project(ctx, t.ProjectID)
 	persona := e.personaOf(ctx, t, proj)
+	if purpose == event.PurposeReview {
+		persona = e.reviewerPersona(ctx)
+	}
 	mode := firstNonEmpty(t.PermissionMode, persona.DefaultMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
 	thread := t.OriginThreadID
 	if thread == "" {
@@ -633,31 +744,30 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 	}
 	cr := nodehub.CreateRun{
 		ThreadID: thread, NodeID: c.NodeID, Agent: c.Agent, RepoPath: c.Path, TaskID: t.ID, Purpose: purpose,
-		PermissionMode: mode, Branch: t.Branch, BaseBranch: t.BaseBranch, Title: t.Title,
-		Persona: persona.Name,
+		PermissionMode: mode, Branch: t.Branch, BaseBranch: t.BaseBranch, BaseFrom: t.BaseFrom, Title: t.Title,
+		Persona: persona.Name, Options: persona.Options,
 	}
-	if purpose == event.PurposeWork || purpose == event.PurposeRebase {
-		cr.Options = persona.Options
-	}
-	if t.Kind == event.TaskKindOps {
-		cr.Kind = event.RunKindOps
+	switch t.Place {
+	case event.PlaceInPlace:
+		cr.Kind = proto.KindInPlace
+	case event.PlaceScratch:
+		cr.RepoPath = ""
 	}
 	reason := ""
-	switch purpose {
-	case event.PurposeDeliver:
-		cr.Prompt = t.Detail
-		cr.Force = e.countRuns(ctx, t.ID, event.PurposeRebase) > 0
-		reason = "正在交付：push 分支并创建 PR"
-	case event.PurposeRebase:
-		cr.Prompt = rebasePrompt(t)
-		reason = "PR 有冲突，正在 rebase"
-	default:
-		cr.Prompt = e.workPrompt(ctx, t, proj, persona, c.Path != "" && t.Kind != event.TaskKindOps)
+	if purpose == event.PurposeReview {
+		cr.Prompt = e.reviewPrompt(ctx, t)
+		reason = "审查岗位正在验收"
+	} else {
+		cr.Prompt = e.workPrompt(ctx, t, proj, persona, c.Path != "" && t.Place == event.PlaceWorktree)
+		if h := t.Handoff; h != nil && e.countRuns(ctx, t.ID, event.PurposeWork) == 0 {
+			cr.ResumeSession = h.SessionID
+			if h.Note != "" {
+				cr.Prompt = "【之前的讨论】这个任务来自和你（项目顾问）的讨论。讨论里你说过：\n" + h.Note + "\n\n" + cr.Prompt
+			}
+		}
 	}
-	if prev := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver); prev.Status == event.RunStatusInterrupted && purpose != event.PurposeDeliver {
+	if prev := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase); prev.Status == event.RunStatusInterrupted && purpose == event.PurposeWork {
 		cr.RecoveryNote = e.recoveryNote(ctx, prev)
-	} else if prev.Status == event.RunStatusInterrupted {
-		cr.RecoveryNote = "（交付在中断后重新开始）" // marks the run as a recovery
 	}
 	if _, err := e.Nodes.Create(ctx, cr); err != nil {
 		return err
@@ -681,14 +791,18 @@ func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Projec
 			b.WriteString("项目说明：" + notes + "\n")
 		}
 	}
-	if inRepo {
+	switch {
+	case inRepo:
 		// The agent starts inside the task's own worktree. Without this it
 		// goes looking for the project elsewhere (or for apps/<name>).
 		b.WriteString("\n工作目录：当前目录就是项目的代码根目录，是 sous 为这个任务建好的独立 git worktree，已经在任务分支上。" +
 			"直接在当前目录里读写文件，不要去别的路径找项目，不要切换分支，不要改动原仓库。\n" +
-			"不要 push，也不要创建 PR：提交即可（或留着未提交的改动），sous 会在验收通过后自己 push 并开 PR。\n")
+			"可以提交到这个分支，也可以留着未提交的改动；不要 push、不要创建 PR，合并、推送、开 PR 由 sous 按用户的要求另外处理。\n")
+	case t.Place == event.PlaceInPlace:
+		b.WriteString("\n工作目录：当前目录就是项目的目录，你直接在这里改。sous 在开始前拍了快照，改动可以查看和撤销。" +
+			"不要提交、push 或切换分支，git 操作由 sous 按用户的要求另外处理。\n")
 	}
-	if t.Kind == event.TaskKindOps {
+	if t.Kind == event.TaskKindOps && t.Place == event.PlaceInPlace {
 		b.WriteString(opsPrompt(proj))
 	}
 	if n := e.countRuns(ctx, t.ID, event.PurposeWork); n > 0 && t.ReviewNote != "" {
@@ -697,16 +811,6 @@ func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Projec
 	}
 	b.WriteString("\n完成后用几句话总结你改了什么、怎么验证的。")
 	return b.String()
-}
-
-func rebasePrompt(t store.Task) string {
-	base := t.BaseBranch
-	if base == "" {
-		base = "main"
-	}
-	return fmt.Sprintf("任务「%s」的分支 %s 已经创建了 PR，但和目标分支 %s 有冲突。\n"+
-		"请先 git fetch origin，再把当前分支 rebase 到 origin/%s 上，解决所有冲突，确认能构建、测试通过，然后提交。\n"+
-		"不要 push，也不要切换分支；sous 会在你完成后自己 push。", t.Title, t.Branch, base, base)
 }
 
 func (e *Engine) lastRun(ctx context.Context, taskID string, purposes ...string) store.Run {
@@ -766,10 +870,10 @@ func (e *Engine) personaOf(ctx context.Context, t store.Task, proj store.Project
 	return store.Persona{}
 }
 
-// opsPrompt tells an operations run where it is and how to deploy.
+// opsPrompt tells an operations run how to deploy.
 func opsPrompt(proj store.Project) string {
 	var b strings.Builder
-	b.WriteString("\n这是一个运维任务：你直接在服务器上项目的目录里操作，没有 worktree，也不会创建 PR。\n")
+	b.WriteString("\n这是一个运维任务，在项目的目录里就地执行。\n")
 	if d := proj.Deploy; d != nil && d.Command != "" {
 		fmt.Fprintf(&b, "部署方式：在 %s 里执行 `%s`。按这个脚本或命令执行，不要临时修改服务器上的文件；失败就停下来说明原因。\n", d.Path, d.Command)
 		if d.Health != "" {
@@ -780,4 +884,13 @@ func opsPrompt(proj store.Project) string {
 	}
 	b.WriteString("重启服务、删除文件这类操作会请用户批准。\n")
 	return b.String()
+}
+
+// reviewerPersona is the persona that reviews tasks: the built-in reviewer
+// while it exists, else none.
+func (e *Engine) reviewerPersona(ctx context.Context) store.Persona {
+	if p, err := e.store().Persona(ctx, "reviewer"); err == nil {
+		return p
+	}
+	return store.Persona{}
 }

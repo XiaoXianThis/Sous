@@ -165,6 +165,11 @@ export default function ProjectCard({ card, tab, onTab, onExpand, onOpenTask, on
               <Icon name={taskStates[k].icon} size={12} stroke={2.2} />{card.counts[k]}
             </span>
           ))}
+          {card.unmerged > 0 && (
+            <span className="pill" title={`${card.unmerged} 个任务的改动还在分支上，没有合并`}>
+              <Icon name="branch" size={12} stroke={2.2} />{card.unmerged} 未合并
+            </span>
+          )}
           <span className="flex-1"></span>
           {hidden > 0 && (
             <button className="pill border-0 hover:text-ink" onClick={() => onOpenProject(p.id)} aria-label={`还有 ${hidden} 项`}>

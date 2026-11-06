@@ -130,12 +130,21 @@ func (h *Hub) createRun(w http.ResponseWriter, r *http.Request) {
 		Agent    string `json:"agent"`
 		RepoPath string `json:"repo_path"`
 		Prompt   string `json:"prompt"`
+		// A run in a repository works on its own branch, which starts where
+		// these say; there is no default (decision 0022).
+		BaseBranch string `json:"base_branch"`
+		BaseFrom   string `json:"base_from"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	run, err := h.Create(r.Context(), CreateRun{ThreadID: body.ThreadID, NodeID: body.NodeID, Agent: body.Agent, RepoPath: body.RepoPath, Prompt: body.Prompt})
+	if body.RepoPath != "" && (body.BaseBranch == "" || (body.BaseFrom != "local" && body.BaseFrom != "remote")) {
+		writeError(w, http.StatusBadRequest, "run", "在仓库里执行要说明从哪个分支开始：base_branch 和 base_from（local 或 remote）")
+		return
+	}
+	run, err := h.Create(r.Context(), CreateRun{ThreadID: body.ThreadID, NodeID: body.NodeID, Agent: body.Agent, RepoPath: body.RepoPath, Prompt: body.Prompt,
+		BaseBranch: body.BaseBranch, BaseFrom: body.BaseFrom})
 	if err != nil {
 		code := http.StatusBadRequest
 		if errors.Is(err, ErrNoNode) {

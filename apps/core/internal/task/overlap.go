@@ -61,7 +61,7 @@ func (e *Engine) lastDiff(ctx context.Context, taskID string) map[string]bool {
 // checkOverlap compares the run's files with the project's other open
 // code tasks.
 func (e *Engine) checkOverlap(ctx context.Context, t store.Task, r store.Run) {
-	if t.Kind != event.TaskKindCode || t.ProjectID == "" || r.DiffStat == "" {
+	if t.Place != event.PlaceWorktree || t.ProjectID == "" || r.DiffStat == "" {
 		return
 	}
 	mine := e.diffFiles(r.ID)
@@ -73,7 +73,7 @@ func (e *Engine) checkOverlap(ctx context.Context, t store.Task, r store.Run) {
 		return
 	}
 	for _, o := range others {
-		if o.ID == t.ID || o.Kind != event.TaskKindCode || final(o.Status) || o.Status == event.TaskFailed {
+		if o.ID == t.ID || o.Place != event.PlaceWorktree || o.Status == event.TaskCancelled || o.Status == event.TaskFailed || worktreeDone(o) {
 			continue
 		}
 		var both []string
@@ -97,20 +97,33 @@ func (e *Engine) checkOverlap(ctx context.Context, t store.Task, r store.Run) {
 		if len(both) > 10 {
 			both = append(both[:10], fmt.Sprintf("…等 %d 个", len(both)))
 		}
-		content := fmt.Sprintf("同一个项目里两个任务改到了相同的文件，PR 合并时可能冲突：\n- 任务 %s「%s」（%s）\n- 任务 %s「%s」（%s）\n重叠的文件：%s\n\n"+
+		content := fmt.Sprintf("同一个项目里两个任务改到了相同的文件，合并时可能冲突：\n- 任务 %s「%s」（%s）\n- 任务 %s「%s」（%s）\n重叠的文件：%s\n\n"+
 			"判断要不要让其中一个等另一个合并之后再做（task_update 设 depends_on），或者确认它们改的是不同的地方、可以继续。"+
 			"需要用户决定时用 notify 简短提醒一次；不需要做什么时调用 stay_silent。（这是 sous 的自动提醒，不是用户发的消息。）",
 			t.ID, t.Title, t.Status, o.ID, o.Title, o.Status, strings.Join(both, "、"))
-		thread, err := e.store().MainThreadID(ctx)
-		if err != nil {
+		main := store.Task{}
+		e.followup(ctx, main, key, "并行任务改到了相同的文件", content)
+	}
+}
+
+// followup wakes the supervisor with a note only it reads (a trigger in the
+// task's thread, else the main thread), once per key.
+func (e *Engine) followup(ctx context.Context, t store.Task, key, title, content string) {
+	if at, err := e.store().TriggerFiredAt(ctx, key); err != nil || at > 0 {
+		return
+	}
+	thread := t.OriginThreadID
+	if thread == "" {
+		var err error
+		if thread, err = e.store().MainThreadID(ctx); err != nil {
 			return
 		}
-		ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
-			Kind: event.TriggerFollowup, Key: key, MessageID: ids.New(), Title: "并行任务改到了相同的文件", Content: content,
-			At: time.Now().UnixMilli(),
-		})
-		if _, err := e.Log.Append(ctx, ev); err != nil {
-			slog.Error("task: overlap notice", "err", err)
-		}
+	}
+	ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
+		Kind: event.TriggerFollowup, Key: key, MessageID: ids.New(), Title: title, Content: content,
+		At: time.Now().UnixMilli(),
+	})
+	if _, err := e.Log.Append(ctx, ev); err != nil {
+		slog.Error("task: follow-up", "key", key, "err", err)
 	}
 }

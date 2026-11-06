@@ -42,9 +42,14 @@ func project(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Attachments)
 			atts = string(raw)
 		}
+		source := ""
+		if p.Source != nil {
+			raw, _ := json.Marshal(p.Source)
+			source = string(raw)
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx, atts); err != nil {
+			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx, atts, source); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE id = ?`, ev.TS, ev.ThreadID)
@@ -88,14 +93,15 @@ func project(w *Writer, ev event.Event) error {
 	case event.NodePaired, event.NodeUpdated, event.NodeRevoked, event.NodeOnline, event.NodeOffline, event.NodeInventory,
 		event.RunQueued, event.RunStarted, event.RunUpdate, event.RunEnded,
 		event.RunPaused, event.RunResumed, event.RunMessage, event.RunMessageDelivered, event.RunArchived,
+		event.RunTurn, event.ConsultClosed,
 		event.ApprovalRequested, event.ApprovalDecided, event.ApprovalEscalated:
 		return projectRun(w, ev)
 
 	case event.SchedulePut, event.ScheduleDeleted, event.TriggerFired, event.InspectorFinding:
 		return projectAuto(w, ev)
 
-	case event.TaskCreated, event.TaskUpdated, event.TaskStatus, event.TaskReviewed,
-		event.ProjectPut, event.ProjectDeleted, event.ProjectArchived:
+	case event.TaskCreated, event.TaskUpdated, event.TaskStatus, event.TaskReviewed, event.TaskGit,
+		event.ProjectPut, event.ProjectDeleted, event.ProjectArchived, event.ProjectDeployed:
 		return projectTask(w, ev)
 
 	case event.PersonaPut, event.PersonaDeleted, event.NodeRepos, event.NodeRole:

@@ -400,7 +400,18 @@ func (d *Daemon) reconcile(resume []string) {
 		if d.run(id) != nil {
 			continue
 		}
-		if sv, ok := saved[id]; ok && sv.CanLoad && sv.SessionID != "" && sv.Spec.Purpose != proto.PurposeDeliver {
+		if sv, ok := saved[id]; ok && sv.Spec.Purpose == proto.PurposeConsult {
+			// A consultant is not resumed in the middle: it ends as idle
+			// and the next question loads its session.
+			d.forget(id)
+			e := proto.RunEnded{RunID: id, Status: "succeeded", StopReason: "idle", Summary: "这台机器上的 sous 重启过，顾问已经停下；下次提问会接上会话"}
+			if sv.CanLoad {
+				e.SessionID = sv.SessionID
+			}
+			d.ob.reliable(proto.New(proto.TRunEnded, e))
+			continue
+		}
+		if sv, ok := saved[id]; ok && sv.CanLoad && sv.SessionID != "" && sv.Spec.Purpose != proto.PurposeDeliver && sv.Spec.Purpose != proto.PurposeGit {
 			slog.Info("daemon: resuming a run from before the restart", "run", id)
 			d.restore(sv)
 			continue
@@ -438,8 +449,16 @@ func (d *Daemon) start(s proto.RunStart) {
 		slog.Info("daemon: this machine is a server; the open mode becomes default", "run", s.RunID)
 		s.PermissionMode = m
 	}
+	// A consultant only reads and a reviewer only reads and runs safe
+	// commands, whatever mode the Hub sent (decision 0022).
+	switch s.Purpose {
+	case proto.PurposeConsult:
+		s.PermissionMode = proto.ModeReadOnly
+	case proto.PurposeReview:
+		s.PermissionMode = proto.ModeVerify
+	}
 	r := newRun(d, s)
-	if s.Persona != "" && s.Purpose != proto.PurposeDeliver {
+	if s.Persona != "" && s.Purpose != proto.PurposeDeliver && s.Purpose != proto.PurposeGit {
 		r.status("岗位：" + s.Persona)
 	}
 	d.launch(r)

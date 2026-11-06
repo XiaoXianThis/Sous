@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { chat, go, openThread, ui, useChat, useWb } from '../lib/app'
 import { runFromHistory, type RunView } from '../lib/runs'
-import { avatarOf, kindText, looks, stages, taskLook } from '../lib/status'
+import { avatarOf, gitStateText, kindText, looks, placeText, reviewText, stages, taskLook, userReviewing } from '../lib/status'
 import { deployedAfter, personaFor } from '../lib/workbench'
 import type { Run, Task } from '../lib/types'
 import Icon from './Icon'
@@ -19,6 +19,8 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [note, setNote] = useState('')
+  const [verdictNote, setVerdictNote] = useState('')
+  const [deciding, setDeciding] = useState(false)
 
   async function load() {
     try {
@@ -61,6 +63,20 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
     }
   }
 
+  async function decide(pass: boolean) {
+    if (!task) return
+    setDeciding(true)
+    try {
+      await api.verdict(task.id, pass, verdictNote.trim())
+      setVerdictNote('')
+      await load()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setDeciding(false)
+    }
+  }
+
   const info = looks[look]
   const kindIcon: Record<string, string> = { code: 'terminal', general: 'sparkles', ops: 'server' }
 
@@ -83,6 +99,9 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
                 <span className={`pill tone-${info.tone}`}><Icon name={info.icon} size={12} stroke={2.2} />{info.text}</span>
                 <span className="pill" title={a.title}><Icon name="user" size={12} />{a.title}</span>
                 <span className="pill" title={`${kindText[task.kind]}任务`}><Icon name={kindIcon[task.kind] ?? 'dot'} size={12} />{kindText[task.kind]}</span>
+                {task.status === 'done' && task.git_state && (
+                  <span className="pill" title="改动的去向"><Icon name="branch" size={12} />{gitStateText[task.git_state]}</span>
+                )}
               </p>
             </div>
           </header>
@@ -90,6 +109,45 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
           <div className="card px-3 pt-4 pb-3">
             <StageBar stages={stages(task, { hasDeploy: !!project?.deploy, deployed: task.status === 'done' && !!data && deployedAfter(data.tasks, task.project_id, task.updated_at) })} labels />
           </div>
+
+          <dl className="card m-0 px-4 py-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]" aria-label="怎么做">
+            <dt className="text-muted">在哪儿做</dt>
+            <dd className="m-0">{task.place ? placeText[task.place] : <span className="text-faint">还没定（派发前要定下）</span>}</dd>
+            {task.place === 'worktree' && (
+              <>
+                <dt className="text-muted">从哪儿开始</dt>
+                <dd className="m-0 [overflow-wrap:anywhere]">
+                  {task.base_branch ? `${task.base_from === 'remote' ? 'origin/' : '本地 '}${task.base_branch}` : <span className="text-faint">还没定</span>}
+                  {task.base_commit && <span className="text-faint">（{task.base_commit.slice(0, 8)}）</span>}
+                </dd>
+              </>
+            )}
+            {task.branch && (
+              <>
+                <dt className="text-muted">分支</dt>
+                <dd className="m-0 [overflow-wrap:anywhere]"><code>{task.branch}</code>{task.git_state && <span className="text-muted"> · {gitStateText[task.git_state]}</span>}</dd>
+              </>
+            )}
+            <dt className="text-muted">验收</dt>
+            <dd className="m-0">{task.review ? reviewText[task.review] : <span className="text-faint">还没定</span>}{task.review && task.review !== 'none' && task.on_fail ? <span className="text-muted">（不通过时{task.on_fail === 'rework' ? '返工' : '停下来商量'}）</span> : null}</dd>
+          </dl>
+
+          {userReviewing(task) && (
+            <div className="card px-4 py-3 grid gap-2" aria-label="验收">
+              <p className="m-0 font-semibold text-[14px] flex items-center gap-1.5"><Icon name="eye" size={16} />等你验收</p>
+              <textarea
+                className="min-h-[64px]"
+                value={verdictNote}
+                onChange={(e) => setVerdictNote(e.currentTarget.value)}
+                placeholder="不通过时写下要改什么，agent 会照着返工"
+                aria-label="验收意见"
+              />
+              <div className="flex gap-2 justify-end">
+                <button className="btn small ghost" disabled={deciding || !verdictNote.trim()} onClick={() => void decide(false)}>要改</button>
+                <button className="btn small" disabled={deciding} onClick={() => void decide(true)}>通过</button>
+              </div>
+            </div>
+          )}
 
           {task.status_reason && (
             <p className="m-0 flex gap-2 items-start text-muted text-[13px] [overflow-wrap:anywhere] bg-sunken rounded-[14px] px-3 py-2">
@@ -102,7 +160,7 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
               href={task.pr_url}
               target="_blank"
               rel="noreferrer"
-              title="sous 不会合并，请你评审后合并"
+              title="打开 Pull Request"
             >
               <span className="grid place-items-center w-9 h-9 rounded-[12px] bg-ok text-white flex-none"><Icon name="pr" size={18} stroke={2} /></span>
               <span className="grid min-w-0 flex-1 leading-tight">

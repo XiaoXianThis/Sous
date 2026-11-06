@@ -21,6 +21,8 @@ func (e *Engine) Routes(mux *http.ServeMux, protect func(string, http.HandlerFun
 	protect("PATCH /api/v1/tasks/{id}", e.patchTask)
 	protect("POST /api/v1/tasks/{id}/dispatch", e.dispatchTask)
 	protect("POST /api/v1/tasks/{id}/cancel", e.cancelTask)
+	protect("POST /api/v1/tasks/{id}/verdict", e.verdictTask)
+	protect("POST /api/v1/tasks/{id}/review", e.reviewTask)
 
 	protect("GET /api/v1/projects", e.listProjects)
 	protect("POST /api/v1/projects", e.putProject)
@@ -64,6 +66,12 @@ type taskBody struct {
 	Dismissed      *bool     `json:"dismissed"`
 	Dispatch       bool      `json:"dispatch"`
 	PersonaID      *string   `json:"persona_id"`
+	// Decision 0022.
+	Place      *string `json:"place"`
+	Review     *string `json:"review"`
+	OnFail     *string `json:"on_fail"`
+	BaseBranch *string `json:"base_branch"`
+	BaseFrom   *string `json:"base_from"`
 }
 
 func deref[T any](p *T) T {
@@ -84,7 +92,8 @@ func (e *Engine) createTask(w http.ResponseWriter, r *http.Request) {
 		ThreadID: b.ThreadID, ParentID: b.ParentID, Kind: b.Kind, Title: deref(b.Title), Detail: deref(b.Detail),
 		Priority: deref(b.Priority), ProjectID: deref(b.ProjectID), Agent: deref(b.AgentPref), Node: deref(b.NodePref),
 		Mode: deref(b.PermissionMode), DependsOn: deref(b.DependsOn), Dispatch: b.Dispatch, Actor: event.ActorUser,
-		Persona: deref(b.PersonaID),
+		Persona: deref(b.PersonaID), Place: deref(b.Place), Review: deref(b.Review), OnFail: deref(b.OnFail),
+		BaseBranch: deref(b.BaseBranch), BaseFrom: deref(b.BaseFrom),
 	})
 	if err != nil {
 		taskError(w, err)
@@ -114,7 +123,8 @@ func (e *Engine) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	f := event.TaskFields{Title: b.Title, Detail: b.Detail, Priority: b.Priority, ProjectID: b.ProjectID, AgentPref: b.AgentPref,
-		NodePref: b.NodePref, PermissionMode: b.PermissionMode, Dismissed: b.Dismissed, PersonaID: b.PersonaID}
+		NodePref: b.NodePref, PermissionMode: b.PermissionMode, Dismissed: b.Dismissed, PersonaID: b.PersonaID,
+		Place: b.Place, Review: b.Review, OnFail: b.OnFail, BaseBranch: b.BaseBranch, BaseFrom: b.BaseFrom}
 	if b.DependsOn != nil {
 		f.DependsOn, f.SetDeps = *b.DependsOn, true
 	}
@@ -245,9 +255,44 @@ func (e *Engine) deleteProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// verdictTask records the user's review of a task waiting for one.
+func (e *Engine) verdictTask(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Pass   bool   `json:"pass"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	t, err := e.Verdict(r.Context(), r.PathValue("id"), b.Pass, b.Reason, event.ActorUser)
+	if err != nil {
+		taskError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+// reviewTask reviews a finished task again (by model, agent or user).
+func (e *Engine) reviewTask(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		By string `json:"by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	t, err := e.RequestReview(r.Context(), r.PathValue("id"), b.By, event.ActorUser)
+	if err != nil {
+		taskError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
 // inbox lists what needs the user (design §13): pending approvals, tasks
-// that are blocked, failed or waiting for a machine, and pull requests to
-// review that the user has not dismissed.
+// that are blocked, failed or waiting for a machine or for the user's
+// review, and pull requests the user has not dismissed.
 func (e *Engine) inbox(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	approvals, err := e.store().Approvals(ctx, "pending", "")
@@ -255,11 +300,14 @@ func (e *Engine) inbox(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
-	attention, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskBlocked, event.TaskFailed, event.TaskQueued}})
+	attention, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: []string{event.TaskBlocked, event.TaskFailed, event.TaskQueued, event.TaskReview}})
 	var tasks []store.Task
 	for _, t := range attention {
 		if t.Dismissed || t.Status == event.TaskQueued && !strings.HasPrefix(t.StatusReason, "等待机器") {
 			continue
+		}
+		if t.Status == event.TaskReview && !UserReviewing(t) {
+			continue // a model or an agent is reviewing it
 		}
 		tasks = append(tasks, t)
 	}
@@ -279,6 +327,11 @@ func (e *Engine) inbox(w http.ResponseWriter, r *http.Request) {
 		tasks = []store.Task{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": approvals, "tasks": tasks})
+}
+
+// UserReviewing reports whether a task in review waits for the user.
+func UserReviewing(t store.Task) bool {
+	return t.Status == event.TaskReview && strings.Contains(t.StatusReason, "等你验收")
 }
 
 func taskError(w http.ResponseWriter, err error) {

@@ -288,6 +288,15 @@ func isArtifactPath(p, workdir string) bool {
 //   - In the auto mode a routine action is allowed without the approver.
 func Judge(role, mode string, c Category, a Assessment) (Action, string) {
 	act := DecideFor(role, mode, c)
+	if Restricted(mode) {
+		if act == Deny {
+			return Deny, restrictedWhy[mode]
+		}
+		if len(a.Hard) > 0 {
+			return Deny, a.Note() // a read of credentials, say: refused, not asked
+		}
+		return act, ""
+	}
 	if EffectiveMode(role, mode) == ModeOpen || act == Deny {
 		return act, ""
 	}
@@ -298,6 +307,11 @@ func Judge(role, mode string, c Category, a Assessment) (Action, string) {
 		return Allow, "常规操作，不需要审批 agent：" + a.Routine
 	}
 	return act, ""
+}
+
+var restrictedWhy = map[string]string{
+	ModeReadOnly: "这是只读的会话，只能读文件和查看，不能改动或执行命令",
+	ModeVerify:   "这是验收会话，只能读文件和运行测试、构建这类安全命令，不能改动",
 }
 
 // String describes a signal list for logs.

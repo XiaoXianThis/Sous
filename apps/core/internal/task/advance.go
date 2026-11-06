@@ -28,14 +28,20 @@ const (
 	approverGiveUp = 3
 )
 
-// Advance is the effect handler for a run of a task that ended. Its payload
-// is the run id.
+// Advance is the effect handler for a run that ended: a run of a task, or a
+// git operation. Its payload is the run id.
 func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	r, err := e.store().Run(ctx, string(eff.Payload))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	} else if err != nil {
 		return err
+	}
+	if r.Purpose == event.PurposeGit {
+		return e.afterGit(ctx, r)
+	}
+	if r.Purpose == event.PurposeConsult || r.TaskID == "" {
+		return nil
 	}
 	e.mu.Lock()
 	locked := true
@@ -53,40 +59,45 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	if final(t.Status) {
 		return nil
 	}
-	if last := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver); last.ID != r.ID {
+	if last := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver, event.PurposeReview); last.ID != r.ID {
 		return nil // an older run; a newer one decides the task's state
 	}
 
-	if r.Status == event.RunStatusInterrupted {
+	if r.Status == event.RunStatusInterrupted && r.Purpose == event.PurposeWork {
 		if ok, err := e.recover(ctx, t, r); ok || err != nil {
 			return err
 		}
 	}
-	if r.Purpose == event.PurposeDeliver {
-		return e.afterDeliver(ctx, t, r)
+	if r.Purpose == event.PurposeReview {
+		return e.afterReviewRun(ctx, t, r)
+	}
+	if r.Purpose == event.PurposeDeliver || r.Purpose == event.PurposeRebase {
+		// A delivery left over from before decision 0022: the work itself
+		// was done; what to do with the branch is now up to the user.
+		return e.finish(ctx, t, e.lastRun(ctx, t.ID, event.PurposeWork), "")
 	}
 	switch r.Status {
 	case event.RunStatusSucceeded:
-		if r.Purpose == event.PurposeRebase {
-			return e.queueNext(ctx, t, event.PurposeDeliver)
-		}
-		if t.Kind == event.TaskKindOps {
-			// Operations change a server in place: there is no diff to
-			// review and nothing to deliver. The summary is the report.
-			if err := e.transition(ctx, t, event.TaskDone, "运维完成", "", event.ActorSystem); err != nil {
-				return err
+		switch t.Review {
+		case event.ReviewModel:
+			if t.Status != event.TaskReview {
+				if err := e.transition(ctx, t, event.TaskReview, "等待验收", "", event.ActorSystem); err != nil {
+					return err
+				}
 			}
-			e.report(ctx, t, fmt.Sprintf("运维任务「%s」完成了。\n\n%s", t.Title, firstNonEmpty(r.Summary, "agent 没有写总结")))
-			return nil
+			e.mu.Unlock() // the reviewer may take a while; do not hold up dispatching
+			locked = false
+			return e.review(ctx, t.ID, r)
+		case event.ReviewAgent:
+			e.checkOverlap(ctx, t, r)
+			return e.queueNext(ctx, t, event.PurposeReview)
+		case event.ReviewUser:
+			e.checkOverlap(ctx, t, r)
+			return e.askUserReview(ctx, t, r, "")
+		default:
+			e.checkOverlap(ctx, t, r)
+			return e.finish(ctx, t, r, "")
 		}
-		if t.Status != event.TaskReview {
-			if err := e.transition(ctx, t, event.TaskReview, "等待验收", "", event.ActorSystem); err != nil {
-				return err
-			}
-		}
-		e.mu.Unlock() // the reviewer may take a while; do not hold up dispatching
-		locked = false
-		return e.review(ctx, t.ID, r)
 	case event.RunStatusCancelled:
 		return e.transition(ctx, t, event.TaskPlanned, "执行被取消："+firstNonEmpty(r.Error, "已取消"), "", event.ActorSystem)
 	default:
@@ -100,6 +111,135 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 		e.report(ctx, t, fmt.Sprintf("任务「%s」失败了：%s\n\n可以让我重试，或者换一个 agent、换一台机器再做。", t.Title, reason))
 		return nil
 	}
+}
+
+// finish closes a task whose work is done (and reviewed, if it was to be).
+// Nothing is committed, merged or pushed: the changes stay on the task's
+// branch, or in place, until the user asks (decision 0022).
+func (e *Engine) finish(ctx context.Context, t store.Task, work store.Run, verdict string) error {
+	reason := firstNonEmpty(verdict, "完成")
+	switch {
+	case t.Place == event.PlaceWorktree && t.Branch != "" && work.DiffStat != "":
+		reason = fmt.Sprintf("改动在分支 %s 上，还没合并", t.Branch)
+	case t.Place == event.PlaceInPlace && work.DiffStat != "":
+		reason = "已就地修改，可以撤销"
+	}
+	if err := e.transition(ctx, t, event.TaskDone, reason, "", event.ActorSystem); err != nil {
+		return err
+	}
+	if t.Place == event.PlaceWorktree && t.Branch != "" && work.DiffStat != "" && t.GitState != event.GitUnmerged {
+		e.gitEvent(ctx, t, event.GitUnmerged, "", work.ID)
+	}
+	if t.Kind == event.TaskKindOps && t.DeployCommit != "" && t.ProjectID != "" {
+		ev := event.New(event.ProjectDeployed, event.ActorSystem, "", event.ProjectDeployedPayload{ProjectID: t.ProjectID, Commit: t.DeployCommit})
+		if _, err := e.Log.Append(ctx, ev); err != nil {
+			slog.Error("task: record the deployed commit", "task", t.ID, "err", err)
+		}
+	}
+	e.report(ctx, t, e.doneReport(ctx, t, work))
+	return nil
+}
+
+// gitEvent records what became of a task's branch.
+func (e *Engine) gitEvent(ctx context.Context, t store.Task, state, prURL, runID string) {
+	ev := event.New(event.TaskGit, event.ActorSystem, t.OriginThreadID, event.TaskGitPayload{State: state, PRURL: prURL, RunID: runID})
+	ev.TaskID = t.ID
+	if _, err := e.Log.Append(ctx, ev); err != nil {
+		slog.Error("task: record git state", "task", t.ID, "err", err)
+	}
+}
+
+// askUserReview leaves the verdict to the user: the task waits in "needs
+// you" until the user (on the page or through the supervisor) decides.
+func (e *Engine) askUserReview(ctx context.Context, t store.Task, r store.Run, note string) error {
+	reason := firstNonEmpty(note, "等你验收")
+	if err := e.transition(ctx, t, event.TaskReview, reason, "", event.ActorSystem, func(p *event.TaskStatusPayload) { p.Notify = true }); err != nil {
+		return err
+	}
+	text := fmt.Sprintf("任务「%s」做完了，等你验收：看一下改动，说“通过”或者要改什么。", t.Title)
+	if r.DiffStat != "" {
+		text += "\n\n改动：" + r.DiffStat
+	}
+	if r.Summary != "" {
+		text += "\n\n" + truncate(r.Summary, 800)
+	}
+	e.report(ctx, t, text)
+	return nil
+}
+
+// Verdict records the user's review of a task waiting for one.
+func (e *Engine) Verdict(ctx context.Context, id string, pass bool, reason, actor string) (store.Task, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, err := e.store().Task(ctx, id)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if t.Status != event.TaskReview {
+		return store.Task{}, fmt.Errorf("%w: 任务现在不在等验收", ErrConflict)
+	}
+	if !pass && strings.TrimSpace(reason) == "" {
+		return store.Task{}, fmt.Errorf("%w: 不通过时要说明原因，agent 会照着改", ErrInvalid)
+	}
+	work := e.lastRun(ctx, t.ID, event.PurposeWork)
+	if err := e.applyVerdict(ctx, t, work, event.TaskReviewedPayload{Pass: pass, Reason: firstNonEmpty(strings.TrimSpace(reason), "用户验收通过")}, actor, true); err != nil {
+		return store.Task{}, err
+	}
+	return e.store().Task(ctx, id)
+}
+
+// RequestReview reviews a task again by the given means; for a task that
+// is done it reopens the review (the user asks "run the tests for me").
+func (e *Engine) RequestReview(ctx context.Context, id, by, actor string) (store.Task, error) {
+	if err := validAttrs("", by, "", ""); err != nil || by == "" || by == event.ReviewNone {
+		return store.Task{}, fmt.Errorf("%w: 验收方式只能是 model、agent 或 user", ErrInvalid)
+	}
+	t, err := e.store().Task(ctx, id)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if active(t.Status) && t.Status != event.TaskReview {
+		return store.Task{}, fmt.Errorf("%w: 任务还在执行", ErrConflict)
+	}
+	work := e.lastRun(ctx, t.ID, event.PurposeWork)
+	if work.ID == "" || work.Status != event.RunStatusSucceeded {
+		return store.Task{}, fmt.Errorf("%w: 任务还没有做完的结果可以验收", ErrConflict)
+	}
+	if t.GitState == event.GitMerged || t.GitState == event.GitDiscarded {
+		return store.Task{}, fmt.Errorf("%w: 任务的分支已经%s，没有东西可以验收", ErrConflict, gitStateName[t.GitState])
+	}
+	review := by
+	if _, err := e.Update(ctx, id, event.TaskFields{Review: &review}, actor); err != nil {
+		return store.Task{}, err
+	}
+	if t, err = e.store().Task(ctx, id); err != nil {
+		return store.Task{}, err
+	}
+	switch by {
+	case event.ReviewModel:
+		e.mu.Lock()
+		err = e.transition(ctx, t, event.TaskReview, "等待验收", "", actor)
+		e.mu.Unlock()
+		if err == nil {
+			go func() {
+				if err := e.review(context.WithoutCancel(ctx), id, work); err != nil {
+					slog.Warn("task: review on request", "task", id, "err", err)
+				}
+			}()
+		}
+	case event.ReviewAgent:
+		e.mu.Lock()
+		err = e.queueNext(ctx, t, event.PurposeReview)
+		e.mu.Unlock()
+	case event.ReviewUser:
+		e.mu.Lock()
+		err = e.askUserReview(ctx, t, work, "")
+		e.mu.Unlock()
+	}
+	if err != nil {
+		return store.Task{}, err
+	}
+	return e.store().Task(ctx, id)
 }
 
 // recover starts the run again after it was interrupted (its machine's
@@ -151,52 +291,22 @@ func (e *Engine) queueNext(ctx context.Context, t store.Task, purpose string) er
 	return nil
 }
 
-func (e *Engine) afterDeliver(ctx context.Context, t store.Task, r store.Run) error {
-	switch r.Status {
-	case event.RunStatusSucceeded:
-		if r.Conflict {
-			if e.countRuns(ctx, t.ID, event.PurposeRebase) < MaxRebases {
-				return e.queueNext(ctx, t, event.PurposeRebase)
-			}
-			reason := "PR 和目标分支有冲突，自动 rebase 之后仍然没有解决"
-			if err := e.transition(ctx, t, event.TaskBlocked, reason, r.PRURL, event.ActorSystem); err != nil {
-				return err
-			}
-			e.report(ctx, t, fmt.Sprintf("任务「%s」受阻：%s。PR：%s", t.Title, reason, r.PRURL))
-			return nil
-		}
-		if err := e.transition(ctx, t, event.TaskDone, "已创建 PR，等你评审合并", r.PRURL, event.ActorSystem); err != nil {
-			return err
-		}
-		e.report(ctx, t, e.doneReport(ctx, t, r.PRURL))
-		e.cleanup(ctx, t)
-		return nil
-	case event.RunStatusCancelled:
-		reason := firstNonEmpty(r.Error, "交付被取消")
-		if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
-			return err
-		}
-		e.report(ctx, t, fmt.Sprintf("任务「%s」已经通过验收，但没有交付：%s。改动还在分支 %s 上，需要时让我再交付一次。", t.Title, reason, t.Branch))
-		return nil
-	default:
-		reason := "交付失败：" + firstNonEmpty(r.Error, "未知原因")
-		if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
-			return err
-		}
-		e.report(ctx, t, fmt.Sprintf("任务「%s」已经通过验收，但%s。改动还在分支 %s 上。", t.Title, reason, t.Branch))
-		return nil
-	}
-}
-
-// review asks the reviewer whether the run did the task, then delivers,
-// finishes, or sends the task back for another run.
+// review asks the reviewer model whether the run did the task, then
+// applies the verdict.
 func (e *Engine) review(ctx context.Context, taskID string, r store.Run) error {
 	t, err := e.store().Task(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if r.Purpose == event.PurposeWork || r.Purpose == event.PurposeRebase {
-		e.checkOverlap(ctx, t, r)
+	e.checkOverlap(ctx, t, r)
+	if !models.Usable(ctx, e.Reviewer.Provider) {
+		// No reviewer model: the user decides instead of a silent pass.
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if t, err = e.store().Task(ctx, taskID); err != nil || t.Status != event.TaskReview {
+			return err
+		}
+		return e.askUserReview(ctx, t, r, "没有配置验收模型，等你验收")
 	}
 	verdict, err := e.verdict(ctx, t, r)
 	if err != nil {
@@ -210,44 +320,87 @@ func (e *Engine) review(ctx context.Context, taskID string, r store.Run) error {
 	if t.Status != event.TaskReview {
 		return nil // cancelled or changed by hand meanwhile
 	}
-	ev := event.New(event.TaskReviewed, event.ActorReviewer, t.OriginThreadID, verdict)
-	ev.TaskID, ev.RunID = t.ID, r.ID
+	return e.applyVerdict(ctx, t, r, verdict, event.ActorReviewer, false)
+}
+
+// afterReviewRun reads the reviewing agent's verdict from its summary.
+func (e *Engine) afterReviewRun(ctx context.Context, t store.Task, r store.Run) error {
+	work := e.lastRun(ctx, t.ID, event.PurposeWork)
+	switch r.Status {
+	case event.RunStatusSucceeded:
+	case event.RunStatusCancelled:
+		return e.transition(ctx, t, event.TaskPlanned, "验收被取消："+firstNonEmpty(r.Error, "已取消"), "", event.ActorSystem)
+	default:
+		// The reviewer could not finish: let the user judge.
+		return e.askUserReview(ctx, t, work, "审查岗位没能完成验收（"+truncate(firstNonEmpty(r.Error, r.Summary, "原因不明"), 200)+"），等你验收")
+	}
+	verdict, ok := parseVerdict(r.Summary)
+	if !ok {
+		return e.askUserReview(ctx, t, work, "审查岗位没有给出明确结论，等你验收")
+	}
+	return e.applyVerdict(ctx, t, work, verdict, event.ActorReviewer, false)
+}
+
+// parseVerdict finds {"pass": …, "reason": …} in a reviewing agent's answer.
+func parseVerdict(text string) (event.TaskReviewedPayload, bool) {
+	var out struct {
+		Pass   *bool  `json:"pass"`
+		Reason string `json:"reason"`
+	}
+	for i := strings.LastIndex(text, "{"); i >= 0; i = strings.LastIndex(text[:i], "{") {
+		j := strings.Index(text[i:], "}")
+		if j < 0 {
+			continue
+		}
+		if json.Unmarshal([]byte(text[i:i+j+1]), &out) == nil && out.Pass != nil {
+			return event.TaskReviewedPayload{Pass: *out.Pass, Reason: strings.TrimSpace(out.Reason)}, true
+		}
+	}
+	return event.TaskReviewedPayload{}, false
+}
+
+// applyVerdict records a verdict and moves the task on: done when it
+// passed; otherwise rework or a question, as the task says (and never more
+// than MaxWorkRuns rounds). byUser marks the user's own verdict: a failed
+// one always means "change this", so it goes back to work.
+func (e *Engine) applyVerdict(ctx context.Context, t store.Task, work store.Run, v event.TaskReviewedPayload, actor string, byUser bool) error {
+	ev := event.New(event.TaskReviewed, actor, t.OriginThreadID, v)
+	ev.TaskID, ev.RunID = t.ID, work.ID
 	if _, err := e.Log.Append(ctx, ev); err != nil {
 		return err
 	}
-	t.ReviewNote = verdict.Reason
-	if verdict.Pass {
-		if t.Kind == event.TaskKindCode && r.DiffStat != "" {
-			return e.queueNext(ctx, t, event.PurposeDeliver)
-		}
-		if err := e.transition(ctx, t, event.TaskDone, verdict.Reason, "", event.ActorSystem); err != nil {
-			return err
-		}
-		e.report(ctx, t, e.doneReport(ctx, t, ""))
-		e.cleanup(ctx, t)
-		return nil
+	t.ReviewNote = v.Reason
+	if v.Pass {
+		return e.finish(ctx, t, work, v.Reason)
 	}
 	if e.workRunsSinceDispatch(ctx, t.ID) >= MaxWorkRuns {
-		reason := fmt.Sprintf("验收 %d 次都没有通过：%s", MaxWorkRuns, verdict.Reason)
+		reason := fmt.Sprintf("验收 %d 次都没有通过：%s", MaxWorkRuns, v.Reason)
 		if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
 			return err
 		}
 		e.report(ctx, t, fmt.Sprintf("任务「%s」受阻：%s\n\n需要你看一下改动，决定怎么继续。", t.Title, reason))
 		return nil
 	}
-	return e.queueNext(ctx, t, event.PurposeWork)
+	if byUser || t.OnFail == event.OnFailRework {
+		return e.queueNext(ctx, t, event.PurposeWork)
+	}
+	reason := "验收没有通过：" + v.Reason
+	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
+		return err
+	}
+	e.followup(ctx, t, "review-failed:"+work.ID, "任务验收没有通过",
+		fmt.Sprintf("任务 %s「%s」验收没有通过：%s\n\n判断怎么继续：让它照着意见返工（task_dispatch），换一个 agent 或岗位，或者问用户。"+
+			"需要用户决定时用 notify 简短提醒一次；能自己推进就直接做。（这是 sous 的自动提醒，不是用户发的消息。）", t.ID, t.Title, v.Reason))
+	return nil
 }
 
 // verdict runs the reviewer model on the task and the run's full diff.
 func (e *Engine) verdict(ctx context.Context, t store.Task, r store.Run) (event.TaskReviewedPayload, error) {
-	if !models.Usable(ctx, e.Reviewer.Provider) {
-		return event.TaskReviewedPayload{Pass: true, Reason: "没有配置验收模型，自动通过。" + r.DiffStat}, nil
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "## 任务\n%s\n\n%s\n\n", t.Title, t.Detail)
 	fmt.Fprintf(&b, "## 交给 agent 的说明\n%s\n\n", r.Prompt)
 	fmt.Fprintf(&b, "## agent 的总结\n%s\n\n", firstNonEmpty(r.Summary, "（没有总结）"))
-	if t.Kind == event.TaskKindCode {
+	if t.Place == event.PlaceWorktree || t.Place == event.PlaceInPlace {
 		diff, _ := os.ReadFile(e.Nodes.DiffPath(r.ID))
 		fmt.Fprintf(&b, "## 改动统计\n%s\n\n", firstNonEmpty(r.DiffStat, "没有改动"))
 		if files := diffFiles(string(diff)); len(files) > 0 {
@@ -321,18 +474,26 @@ func (e *Engine) askJSON(ctx context.Context, m Model, role string, t store.Task
 	return nil
 }
 
-func (e *Engine) doneReport(ctx context.Context, t store.Task, prURL string) string {
-	work := e.lastRun(ctx, t.ID, event.PurposeWork)
+func (e *Engine) doneReport(ctx context.Context, t store.Task, work store.Run) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "任务「%s」完成了。", t.Title)
-	if prURL != "" {
-		fmt.Fprintf(&b, "\n\nPR：%s（sous 不会合并，等你评审）", prURL)
+	if t.Kind == event.TaskKindOps && t.Place == event.PlaceInPlace {
+		fmt.Fprintf(&b, "运维任务「%s」完成了。", t.Title)
+	} else {
+		fmt.Fprintf(&b, "任务「%s」完成了。", t.Title)
+	}
+	switch {
+	case t.Place == event.PlaceWorktree && t.Branch != "" && work.DiffStat != "":
+		fmt.Fprintf(&b, "改动在分支 %s 上，没有合并也没有推送；要提交、合并、推送或开 PR 时告诉我。", t.Branch)
+	case t.Place == event.PlaceInPlace && work.DiffStat != "":
+		b.WriteString("是在项目目录里直接改的，开始前拍了快照，需要的话可以撤销。")
 	}
 	if work.DiffStat != "" {
 		fmt.Fprintf(&b, "\n\n改动：%s", work.DiffStat)
 	}
 	if note := firstNonEmpty(t.ReviewNote, work.Summary); note != "" {
 		fmt.Fprintf(&b, "\n\n%s", truncate(note, 800))
+	} else if t.Kind == event.TaskKindOps {
+		b.WriteString("\n\nagent 没有写总结")
 	}
 	return b.String()
 }
@@ -361,10 +522,22 @@ func (e *Engine) post(ctx context.Context, t store.Task, text string, notify boo
 	}
 }
 
-// cleanup removes a closed code task's worktrees, best effort: its branch
-// stays, and a machine that is offline keeps its worktree.
+// worktreeDone reports whether nothing needs a task's worktree any more:
+// its branch was merged, discarded or sent off as a pull request, or the
+// task was cancelled. A done task with an unmerged branch keeps it, so the
+// user can still look, rework or merge (decision 0022).
+func worktreeDone(t store.Task) bool {
+	switch t.GitState {
+	case event.GitMerged, event.GitDiscarded, event.GitPR:
+		return true
+	}
+	return t.Status == event.TaskCancelled
+}
+
+// cleanup removes a task's worktrees, best effort: its branch stays, and a
+// machine that is offline keeps its worktree.
 func (e *Engine) cleanup(ctx context.Context, t store.Task) {
-	if t.Kind != event.TaskKindCode {
+	if t.Place != event.PlaceWorktree {
 		return
 	}
 	runs, _ := e.store().Runs(ctx, store.RunFilter{TaskID: t.ID})
@@ -412,9 +585,39 @@ func (e *Engine) cleanupNode(ctx context.Context, nodeID string) {
 		}
 		done[r.TaskID] = true
 		t, err := e.store().Task(ctx, r.TaskID)
-		if err != nil || !final(t.Status) || t.Kind != event.TaskKindCode || t.UpdatedAt < since {
+		if err != nil || t.Place != event.PlaceWorktree || t.UpdatedAt < since || !worktreeDone(t) {
 			continue
 		}
 		e.Nodes.RemoveWorkspace(nodeID, t.ID, r.RepoPath)
 	}
+}
+
+// reviewPrompt asks a reviewing agent to check a task's work in its
+// directory: read only plus safe commands such as tests, and a verdict in
+// JSON at the end.
+func (e *Engine) reviewPrompt(ctx context.Context, t store.Task) string {
+	work := e.lastRun(ctx, t.ID, event.PurposeWork)
+	var b strings.Builder
+	if p := e.reviewerPersona(ctx); strings.TrimSpace(p.Brief) != "" {
+		fmt.Fprintf(&b, "【你的岗位：%s】%s\n\n", p.Name, strings.TrimSpace(p.Brief))
+	}
+	fmt.Fprintf(&b, "请验收这个任务做得对不对：\n\n任务：%s\n", t.Title)
+	if t.Detail != "" {
+		b.WriteString("\n" + t.Detail + "\n")
+	}
+	if work.Summary != "" {
+		fmt.Fprintf(&b, "\n做这个任务的 agent 的总结：\n%s\n", truncate(work.Summary, 2000))
+	}
+	if work.DiffStat != "" {
+		fmt.Fprintf(&b, "\n改动统计：%s\n", work.DiffStat)
+	}
+	switch t.Place {
+	case event.PlaceWorktree:
+		fmt.Fprintf(&b, "\n当前目录是任务分支 %s 的 worktree；用 git diff %s 看全部改动。", t.Branch, firstNonEmpty(t.BaseCommit, t.BaseBranch))
+	case event.PlaceInPlace:
+		b.WriteString("\n当前目录是项目的目录，任务直接在这里改过。")
+	}
+	b.WriteString("\n你只能读文件和运行测试、构建这类安全命令，不能改任何东西。按任务说明和完成标准检查：该跑的测试跑一遍，看改动是不是做了要求的事、有没有明显的问题。\n" +
+		"最后单独一行输出结论 JSON：{\"pass\": true 或 false, \"reason\": \"一两句话，不通过时写清楚要改什么\"}")
+	return b.String()
 }

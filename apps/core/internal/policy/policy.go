@@ -52,10 +52,31 @@ const (
 	ModeDefault = "default"
 	ModeAuto    = "auto"
 	ModeOpen    = "open"
+	// Decision 0022: the node sets these for consult and review runs. They
+	// never ask anyone: what they do not allow is refused, and the agent is
+	// told why.
+	ModeReadOnly = "readonly" // reading only
+	ModeVerify   = "verify"   // reading plus safe commands such as tests
 )
+
+// Restricted reports whether a mode is one of the refuse-everything-else
+// modes that the Hub cannot loosen.
+func Restricted(mode string) bool { return mode == ModeReadOnly || mode == ModeVerify }
 
 // Decide looks up the table in design §8.
 func Decide(mode string, c Category) Action {
+	switch mode {
+	case ModeReadOnly:
+		if c == Read {
+			return Allow
+		}
+		return Deny
+	case ModeVerify:
+		if c == Read || c == ExecSafe {
+			return Allow
+		}
+		return Deny
+	}
 	switch c {
 	case Floor:
 		return Deny
@@ -95,6 +116,9 @@ func EffectiveMode(role, mode string) string {
 // change a machine's role back to dev.
 func DecideFor(role, mode string, c Category) Action {
 	mode = EffectiveMode(role, mode)
+	if Restricted(mode) {
+		return Decide(mode, c)
+	}
 	if role == RoleServer {
 		switch c {
 		case Floor:

@@ -38,6 +38,10 @@ const (
 	TNodeUpdate   = "node.update"   // download a release and restart
 	// TNodeUpdateResult reports how an update went, before the restart.
 	TNodeUpdateResult = "node.update_result"
+
+	// TRunTurn reports one finished turn of a long-lived run (a project
+	// consultant, decision 0022). Reliable.
+	TRunTurn = "run.turn"
 )
 
 // Frame is one message. Frames from the node that must not be lost carry a
@@ -136,6 +140,11 @@ const (
 	ModeDefault = "default" // ask before changes
 	ModeAuto    = "auto"    // an AI approver decides, and hands what it is unsure of to the user
 	ModeOpen    = "open"    // allow everything
+	// Decision 0022: set by the node for consult and review runs, whatever
+	// the Hub sends. ReadOnly allows reading only; Verify adds the safe
+	// commands (tests, builds) and refuses everything else, without asking.
+	ModeReadOnly = "readonly"
+	ModeVerify   = "verify"
 )
 
 type RunStart struct {
@@ -161,6 +170,15 @@ type RunStart struct {
 	Options map[string]string `json:"options,omitempty"`
 	Persona string            `json:"persona,omitempty"`
 	Setup   *Setup            `json:"setup,omitempty"`
+	// Decision 0022. BaseFrom is where a new task branch starts: "local"
+	// (the local BaseBranch, unpushed commits included) or "remote"
+	// (origin/BaseBranch after a fetch). There is no default: a new branch
+	// needs both. Git is the operation of a git run. ResumeSession is an
+	// agent session to load instead of opening a new one (a consultant
+	// that went idle, or a task that grew out of a discussion).
+	BaseFrom      string `json:"base_from,omitempty"`
+	Git           *GitOp `json:"git,omitempty"`
+	ResumeSession string `json:"resume_session,omitempty"`
 }
 
 // Run purposes.
@@ -168,7 +186,18 @@ const (
 	PurposeWork    = "work"
 	PurposeRebase  = "rebase"
 	PurposeDeliver = "deliver"
+	// Decision 0022.
+	PurposeReview  = "review"  // a reviewing agent checks a task's work: read only plus tests
+	PurposeGit     = "git"     // one git operation, fixed commands, no agent
+	PurposeConsult = "consult" // a project's read-only consultant, idle between questions
 )
+
+// RunTurn is one finished turn of a long-lived run.
+type RunTurn struct {
+	RunID     string `json:"run_id"`
+	Text      string `json:"text"`
+	SessionID string `json:"session_id,omitempty"`
+}
 
 type RunMessage struct {
 	RunID string `json:"run_id"`
@@ -217,6 +246,9 @@ type RunStarted struct {
 	Workdir    string `json:"workdir"`
 	Branch     string `json:"branch,omitempty"`
 	BaseBranch string `json:"base_branch,omitempty"`
+	// BaseCommit is where the task's changes are measured from: the commit
+	// its branch started at, or the snapshot taken before an in-place task.
+	BaseCommit string `json:"base_commit,omitempty"`
 }
 
 // RunUpdate kinds.
@@ -267,8 +299,12 @@ type RunEnded struct {
 	Summary    string `json:"summary,omitempty"`
 	DiffStat   string `json:"diffstat,omitempty"`
 	Error      string `json:"error,omitempty"`
-	PRURL      string `json:"pr_url,omitempty"`   // deliver
+	PRURL      string `json:"pr_url,omitempty"`   // deliver, git pr
 	Conflict   bool   `json:"conflict,omitempty"` // deliver: the PR conflicts with its base
+	// Git runs: what the operation did. Consult runs: the agent's session,
+	// to load when the next question comes.
+	Git       *GitResult `json:"git,omitempty"`
+	SessionID string     `json:"session_id,omitempty"`
 }
 
 type Option struct {

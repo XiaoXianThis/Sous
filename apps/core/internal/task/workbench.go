@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
@@ -252,7 +251,10 @@ func (e *Engine) PutProject(ctx context.Context, in ProjectInput, actor string) 
 		p.Deploy = *in.Deploy
 	}
 	if d := p.Deploy; d != nil {
-		d.Path, d.Command, d.Health = strings.TrimSpace(d.Path), strings.TrimSpace(d.Command), strings.TrimSpace(d.Health)
+		d.Path, d.Command, d.Health, d.Branch = strings.TrimSpace(d.Path), strings.TrimSpace(d.Command), strings.TrimSpace(d.Health), strings.TrimSpace(d.Branch)
+		if d.AutoOnMerge && d.Branch == "" {
+			return store.Project{}, fmt.Errorf("%w: 自动部署要说明部署分支", ErrInvalid)
+		}
 		if d.NodeID == "" {
 			p.Deploy = nil
 		} else {
@@ -316,7 +318,7 @@ type SetupInput struct {
 	ProjectID string // clone: the project; create: empty (a new one is made)
 	Name      string // create: the new project's name (kebab-case)
 	NodeID    string // empty: the first online dev machine that can do it
-	Layout    string // create: "wokspace" (default) or "plain"
+	Layout    string // create: "wokspace" or "plain", no default
 	Owner     string // create: also create the GitHub repository owner/name
 	Private   bool
 	ThreadID  string
@@ -330,10 +332,15 @@ func (e *Engine) CreateProject(ctx context.Context, in SetupInput) (store.Projec
 	if !projectkey.ValidName(in.Name) {
 		return store.Project{}, store.Run{}, fmt.Errorf("%w: 项目名只能用小写字母、数字和连字符，比如 my-app", ErrInvalid)
 	}
-	layout := projectkey.LayoutWokspace
-	if in.Layout == "plain" {
-		layout = ""
-	} else if in.Layout != "" && in.Layout != projectkey.LayoutWokspace {
+	// No default structure (decision 0022): the caller says which.
+	layout := ""
+	switch in.Layout {
+	case projectkey.LayoutWokspace:
+		layout = projectkey.LayoutWokspace
+	case "plain":
+	case "":
+		return store.Project{}, store.Run{}, fmt.Errorf("%w: 要说明新项目用什么结构：wokspace 或 plain", ErrInvalid)
+	default:
 		return store.Project{}, store.Run{}, fmt.Errorf("%w: layout 只能是 wokspace 或 plain", ErrInvalid)
 	}
 	node, err := e.setupNode(ctx, in.NodeID, layout == projectkey.LayoutWokspace)
@@ -494,96 +501,93 @@ func (e *Engine) say(ctx context.Context, thread, text string, notify bool) {
 	}
 }
 
-// deployEvery is how often merged pull requests are looked for.
-const deployEvery = 5 * time.Minute
-
-// watchMerges deploys projects with auto_on_merge when a pull request sous
-// opened was merged: it asks a dev machine (with gh) for the state of each
-// delivered PR, once per PR, and creates an ops task for the merge.
-func (e *Engine) watchMerges(ctx context.Context) {
-	t := time.NewTicker(deployEvery)
-	defer t.Stop()
-	// Look once soon after a start (machines have reconnected by then), so
-	// a merge during a restart is not left waiting a whole period.
-	first := time.NewTimer(30 * time.Second)
-	defer first.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-first.C:
-			e.CheckMerges(ctx)
-		case <-t.C:
-			e.CheckMerges(ctx)
-		}
-	}
-}
-
-// CheckMerges looks once for merged pull requests to deploy.
-func (e *Engine) CheckMerges(ctx context.Context) {
+// CheckDeploys deploys projects that deploy automatically when their
+// deploy branch has a new commit (decision 0022): the machines report the
+// commits of origin's branches with every scan (after a fetch or a push), and
+// a commit that is not deployed yet gets an ops task, once. The first commit
+// seen after automatic deploys were switched on is only remembered.
+func (e *Engine) CheckDeploys(ctx context.Context) {
+	e.deployMu.Lock()
+	defer e.deployMu.Unlock()
 	ps, err := e.store().Projects(ctx)
 	if err != nil {
 		return
 	}
-	auto := map[string]store.Project{}
+	var scans []store.RepoScan
 	for _, p := range ps {
-		if p.Deploy != nil && p.Deploy.AutoOnMerge {
-			auto[p.ID] = p
-		}
-	}
-	if len(auto) == 0 {
-		return
-	}
-	asker := ""
-	nodes, _ := e.store().Nodes(ctx)
-	for _, n := range nodes {
-		if n.Role != proto.RoleServer && e.Nodes.CanRequest(n.ID) {
-			asker = n.ID
-			break
-		}
-	}
-	if asker == "" {
-		return
-	}
-	all, _ := e.store().Tasks(ctx, store.TaskFilter{Limit: 5000})
-	for _, t := range all {
-		if t.Status != event.TaskDone {
+		d := p.Deploy
+		if d == nil || !d.AutoOnMerge || d.Branch == "" || p.Archived() {
 			continue
 		}
-		p, ok := auto[t.ProjectID]
-		if !ok || t.PRURL == "" || t.Kind != event.TaskKindCode {
+		if scans == nil {
+			if scans, err = e.store().RepoScans(ctx); err != nil {
+				return
+			}
+		}
+		head := deployHead(p, scans)
+		if head == "" || head == p.DeployedCommit {
 			continue
 		}
-		key := "deploy:" + t.ID
-		if v, _ := e.store().Setting(ctx, key); v != "" {
+		if p.DeployedCommit == "" {
+			ev := event.New(event.ProjectDeployed, event.ActorSystem, "", event.ProjectDeployedPayload{ProjectID: p.ID, Commit: head, Baseline: true})
+			if _, err := e.Log.Append(ctx, ev); err != nil {
+				slog.Error("task: record the deploy baseline", "project", p.ID, "err", err)
+			}
 			continue
 		}
-		st, err := e.Nodes.PRState(ctx, asker, t.PRURL)
-		if err != nil {
-			slog.Info("task: pr state", "task", t.ID, "err", err)
+		if e.deployQueued(ctx, p.ID, head) {
 			continue
 		}
-		if st.State == "CLOSED" {
-			e.store().SetSetting(ctx, key, st.State)
-			continue
-		}
-		if st.State != "MERGED" {
-			continue
-		}
-		e.store().SetSetting(ctx, key, st.State)
-		if DeployedSince(all, p.ID, t.UpdatedAt) {
-			continue // the user already had it deployed (from the chat or the project page)
+		thread, _ := e.store().MainThreadID(ctx)
+		short := head
+		if len(short) > 8 {
+			short = short[:8]
 		}
 		if _, err := e.Create(ctx, Input{
-			ThreadID: t.OriginThreadID, Kind: event.TaskKindOps, Title: "部署「" + p.Name + "」：" + t.Title,
-			Detail:    fmt.Sprintf("PR %s 已经合并。把项目「%s」部署到服务器上：先拉取最新代码，再执行部署命令，最后做健康检查。", t.PRURL, p.Name),
-			ProjectID: p.ID, Persona: e.opsPersona(ctx), Dispatch: true, Actor: event.ActorSupervisor,
+			ThreadID: thread, Kind: event.TaskKindOps, Place: event.PlaceInPlace, Review: event.ReviewNone,
+			Title:     fmt.Sprintf("部署「%s」：%s 的 %s", p.Name, d.Branch, short),
+			Detail:    fmt.Sprintf("%s 有了新的提交 %s。把项目「%s」部署到服务器上：先拉取这个提交，再执行部署命令，最后做健康检查。", d.Branch, head, p.Name),
+			ProjectID: p.ID, Persona: e.opsPersona(ctx), Dispatch: true, Actor: event.ActorSupervisor, DeployCommit: head,
 		}); err != nil {
-			slog.Warn("task: create deploy task", "task", t.ID, "err", err)
+			slog.Warn("task: create a deploy task", "project", p.ID, "err", err)
 			continue
 		}
-		e.post(ctx, t, fmt.Sprintf("「%s」的 PR 已经合并，按项目设置开始部署到服务器。", t.Title), true)
+		e.postThread(ctx, thread, "", fmt.Sprintf("「%s」的部署分支 %s 有新提交（%s），按项目设置开始部署到服务器。", p.Name, d.Branch, short))
 	}
+}
+
+// deployHead is the newest commit of the project's deploy branch that any
+// of its machines knows of (the most recent scan wins).
+func deployHead(p store.Project, scans []store.RepoScan) string {
+	places := map[string]bool{}
+	for _, n := range p.Nodes {
+		places[n.NodeID+"\x00"+n.Path] = true
+	}
+	if d := p.Deploy; d != nil {
+		places[d.NodeID+"\x00"+d.Path] = true
+	}
+	head, seen := "", int64(0)
+	for _, s := range scans {
+		if !places[s.NodeID+"\x00"+s.Path] && (s.ProjectID != p.ID) {
+			continue
+		}
+		if sha := s.Heads[p.Deploy.Branch]; sha != "" && s.SeenAt >= seen {
+			head, seen = sha, s.SeenAt
+		}
+	}
+	return head
+}
+
+// deployQueued reports whether a deploy of commit already exists and was
+// not cancelled.
+func (e *Engine) deployQueued(ctx context.Context, projectID, commit string) bool {
+	tasks, _ := e.store().Tasks(ctx, store.TaskFilter{ProjectID: projectID, Limit: 5000})
+	for _, t := range tasks {
+		if t.DeployCommit == commit && t.Status != event.TaskCancelled {
+			return true
+		}
+	}
+	return false
 }
 
 // DeployedSince reports whether an ops task of the project was created at

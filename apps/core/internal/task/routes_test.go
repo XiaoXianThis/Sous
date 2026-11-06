@@ -97,8 +97,25 @@ func TestProjectAndTaskEndpoints(t *testing.T) {
 	if code := c.do("POST", "/api/v1/tasks", map[string]any{"title": " ", "kind": "general"}, nil); code != 400 {
 		t.Fatalf("empty title: %d", code)
 	}
-	if code := c.do("POST", "/api/v1/tasks", map[string]any{"title": "x", "kind": "code"}, nil); code != 400 {
-		t.Fatalf("code task without project: %d", code)
+	if code := c.do("POST", "/api/v1/tasks", map[string]any{"title": "x", "place": "worktree"}, nil); code != 400 {
+		t.Fatalf("worktree task without project: %d", code)
+	}
+	if code := c.do("POST", "/api/v1/tasks", map[string]any{"title": "x", "review": "maybe"}, nil); code != 400 {
+		t.Fatalf("unknown review: %d", code)
+	}
+	// Nothing is filled in by default (decision 0022): a task without its
+	// attributes cannot be dispatched until they are set.
+	if code := c.do("POST", "/api/v1/tasks/"+tk.ID+"/dispatch", map[string]any{}, nil); code != 400 {
+		t.Fatalf("dispatch without attributes: %d", code)
+	}
+	if code := c.do("PATCH", "/api/v1/tasks/"+tk.ID, map[string]any{"place": "worktree", "review": "none"}, nil); code != 200 {
+		t.Fatalf("set attributes: %d", code)
+	}
+	if code := c.do("POST", "/api/v1/tasks/"+tk.ID+"/dispatch", map[string]any{}, nil); code != 400 {
+		t.Fatalf("dispatch without a start branch: %d", code)
+	}
+	if code := c.do("PATCH", "/api/v1/tasks/"+tk.ID, map[string]any{"base_branch": "main", "base_from": "local"}, &tk); code != 200 || tk.BaseBranch != "main" || tk.BaseFrom != "local" {
+		t.Fatalf("set start: %d %+v", code, tk)
 	}
 	title, prio := "加一个蓝色按钮", 5
 	if code := c.do("PATCH", "/api/v1/tasks/"+tk.ID, map[string]any{"title": title, "priority": prio, "permission_mode": "auto"}, &tk); code != 200 || tk.Title != title || tk.Priority != 5 || tk.PermissionMode != "auto" {

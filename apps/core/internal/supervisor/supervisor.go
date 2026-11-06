@@ -182,7 +182,7 @@ func (s *Supervisor) turn(threadID string) {
 	}
 
 	mainID, _ := st.MainThreadID(ctx)
-	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID})
+	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: upTo})
 	// load rebuilds the request from the current segment, compacting
 	// first (reason) when it would not fit, and leaving out the oldest
 	// messages when it still does not.
@@ -302,14 +302,17 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text
 	}
 }
 
-// hasStep reports whether the turn answering replyTo stored a step.
+// hasStep reports whether the turn answering replyTo stored a step (or a
+// consultant's answer).
 func (s *Supervisor) hasStep(threadID string, replyTo int64) bool {
 	msgs, err := s.opt.Log.Store.MessagesAfter(s.ctx, threadID, replyTo-1)
 	if err != nil {
 		return false
 	}
 	for _, m := range msgs {
-		if m.Role == "assistant" && m.Kind == event.KindStep && m.ReplyTo == replyTo {
+		// A consultant's answer speaks for the turn as well: the supervisor
+		// may end it without words of its own.
+		if m.Role == "assistant" && (m.Kind == event.KindStep || m.Kind == event.KindConsult) && m.ReplyTo == replyTo {
 			return true
 		}
 	}
@@ -322,7 +325,7 @@ func (s *Supervisor) hasStep(threadID string, replyTo int64) bool {
 func unanswered(msgs []store.Message) int64 {
 	var answered, newest int64
 	for _, m := range msgs {
-		if m.Role == "assistant" && m.Kind != event.KindStep && m.ReplyTo > answered {
+		if m.Role == "assistant" && m.Kind != event.KindStep && m.Kind != event.KindConsult && m.ReplyTo > answered {
 			answered = m.ReplyTo
 		}
 		if m.Role == "user" {
@@ -386,7 +389,7 @@ func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(eve
 			var parts []string
 			for _, r := range replies[m.Seq] {
 				if !r.Error && r.Kind != event.KindSilent && strings.TrimSpace(r.Content) != "" {
-					parts = append(parts, r.Content)
+					parts = append(parts, consultLabel(r)+r.Content)
 				}
 			}
 			if len(parts) > 0 {
@@ -412,6 +415,19 @@ func mentionNote(ms []event.Mention, label ...func(event.MessageContext) string)
 		names = append(names, "@"+mn.Name+" = "+d)
 	}
 	return "【消息里用 @ 引用了工作台上的项目：" + strings.Join(names, "；") + "】"
+}
+
+// consultLabel marks a project consultant's answer, which the user saw as
+// it is, in the supervisor's view of the conversation.
+func consultLabel(m store.Message) string {
+	if m.Kind != event.KindConsult {
+		return ""
+	}
+	who := "项目顾问"
+	if m.Source != nil && m.Source.Agent != "" {
+		who += "（" + m.Source.Agent + "）"
+	}
+	return "【" + who + "的回答，用户已经看到原文】\n"
 }
 
 // silentSpec lets the supervisor end a turn without speaking.

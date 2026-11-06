@@ -86,10 +86,13 @@ func TestWorkspacesProjectsAndSetup(t *testing.T) {
 		t.Fatalf("node: %+v", n)
 	}
 
-	// A new project is a wokspace by default. wok only writes inside the
-	// workspace, so the policy allows it (creating a GitHub repository is
-	// git-remote and asks).
-	p3, run, err := te.tasks.CreateProject(ctx, task.SetupInput{Name: "new-app", ThreadID: te.main, Actor: event.ActorSupervisor})
+	// A new wokspace project (the structure is always named, decision
+	// 0022). wok only writes inside the workspace, so the policy allows it
+	// (creating a GitHub repository is git-remote and asks).
+	if _, _, err := te.tasks.CreateProject(ctx, task.SetupInput{Name: "new-app", ThreadID: te.main, Actor: event.ActorSupervisor}); err == nil {
+		t.Fatal("a project was created without a structure")
+	}
+	p3, run, err := te.tasks.CreateProject(ctx, task.SetupInput{Name: "new-app", Layout: "wokspace", ThreadID: te.main, Actor: event.ActorSupervisor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,13 +155,6 @@ func TestOpsTaskOnServer(t *testing.T) {
 		return n.Role == "server"
 	})
 
-	// A server takes no code tasks.
-	code, _ := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "改代码", Dispatch: true, Actor: event.ActorUser})
-	if c := te.task(code.ID); c.Status != event.TaskQueued || !strings.Contains(c.StatusReason, "服务器") {
-		t.Fatalf("code task on a server: %+v", c)
-	}
-	te.tasks.Cancel(ctx, code.ID, "", event.ActorUser)
-
 	// An ops task runs in place with the ops persona, in the default mode
 	// even when asked for open, and its command goes to the user.
 	persona, err := te.tasks.PutPersona(ctx, task.PersonaInput{Name: "部署员", Agent: "fake", Options: map[string]string{"model": "smart"},
@@ -171,7 +167,7 @@ func TestOpsTaskOnServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	ops, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Kind: "ops", Title: "部署", Persona: persona.ID,
-		Mode: "open", Dispatch: true, Actor: event.ActorUser})
+		Place: event.PlaceInPlace, Review: event.ReviewNone, Mode: "open", Dispatch: true, Actor: event.ActorUser})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +180,12 @@ func TestOpsTaskOnServer(t *testing.T) {
 		t.Fatalf("ops task: %+v", done)
 	}
 	runs := te.runs(ops.ID)
-	if len(runs) != 1 || runs[0].Kind != "ops" || runs[0].Workdir != te.repo || runs[0].Persona != "部署员" || runs[0].Options["model"] != "smart" {
+	if len(runs) != 1 || runs[0].Kind != "in_place" || runs[0].Workdir != te.repo || runs[0].Persona != "部署员" || runs[0].Options["model"] != "smart" {
 		t.Fatalf("runs: %+v", runs)
+	}
+	// It worked in place after a snapshot: the change is measured from it.
+	if done.BaseCommit == "" || runs[0].DiffStat == "" || !strings.Contains(done.StatusReason, "可以撤销") {
+		t.Fatalf("in-place task: %+v run %+v", done, runs[0])
 	}
 	if len(te.reviewer.requests()) != 0 {
 		t.Fatal("ops tasks are not reviewed")
@@ -203,50 +203,81 @@ func TestOpsTaskOnServer(t *testing.T) {
 	}
 }
 
-func TestDeployWhenPRMerged(t *testing.T) {
+// Automatic deploys follow the deploy branch's commits (decision 0022): the
+// first commit seen is only remembered; a new one, pushed by sous here, gets
+// one ops task for that commit.
+func TestDeployOnNewCommits(t *testing.T) {
 	te := newTaskEnv(t)
-	defer te.startDaemon("write")()
 	ctx := context.Background()
-	tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true, Actor: event.ActorSupervisor})
-	if err != nil {
-		t.Fatal(err)
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", te.repo, "-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
 	}
-	te.approveNext(tk.ID)
-	te.approveNext(tk.ID)
-	if done := te.waitStatus(tk.ID, event.TaskDone, event.TaskBlocked, event.TaskFailed); done.Status != event.TaskDone {
-		t.Fatalf("task: %+v", done)
-	}
+	git("push", "-q", "-u", "origin", "main")
+	te.setConfig(func(c *node.Config) { c.Workspaces = []string{filepath.Dir(te.repo)} })
 
-	// A server (offline here) is the deploy target, deploying on merge.
+	// A server (offline here) is the deploy target for main.
 	te.log.Append(ctx,
 		event.New(event.NodePaired, event.ActorSystem, "", event.NodePayload{NodeID: "srv", Name: "服务器", OS: "linux", Arch: "amd64"}),
 		event.New(event.NodeRole, event.ActorSystem, "", event.NodeRolePayload{NodeID: "srv", Role: "server"}))
-	dep := &event.Deploy{NodeID: "srv", Path: "/srv/demo", Command: "./deploy.sh", AutoOnMerge: true}
+	dep := &event.Deploy{NodeID: "srv", Path: "/srv/demo", Command: "./deploy.sh", Branch: "main", AutoOnMerge: true}
 	if _, err := te.tasks.PutProject(ctx, task.ProjectInput{ID: "p1", Deploy: &dep}, event.ActorUser); err != nil {
 		t.Fatal(err)
 	}
+	first := git("rev-parse", "main")
+	defer te.startDaemon("write")()
 
-	// While the PR is open nothing happens.
-	te.tasks.CheckMerges(ctx)
-	if ops, _ := te.log.Store.Tasks(ctx, store.TaskFilter{ProjectID: "p1"}); len(ops) != 1 {
-		t.Fatalf("tasks before the merge: %d", len(ops))
+	// The first scan only records what is there.
+	te.waitFor("the deploy baseline", func() bool {
+		p, _ := te.log.Store.Project(ctx, "p1")
+		return p.DeployedCommit == first
+	})
+	if ops := opsTasks(te); len(ops) != 0 {
+		t.Fatalf("deployed the baseline: %+v", ops)
 	}
-	// gh now says merged: one ops task, once.
-	gh, _ := exec.LookPath("gh")
-	os.WriteFile(gh, []byte("#!/bin/sh\necho '{\"state\":\"MERGED\",\"mergedAt\":\"2026-11-04T00:00:00Z\"}'\n"), 0o755)
-	te.tasks.CheckMerges(ctx)
-	te.tasks.CheckMerges(ctx)
-	all, _ := te.log.Store.Tasks(ctx, store.TaskFilter{ProjectID: "p1"})
+
+	// A new commit on main, pushed through sous.
+	os.WriteFile(filepath.Join(te.repo, "new.txt"), []byte("new\n"), 0o644)
+	git("add", "-A")
+	git("commit", "-qm", "New feature")
+	head := git("rev-parse", "main")
+	pushed := te.gitOp(task.GitInput{Op: "push", ProjectID: "p1", Branch: "main", ThreadID: te.main})
+	te.waitFor("the push approval", func() bool {
+		as, _ := te.log.Store.Approvals(ctx, "pending", "")
+		for _, x := range as {
+			if x.Category == "git-remote" {
+				te.hub.Decide(ctx, x.ID, "allow", "")
+				return true
+			}
+		}
+		return false
+	})
+	if r := <-pushed; r.Status != event.RunStatusSucceeded {
+		t.Fatalf("push: %+v", r)
+	}
+	te.waitFor("the deploy task", func() bool { return len(opsTasks(te)) == 1 })
+	te.tasks.CheckDeploys(ctx)
+	te.tasks.CheckDeploys(ctx)
+	ops := opsTasks(te)
+	if len(ops) != 1 || ops[0].DeployCommit != head || ops[0].Place != event.PlaceInPlace || ops[0].Review != event.ReviewNone || ops[0].PersonaID != "ops" {
+		t.Fatalf("ops tasks: %+v", ops)
+	}
+	if r := te.task(ops[0].ID).StatusReason; !strings.Contains(r, "离线") {
+		t.Fatalf("waits for the server: %s", r)
+	}
+}
+
+func opsTasks(te *taskEnv) []store.Task {
+	all, _ := te.log.Store.Tasks(context.Background(), store.TaskFilter{ProjectID: "p1"})
 	var ops []store.Task
 	for _, x := range all {
 		if x.Kind == "ops" {
 			ops = append(ops, x)
 		}
 	}
-	if len(ops) != 1 || ops[0].Status != event.TaskQueued || !strings.Contains(ops[0].Detail, "pull/1") || ops[0].PersonaID != "ops" {
-		t.Fatalf("ops tasks: %+v", ops)
-	}
-	if r := te.task(ops[0].ID).StatusReason; !strings.Contains(r, "离线") {
-		t.Fatalf("waits for the server: %s", r)
-	}
+	return ops
 }

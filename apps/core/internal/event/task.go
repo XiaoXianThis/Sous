@@ -8,20 +8,64 @@ const (
 	TaskUpdated  Type = "task.updated"  // fields the user or the supervisor changed
 	TaskStatus   Type = "task.status"   // a status transition
 	TaskReviewed Type = "task.reviewed" // the reviewer's verdict on a run
+	// TaskGit records what a git operation did to a task's branch: merged,
+	// pushed, a pull request, discarded (docs/decisions/0022).
+	TaskGit Type = "task.git"
 
 	ProjectPut     Type = "project.put"
 	ProjectDeleted Type = "project.deleted"
 	// ProjectArchived archives a project or makes it active again. It is its
 	// own event so that project.put never touches the archived state.
 	ProjectArchived Type = "project.archived"
+	// ProjectDeployed records the commit of the deploy branch that is now
+	// deployed, or the baseline when automatic deploys were switched on.
+	ProjectDeployed Type = "project.deployed"
 
 	NotifySent Type = "notify.sent"
 )
 
-// Task kinds.
+// Task kinds. Since decision 0022 a kind is only a label (display, which
+// persona suits it); where a task works and how it is reviewed are its own
+// attributes, chosen by the supervisor.
 const (
-	TaskKindCode    = "code"    // in a git worktree of a project's repository
-	TaskKindGeneral = "general" // in a scratch directory
+	TaskKindCode    = "code"
+	TaskKindGeneral = "general"
+)
+
+// Where a task works (TaskCreatedPayload.Place).
+const (
+	PlaceWorktree = "worktree" // a git worktree on its own branch
+	PlaceInPlace  = "in_place" // the project's directory itself, snapshotted first
+	PlaceScratch  = "scratch"  // a scratch directory
+)
+
+// How a task's work is reviewed (TaskCreatedPayload.Review).
+const (
+	ReviewNone  = "none"  // no review: the agent's summary is the report
+	ReviewModel = "model" // the reviewer model reads the diff
+	ReviewAgent = "agent" // a reviewing agent checks it in the workdir, read only plus tests
+	ReviewUser  = "user"  // the user decides
+)
+
+// What happens when a review fails (TaskCreatedPayload.OnFail).
+const (
+	OnFailRework = "rework" // run the task again with the reviewer's reason
+	OnFailAsk    = "ask"    // block the task and let the supervisor or the user decide
+)
+
+// Where the start of a task branch comes from (BaseFrom).
+const (
+	BaseLocal  = "local"  // the local branch, with commits not pushed yet
+	BaseRemote = "remote" // origin/<branch> after a fetch
+)
+
+// Git states of a task's branch (TaskGitPayload.State).
+const (
+	GitUnmerged  = "unmerged"
+	GitMerged    = "merged"
+	GitPR        = "pr"
+	GitDiscarded = "discarded"
+	GitRestored  = "restored" // an in-place task's changes were undone
 )
 
 // Task statuses (requirements R2.2). Queued means the task wants to run but
@@ -42,11 +86,19 @@ const (
 // Message kind of a task report the engine posts in the task's thread.
 const KindReport = "report"
 
-// Run purposes: what a run does for its task.
+// Run purposes: what a run does.
 const (
-	PurposeWork    = "work"    // an agent does the task
-	PurposeRebase  = "rebase"  // an agent rebases the task's branch after a conflict
-	PurposeDeliver = "deliver" // the node pushes the branch and opens a pull request
+	PurposeWork = "work" // an agent does the task
+	// Rebase and deliver are no longer started (decision 0022); old runs
+	// in the log keep them.
+	PurposeRebase  = "rebase"
+	PurposeDeliver = "deliver"
+	// PurposeReview: a reviewing agent checks a task's work, read only.
+	PurposeReview = "review"
+	// PurposeGit: the node runs one git operation with fixed commands.
+	PurposeGit = "git"
+	// PurposeConsult: a project's read-only consultant session.
+	PurposeConsult = "consult"
 )
 
 // TaskFields are the editable fields of a task. In task.updated only the
@@ -63,6 +115,13 @@ type TaskFields struct {
 	DependsOn      []string `json:"depends_on,omitempty"`
 	SetDeps        bool     `json:"set_deps,omitempty"`  // DependsOn replaces the list, even when empty
 	Dismissed      *bool    `json:"dismissed,omitempty"` // the user has seen the result
+	// Decision 0022: where the task works, how it is reviewed, where its
+	// branch starts.
+	Place      *string `json:"place,omitempty"`
+	Review     *string `json:"review,omitempty"`
+	OnFail     *string `json:"on_fail,omitempty"`
+	BaseBranch *string `json:"base_branch,omitempty"`
+	BaseFrom   *string `json:"base_from,omitempty"`
 }
 
 type TaskCreatedPayload struct {
@@ -78,6 +137,42 @@ type TaskCreatedPayload struct {
 	PersonaID      string   `json:"persona_id,omitempty"`
 	DependsOn      []string `json:"depends_on,omitempty"`
 	Status         string   `json:"status"`
+	// Decision 0022.
+	Place      string   `json:"place,omitempty"`
+	Review     string   `json:"review,omitempty"`
+	OnFail     string   `json:"on_fail,omitempty"`
+	BaseBranch string   `json:"base_branch,omitempty"`
+	BaseFrom   string   `json:"base_from,omitempty"`
+	Handoff    *Handoff `json:"handoff,omitempty"`
+	// DeployCommit is the deploy branch's commit an automatic deploy is for.
+	DeployCommit string `json:"deploy_commit,omitempty"`
+}
+
+// Handoff carries a project consultant's session into a task that grew out
+// of the discussion, so the agent that did the reading keeps going.
+type Handoff struct {
+	NodeID    string `json:"node_id"`
+	Agent     string `json:"agent"`
+	SessionID string `json:"session_id,omitempty"`
+	// Note is what was discussed, for an agent that cannot load the session.
+	Note string `json:"note,omitempty"`
+}
+
+// TaskGitPayload records a git operation on a task's branch.
+type TaskGitPayload struct {
+	State string `json:"state"` // unmerged / merged / pr / discarded / restored
+	Note  string `json:"note,omitempty"`
+	PRURL string `json:"pr_url,omitempty"`
+	RunID string `json:"run_id,omitempty"`
+}
+
+// ProjectDeployedPayload records what is deployed from the deploy branch.
+type ProjectDeployedPayload struct {
+	ProjectID string `json:"project_id"`
+	Commit    string `json:"commit"`
+	// Baseline marks the commit found when automatic deploys started: it
+	// was not deployed by sous, only remembered.
+	Baseline bool `json:"baseline,omitempty"`
 }
 
 type TaskUpdatedPayload struct {
@@ -125,11 +220,17 @@ type ProjectNode struct {
 
 // Deploy is where and how a project is deployed (M5).
 type Deploy struct {
-	NodeID      string `json:"node_id"`
-	Path        string `json:"path"`
-	Command     string `json:"command"`                 // the deploy script or command
-	Health      string `json:"health,omitempty"`        // a health check command
-	AutoOnMerge bool   `json:"auto_on_merge,omitempty"` // deploy when a PR sous opened is merged
+	NodeID  string `json:"node_id"`
+	Path    string `json:"path"`
+	Command string `json:"command"`          // the deploy script or command
+	Health  string `json:"health,omitempty"` // a health check command
+	// Branch is the deploy branch: new commits on origin/<branch> are what
+	// gets deployed. No default (decision 0022).
+	Branch string `json:"branch,omitempty"`
+	// AutoOnMerge deploys every new commit of Branch automatically. The
+	// name is kept from when it meant "a pull request sous opened was
+	// merged"; without a Branch it does nothing.
+	AutoOnMerge bool `json:"auto_on_merge,omitempty"`
 }
 
 type ProjectPayload struct {

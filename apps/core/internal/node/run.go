@@ -78,6 +78,11 @@ type run struct {
 	loading      bool // replaying a loaded session: its updates are old news
 	// resumed is set for a run restored after a restart of the daemon.
 	resumed *savedRun
+	// continued is set when ResumeSession was loaded: the agent remembers
+	// the earlier conversation, so the prompt need not repeat it.
+	continued bool
+	// idle: a consultant between questions.
+	idle bool
 }
 
 func newRun(d *Daemon, s proto.RunStart) *run {
@@ -121,15 +126,25 @@ func (r *run) isShutdown() bool {
 // execute runs the agent until its turn ends, then reports the diff.
 func (r *run) execute() {
 	defer r.cancel()
-	select {
-	case r.d.sem <- struct{}{}:
-		defer func() { <-r.d.sem }()
-	case <-r.ctx.Done():
-		r.end("cancelled", "", "", "", errors.New(r.stopReasonText()))
+	// A consultant is read only and waits idle most of its life: it does
+	// not take one of the machine's slots (decision 0022).
+	if r.spec.Purpose != proto.PurposeConsult {
+		select {
+		case r.d.sem <- struct{}{}:
+			defer func() { <-r.d.sem }()
+		case <-r.ctx.Done():
+			r.end("cancelled", "", "", "", errors.New(r.stopReasonText()))
+			return
+		}
+	}
+	if r.spec.Purpose == proto.PurposeDeliver || r.spec.Purpose == proto.PurposeRebase {
+		// Automatic delivery is gone (decision 0022): a Hub of this version
+		// never sends these; an old queued one ends here.
+		r.end("failed", "", "", "", errors.New("自动交付已经去掉了：让 sous 按你的要求提交、合并、推送或开 PR"))
 		return
 	}
-	if r.spec.Purpose == proto.PurposeDeliver {
-		r.deliver()
+	if r.spec.Purpose == proto.PurposeGit {
+		r.gitOp()
 		return
 	}
 	if r.spec.Purpose == proto.PurposeClone || r.spec.Purpose == proto.PurposeCreate {
@@ -159,6 +174,10 @@ func (r *run) execute() {
 	if r.isShutdown() {
 		return // the agent was killed with the daemon; nothing to report yet
 	}
+	if r.spec.Purpose == proto.PurposeConsult {
+		r.endConsult(status, stop, err)
+		return
+	}
 
 	// Report what changed even when the turn failed part way.
 	diff, stat, derr := workspace.Diff(context.Background(), ws)
@@ -177,17 +196,30 @@ func (r *run) prepare() (workspace.Prepared, error) {
 	if key == "" {
 		key = r.spec.RunID
 	}
-	if r.spec.Kind == proto.KindOps {
+	if r.spec.Purpose == proto.PurposeConsult {
+		// The consultant reads the project directory as it is: no snapshot,
+		// it changes nothing.
 		if r.spec.RepoPath == "" {
-			return workspace.Prepared{}, errors.New("运维任务需要项目在这台机器上的目录")
+			return workspace.Prepared{}, errors.New("顾问需要项目在这台机器上的目录")
 		}
 		return workspace.PrepareInPlace(r.spec.RepoPath)
 	}
+	if r.spec.Kind == proto.KindOps || r.spec.Kind == proto.KindInPlace {
+		if r.spec.RepoPath == "" {
+			return workspace.Prepared{}, errors.New("就地执行的任务需要项目在这台机器上的目录")
+		}
+		ws, err := workspace.PrepareInPlaceTask(r.ctx, r.d.root, r.spec.RepoPath, key)
+		if err == nil && ws.Note != "" && r.resumed == nil {
+			r.status(ws.Note)
+		}
+		return ws, err
+	}
 	if r.spec.RepoPath != "" {
-		if r.resumed == nil {
+		if r.resumed == nil && r.spec.Purpose != proto.PurposeReview {
 			r.status("正在准备独立的 git worktree")
 		}
-		ws, err := workspace.PrepareTaskOn(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title), r.spec.BaseBranch)
+		ws, err := workspace.PrepareTaskOn(r.ctx, r.d.root, r.spec.RepoPath, key, r.spec.Branch, workspace.Slug(r.spec.Title),
+			workspace.Start{Branch: r.spec.BaseBranch, From: r.spec.BaseFrom})
 		if err == nil && ws.Note != "" {
 			r.status(ws.Note)
 		}
@@ -203,7 +235,8 @@ func (r *run) markStarted(ws workspace.Prepared) {
 	r.spec.Branch = ws.Branch // a resumed run finds the same worktree
 	r.mu.Unlock()
 	r.save()
-	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch, BaseBranch: ws.BaseBranch}))
+	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch, BaseBranch: ws.BaseBranch,
+		BaseCommit: ws.Base}))
 }
 
 // open starts the agent and opens (or, after a restart, loads) its session.
@@ -239,6 +272,29 @@ func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, ac
 	client, err := acp.Start(r.ctx, cmd, acp.Callbacks{OnUpdate: r.onUpdate, OnPermission: r.onPermission})
 	if err != nil {
 		return nil, acp.Session{}, fmt.Errorf("启动 %s 失败：%w", spec.Title, err)
+	}
+	if want := r.spec.ResumeSession; r.resumed == nil && want != "" {
+		// A consultant that went idle, or a task that grew out of a
+		// discussion: go on in the agent's earlier session when it can.
+		if client.Init.LoadSession() {
+			r.mu.Lock()
+			r.loading = true
+			r.mu.Unlock()
+			session, err := client.LoadSession(r.ctx, want, ws.Dir)
+			r.mu.Lock()
+			r.loading = false
+			r.mu.Unlock()
+			if err == nil {
+				r.mu.Lock()
+				r.continued = true
+				r.mu.Unlock()
+				r.status("已接上 " + spec.Title + " 之前的会话")
+				return client, session, nil
+			}
+			r.status("没能接上之前的会话（" + truncate(err.Error(), 120) + "），开一个新会话")
+		} else {
+			r.status(spec.Title + " 不支持恢复会话，开一个新会话")
+		}
 	}
 	if sv := r.resumed; sv != nil && sv.SessionID != "" && client.Init.LoadSession() {
 		r.mu.Lock()
@@ -384,6 +440,19 @@ func (r *run) drive(spec agents.Spec, ws workspace.Prepared) (status, stop strin
 			r.status("操作被拒绝，让 agent 换个办法继续")
 			continue
 		}
+		if r.spec.Purpose == proto.PurposeConsult && stop == "end_turn" {
+			// A consultant answers, then waits for the next question.
+			r.reportTurn()
+			text, ids, ok := r.waitQuestion()
+			if !ok {
+				if r.ctx.Err() != nil || r.stopRequested() {
+					return "cancelled", "cancelled", errors.New(r.stopReasonText())
+				}
+				return "succeeded", "idle", nil
+			}
+			prompt, promptIDs = text, ids
+			continue
+		}
 		more, ids2 := r.takeFollowUps()
 		if len(more) == 0 {
 			if r.isPaused() {
@@ -505,11 +574,16 @@ func (r *run) firstPrompt(ws workspace.Prepared) string {
 		b.WriteString(r.spec.RecoveryNote + "\n\n")
 	}
 	b.WriteString(r.spec.Prompt)
-	if r.spec.Kind == proto.KindOps {
-		fmt.Fprintf(&b, "\n\n（说明：你直接在这台服务器上项目的目录 %s 里工作，没有 worktree，也不会创建 PR。改文件、删除、启停服务都要用户批准；按部署脚本执行，不要临时修改服务器上的文件。）", ws.Dir)
-	}
-	if ws.Branch != "" {
-		fmt.Fprintf(&b, "\n\n（说明：你在 sous 为这个任务新建的 git worktree 里工作，分支是 %s。可以提交，但不要 push，也不要切换分支；完成后简要说明改了什么。）", ws.Branch)
+	switch {
+	case r.spec.Purpose == proto.PurposeConsult || r.spec.Purpose == proto.PurposeReview:
+		// The Hub's prompt says it all; the session is read only.
+	case r.spec.Kind == proto.KindOps || r.spec.Kind == proto.KindInPlace:
+		fmt.Fprintf(&b, "\n\n（说明：你直接在项目的目录 %s 里工作，没有 worktree。sous 在你开始前拍了快照，改动可以查看和撤销。不要提交、push 或切换分支，git 操作由 sous 按用户的要求处理。）", ws.Dir)
+		if r.d.role() == proto.RoleServer {
+			b.WriteString("\n（这台机器是服务器：改文件、删除、启停服务都要用户批准；按部署脚本执行，不要临时修改服务器上的文件。）")
+		}
+	case ws.Branch != "":
+		fmt.Fprintf(&b, "\n\n（说明：你在 sous 为这个任务新建的 git worktree 里工作，分支是 %s。可以提交到这个分支，但不要 push、不要切换分支；合并、推送、开 PR 由 sous 按用户的要求处理。完成后简要说明改了什么。）", ws.Branch)
 	}
 	return b.String()
 }
@@ -766,12 +840,16 @@ func (r *run) followUp(text, messageID string) {
 		r.followIDs = append(r.followIDs, messageID)
 	}
 	r.followUps = append(r.followUps, text)
-	wasPaused := r.paused
+	wasPaused, idle := r.paused, r.idle
 	r.paused, r.pauseReason = false, ""
 	r.mu.Unlock()
 	if wasPaused {
 		r.save()
 		r.signal()
+		return
+	}
+	if idle {
+		r.signal() // a consultant waiting for the next question
 		return
 	}
 	r.status("收到追加指令，会在当前这一步结束后交给 agent")

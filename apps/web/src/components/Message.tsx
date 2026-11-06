@@ -4,6 +4,7 @@ import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
 import { splitMentions } from '../lib/mention'
 import { triggerView } from '../lib/trigger'
 import type { Attachment, Message } from '../lib/types'
+import AgentIcon, { agentTitle } from './AgentIcon'
 import Icon from './Icon'
 import Markdown, { CopyButton } from './Markdown'
 
@@ -146,6 +147,34 @@ export default function MessageView({ message }: { message: Message }) {
           </div>
         )}
       </div>
+    )
+  }
+
+  if (message.kind === 'consult') {
+    // A project consultant's answer, shown as it is (decision 0022): a bar on
+    // the left and who said it, so it is never mistaken for the supervisor.
+    const src = message.source
+    const [open, setOpen] = [showTrigger || message.content.length < 1600, setShowTrigger]
+    return (
+      <article className="grid gap-2 min-w-0 group border-l-[3px] border-[color-mix(in_srgb,var(--accent)_55%,transparent)] pl-3.5" data-testid="message-consult">
+        <header className="flex items-center gap-2 min-w-0 h-6">
+          <AgentIcon name={src?.agent ?? ''} size={20} />
+          <span className="text-[13px] font-semibold text-ink overflow-hidden text-ellipsis whitespace-nowrap">
+            {agentTitle(src?.agent || 'agent')} · 顾问{src?.project ? ` · ${src.project}` : ''}
+          </span>
+          <time className="text-[11.5px] text-faint tabular-nums flex-none">{time}</time>
+          <span className="flex-1"></span>
+          {message.content && (
+            <CopyButton text={message.content} className="-my-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
+          )}
+        </header>
+        <div className={open ? '' : 'max-h-[260px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]'}>
+          <Markdown text={message.content} />
+        </div>
+        {!open && (
+          <button type="button" className="justify-self-start link text-[12.5px]" onClick={() => setOpen(true)}>展开全部</button>
+        )}
+      </article>
     )
   }
 

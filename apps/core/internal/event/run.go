@@ -60,12 +60,26 @@ type RunQueuedPayload struct {
 	Options map[string]string `json:"options,omitempty"`
 	Persona string            `json:"persona,omitempty"`
 	Setup   *proto.Setup      `json:"setup,omitempty"`
+	// Decision 0022: where a new task branch starts, the git operation of a
+	// git run, the project of a consult run, and an agent session to load.
+	BaseFrom      string       `json:"base_from,omitempty"`
+	Git           *proto.GitOp `json:"git,omitempty"`
+	ProjectID     string       `json:"project_id,omitempty"`
+	ResumeSession string       `json:"resume_session,omitempty"`
 }
 
 type RunStartedPayload struct {
 	Workdir    string `json:"workdir"`
 	Branch     string `json:"branch,omitempty"`
 	BaseBranch string `json:"base_branch,omitempty"`
+	BaseCommit string `json:"base_commit,omitempty"`
+}
+
+// RunTurnPayload is one finished turn of a long-lived run (a consultant):
+// its whole answer and the agent's session id.
+type RunTurnPayload struct {
+	Text      string `json:"text"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // RunUpdatePayload mirrors proto.RunUpdate.
@@ -91,6 +105,10 @@ type RunEndedPayload struct {
 	// Deliver runs: the pull request, and whether it conflicts with its base.
 	PRURL    string `json:"pr_url,omitempty"`
 	Conflict bool   `json:"conflict,omitempty"`
+	// Git runs: what the operation did. Consult runs: the session to load
+	// next time.
+	Git       *proto.GitResult `json:"git,omitempty"`
+	SessionID string           `json:"session_id,omitempty"`
 }
 
 type ApprovalOption struct {

@@ -1,6 +1,6 @@
 # 0009 代码任务以 PR 交付，sous 永不合并主分支
 
-- Status: Accepted
+- Status: Superseded by 0022
 - Date: 2026-11-03
 
 ## Context

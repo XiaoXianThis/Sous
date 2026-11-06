@@ -190,3 +190,16 @@ describe('task and approval events', () => {
     expect(s.inboxRev).toBe(3) // the badge reloads when a run's approvals expire
   })
 })
+
+describe('consult messages', () => {
+  it('keeps who answered', () => {
+    const s = emptyState()
+    applyEvent(s, {
+      seq: 3, id: 'e3', ts: 1, type: 'message.assistant', actor: 'system', thread_id: 't', run_id: 'r1',
+      payload: { message_id: 'c1', content: '登录在 auth.go', kind: 'consult', reply_to: 2, source: { run_id: 'r1', agent: 'claude', project_id: 'p', project: 'Sous' } },
+    })
+    const m = s.messages.t.find((x) => x.id === 'c1')!
+    expect(m.kind).toBe('consult')
+    expect(m.source).toMatchObject({ agent: 'claude', project: 'Sous' })
+  })
+})

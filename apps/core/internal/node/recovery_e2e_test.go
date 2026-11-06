@@ -44,7 +44,7 @@ func TestInspectorPausesLoopingRun(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("loop")()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{ThreadID: te.main, Title: "查一下依赖", Dispatch: true, Actor: event.ActorSupervisor})
+	tk, _ := te.tasks.Create(ctx, te.general(task.Input{ThreadID: te.main, Title: "查一下依赖", Dispatch: true}))
 	run := te.firstRun(tk.ID)
 	te.waitFor("the agent to loop", func() bool {
 		evs, _ := te.log.Store.RunEvents(ctx, run.ID)
@@ -131,7 +131,7 @@ func TestMessageResumesPausedRun(t *testing.T) {
 	_, stop := te.startDaemonWith("loop", "FAKE_ACP_PROMPTS="+prompts)
 	defer stop()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{Title: "x", Dispatch: true, Actor: event.ActorSupervisor})
+	tk, _ := te.tasks.Create(ctx, te.general(task.Input{Title: "x", Dispatch: true}))
 	run := te.firstRun(tk.ID)
 	te.waitFor("the agent to start looping", func() bool { return len(toolEvents(te, run.ID)) > 2 })
 	if err := te.hub.Pause(ctx, run.ID, "用户暂停", event.ActorUser); err != nil {
@@ -161,7 +161,7 @@ func TestDaemonRestartResumesSession(t *testing.T) {
 	prompts := filepath.Join(t.TempDir(), "prompts.txt")
 	_, stop := te.startDaemonWith("slow", "FAKE_ACP_LOAD=1", "FAKE_ACP_PROMPTS="+prompts)
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "Add hello", Dispatch: true, Actor: event.ActorSupervisor})
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Dispatch: true}))
 	run := te.firstRun(tk.ID)
 	te.waitFor("the agent to work", func() bool {
 		log, _ := os.ReadFile(te.hub.LogPath(run.ID))
@@ -175,7 +175,6 @@ func TestDaemonRestartResumesSession(t *testing.T) {
 
 	_, stop = te.startDaemonWith("slow", "FAKE_ACP_LOAD=1", "FAKE_ACP_PROMPTS="+prompts)
 	defer stop()
-	te.approveNext(tk.ID) // the push
 	done := te.waitStatus(tk.ID, event.TaskDone, event.TaskFailed, event.TaskBlocked)
 	if done.Status != event.TaskDone {
 		t.Fatalf("task: %+v", done)
@@ -213,7 +212,7 @@ func TestInterruptedRunRestartsWithRecoveryNote(t *testing.T) {
 	prompts := filepath.Join(t.TempDir(), "prompts.txt")
 	_, stop := te.startDaemonWith("write", "FAKE_ACP_PROMPTS="+prompts)
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "Add hello", Dispatch: true, Actor: event.ActorSupervisor})
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Dispatch: true}))
 	run := te.firstRun(tk.ID)
 	te.waitFor("the agent to ask", func() bool {
 		as, _ := te.log.Store.Approvals(ctx, "pending", run.ID)
@@ -233,7 +232,6 @@ func TestInterruptedRunRestartsWithRecoveryNote(t *testing.T) {
 	if second.Purpose != event.PurposeWork || !strings.Contains(second.RecoveryNote, "恢复说明") || !strings.Contains(second.RecoveryNote, "测试也要加上") {
 		t.Fatalf("second run: %+v", second)
 	}
-	te.approveNext(tk.ID) // the push
 	if done := te.waitStatus(tk.ID, event.TaskDone, event.TaskFailed, event.TaskBlocked); done.Status != event.TaskDone {
 		t.Fatalf("task: %+v", done)
 	}
@@ -263,7 +261,7 @@ func TestSecondInterruptionFailsTask(t *testing.T) {
 	te := newTaskEnv(t)
 	_, stop := te.startDaemonWith("slow")
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{Title: "慢任务", Dispatch: true, Actor: event.ActorSupervisor})
+	tk, _ := te.tasks.Create(ctx, te.general(task.Input{Title: "慢任务", Dispatch: true}))
 	first := te.firstRun(tk.ID)
 	te.waitFor("the first run to start", func() bool { return te.run(first.ID).Status == event.RunStatusRunning })
 	stop()
@@ -341,8 +339,8 @@ func TestIPCChat(t *testing.T) {
 func TestWorktreeRemovedWhenMachineReturns(t *testing.T) {
 	te := newTaskEnv(t)
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, task.Input{ProjectID: "p1", Title: "旧任务", Actor: event.ActorSupervisor})
-	ws, err := workspace.PrepareTask(ctx, te.root, te.repo, tk.ID, "", "old")
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Title: "旧任务"}))
+	ws, err := workspace.PrepareTaskOn(ctx, te.root, te.repo, tk.ID, "", "old", workspace.Start{Branch: "main", From: workspace.FromLocal})
 	if err != nil {
 		t.Fatal(err)
 	}

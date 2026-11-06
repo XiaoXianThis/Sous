@@ -1,7 +1,7 @@
 // The workbench's visual language: one icon and one tone per state, used on
 // every page (work/specs/m5-workbench design §6). Kept free of the UI so it
 // can be unit tested.
-import type { Persona, PersonaColor, Run, Task, TaskStatus } from './types'
+import type { GitTaskState, Persona, PersonaColor, Run, Task, TaskStatus } from './types'
 
 /** The states the workbench draws. */
 export type Look = 'running' | 'waiting' | 'queued' | 'paused' | 'done' | 'failed' | 'planned' | 'review' | 'cancelled'
@@ -47,8 +47,17 @@ export function taskStateRank(s: TaskState): number {
   return stateRank[s]
 }
 
-/** Collapses a task's status into the four states the card shows. */
-export function taskState(t: Pick<Task, 'status' | 'status_reason' | 'pr_url' | 'dismissed'>): TaskState {
+/** Whether a task in review waits for the user (not a model or an agent). */
+export function userReviewing(t: Pick<Task, 'status' | 'status_reason'>): boolean {
+  return t.status === 'review' && t.status_reason.includes('等你验收')
+}
+
+/**
+ * Collapses a task's status into the four states the card shows. A done task
+ * is closed whatever became of its branch: merging or pushing is the user's
+ * call, made in the conversation (decision 0022).
+ */
+export function taskState(t: Pick<Task, 'status' | 'status_reason'>): TaskState {
   switch (t.status) {
     case 'inbox':
     case 'planned':
@@ -58,21 +67,29 @@ export function taskState(t: Pick<Task, 'status' | 'status_reason' | 'pr_url' | 
     case 'running':
       return t.status_reason.startsWith('已暂停') ? 'attention' : 'active'
     case 'review':
-      return 'active'
+      return userReviewing(t) ? 'attention' : 'active'
     case 'waiting_approval':
     case 'blocked':
     case 'failed':
       return 'attention'
     case 'done':
-      return t.pr_url && !t.dismissed ? 'attention' : 'closed'
     case 'cancelled':
       return 'closed'
   }
   return 'todo'
 }
 
-/** The short detail after the state, such as 排队 or PR 待合并. */
-export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason' | 'pr_url' | 'dismissed'>): string {
+/** What became of a task's branch (or in-place changes). */
+export const gitStateText: Record<GitTaskState, string> = {
+  unmerged: '未合并',
+  merged: '已合并',
+  pr: 'PR 已开',
+  discarded: '已丢弃',
+  restored: '已撤销',
+}
+
+/** The short detail after the state, such as 排队 or 未合并. */
+export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason'> & Partial<Pick<Task, 'git_state'>>): string {
   switch (t.status) {
     case 'inbox':
       return '收件箱'
@@ -83,7 +100,7 @@ export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason' | 'pr_u
     case 'running':
       return t.status_reason.startsWith('已暂停') ? '已暂停' : '执行中'
     case 'review':
-      return '验收中'
+      return userReviewing(t) ? '等你验收' : '验收中'
     case 'waiting_approval':
       return '等你审批'
     case 'blocked':
@@ -91,7 +108,7 @@ export function taskStateDetail(t: Pick<Task, 'status' | 'status_reason' | 'pr_u
     case 'failed':
       return '失败'
     case 'done':
-      return t.pr_url && !t.dismissed ? 'PR 待合并' : '完成'
+      return (t.git_state && gitStateText[t.git_state]) || '完成'
     case 'cancelled':
       return '已取消'
   }
@@ -138,20 +155,30 @@ export interface Stage {
 }
 
 const stageNames: Record<Task['kind'], [string, string][]> = {
-  code: [['plan', '计划'], ['work', '编码'], ['review', '验收'], ['pr', 'PR'], ['deploy', '部署']],
+  code: [['plan', '计划'], ['work', '编码'], ['review', '验收'], ['deploy', '部署']],
   general: [['plan', '计划'], ['work', '执行'], ['review', '验收']],
   ops: [['work', '执行'], ['health', '健康检查']],
 }
 
 /**
- * stages turns a task into its pipeline. deployed says whether a later ops
- * task of the project finished (only known to callers with the whole
- * project), and hasDeploy whether the project deploys at all.
+ * stages turns a task into its stages. There is no delivery stage: what
+ * happens to the branch is a separate step the user asks for (decision
+ * 0022), and a task without a review has no review stage. deployed says
+ * whether a later ops task of the project finished (only known to callers
+ * with the whole project), and hasDeploy whether the project deploys at all.
  */
-export function stages(t: Pick<Task, 'kind' | 'status' | 'pr_url' | 'next' | 'status_reason'>, opts: { hasDeploy?: boolean; deployed?: boolean } = {}): Stage[] {
+export function stages(
+  t: Pick<Task, 'kind' | 'status' | 'next' | 'status_reason'> & Partial<Pick<Task, 'review'>>,
+  opts: { hasDeploy?: boolean; deployed?: boolean } = {},
+): Stage[] {
   let names = stageNames[t.kind] ?? stageNames.general
   if (t.kind === 'code' && !opts.hasDeploy) names = names.filter(([k]) => k !== 'deploy')
+  if (t.review === 'none') names = names.filter(([k]) => k !== 'review')
   const keys = names.map(([k]) => k)
+  const at = (k: string) => {
+    const i = keys.indexOf(k)
+    return i < 0 ? Math.max(keys.indexOf('work'), 0) : i
+  }
   let current = 0
   let failed = false
   switch (t.status) {
@@ -160,16 +187,12 @@ export function stages(t: Pick<Task, 'kind' | 'status' | 'pr_url' | 'next' | 'st
       current = 0
       break
     case 'queued':
-      current = keys.indexOf(t.next === 'deliver' ? 'pr' : 'work')
-      if (current < 0) current = 0
-      break
     case 'running':
     case 'waiting_approval':
-      current = keys.indexOf(t.next === 'deliver' || t.next === 'rebase' || t.status_reason.startsWith('正在交付') ? 'pr' : 'work')
-      if (current < 0) current = keys.indexOf('work')
+      current = at(t.next === 'review' ? 'review' : 'work')
       break
     case 'review':
-      current = keys.indexOf('review')
+      current = at('review')
       break
     case 'done':
       current = keys.length
@@ -178,8 +201,7 @@ export function stages(t: Pick<Task, 'kind' | 'status' | 'pr_url' | 'next' | 'st
     case 'failed':
     case 'blocked':
       failed = true
-      current = keys.indexOf(t.pr_url || t.next === 'deliver' ? 'pr' : 'work')
-      if (current < 0) current = 0
+      current = at(t.status_reason.startsWith('验收') ? 'review' : 'work')
       break
     case 'cancelled':
       current = -1
@@ -190,6 +212,10 @@ export function stages(t: Pick<Task, 'kind' | 'status' | 'pr_url' | 'next' | 'st
     state: current < 0 ? 'todo' : i < current ? 'done' : i === current ? (failed ? 'failed' : t.status === 'done' ? 'todo' : 'current') : 'todo',
   }))
 }
+
+/** Where a task works and how it is reviewed, in words. */
+export const placeText: Record<string, string> = { worktree: '独立分支（worktree）', in_place: '就地修改（有快照）', scratch: '临时目录' }
+export const reviewText: Record<string, string> = { none: '不验收', model: '验收模型看 diff', agent: '审查岗位跑测试', user: '你来验收' }
 
 /** How many stages are done, for "3/5". */
 export function progress(st: Stage[]): string {

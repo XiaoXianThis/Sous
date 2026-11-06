@@ -20,6 +20,12 @@
 //	reject like write, but a refused permission ends the turn as
 //	       "cancelled" (as OpenCode does); a later prompt in the same
 //	       session writes hello.txt another way and ends the turn
+//	answer answer every prompt in words (a consultant or a reviewer): ask
+//	       to read README.md first; when the prompt contains "改一下",
+//	       also ask to edit it; when it asks for a verdict ("结论 JSON"),
+//	       end with {"pass": …} (FAKE_ACP_VERDICT=fail fails). The answer
+//	       says which prompt of the session it is, and whether the session
+//	       was loaded.
 //
 // FAKE_ACP_LOAD=1 advertises loadSession and accepts session/load; a prompt
 // in a loaded session writes hello.txt and ends the turn at once.
@@ -132,6 +138,53 @@ func runFake(mode string) {
 				fmt.Fprintf(fh, "%s\n---\n", text)
 				fh.Close()
 			}
+		}
+		if mode == "answer" {
+			ask := func(tid, title, kind string, input map[string]string) bool {
+				update(sid, map[string]any{"sessionUpdate": "tool_call", "toolCallId": tid, "title": title, "kind": kind, "status": "pending"})
+				resp := request("session/request_permission", map[string]any{
+					"sessionId": sid,
+					"toolCall":  map[string]any{"toolCallId": tid, "title": title, "kind": kind, "rawInput": input, "locations": []map[string]string{{"path": filepath.Join(cwd, "README.md")}}},
+					"options": []map[string]string{
+						{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+						{"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+					},
+				})
+				var outcome struct {
+					Outcome struct{ Outcome, OptionID string } `json:"outcome"`
+				}
+				json.Unmarshal(resp.Result, &outcome)
+				return outcome.Outcome.Outcome == "selected" && outcome.Outcome.OptionID == "allow"
+			}
+			read := ask(fmt.Sprintf("r%d", n), "Read README.md", "read", map[string]string{"path": "README.md"})
+			var b strings.Builder
+			fmt.Fprintf(&b, "第 %d 个问题", n)
+			if wasLoaded {
+				b.WriteString("（接着之前的会话）")
+			}
+			if read {
+				b.WriteString("，读了 README.md")
+			}
+			if strings.Contains(text, "改一下") {
+				if ask(fmt.Sprintf("e%d", n), "Edit README.md", "edit", map[string]string{"path": "README.md"}) {
+					os.WriteFile(filepath.Join(cwd, "README.md"), []byte("changed\n"), 0o644)
+					b.WriteString("，改了 README.md")
+				} else {
+					b.WriteString("，不能改文件")
+				}
+			}
+			q := []rune(strings.TrimSpace(text))
+			if len(q) > 40 {
+				q = q[len(q)-40:]
+			}
+			fmt.Fprintf(&b, "：收到「%s」。", string(q))
+			if strings.Contains(text, "结论 JSON") {
+				pass := os.Getenv("FAKE_ACP_VERDICT") != "fail"
+				fmt.Fprintf(&b, "\n{\"pass\": %v, \"reason\": \"%s\"}", pass, map[bool]string{true: "测试都通过了", false: "缺少测试"}[pass])
+			}
+			chunk(sid, b.String())
+			result(id, map[string]string{"stopReason": "end_turn"})
+			return
 		}
 		if wasLoaded {
 			os.WriteFile(filepath.Join(cwd, "hello.txt"), []byte("hi\n"), 0o644)

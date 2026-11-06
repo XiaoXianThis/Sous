@@ -62,15 +62,15 @@ func TestSeedAndPersonas(t *testing.T) {
 		t.Fatal("misc project missing")
 	}
 	// A task without a project belongs to misc; a persona is checked.
-	tk, err := e.Create(ctx, task.Input{Title: "查磁盘", Persona: "ops", Actor: event.ActorUser})
-	if err != nil || tk.ProjectID != "misc" || tk.Kind != "general" || tk.PersonaID != "ops" {
+	tk, err := e.Create(ctx, task.Input{Title: "查磁盘", Persona: "ops", Place: event.PlaceScratch, Actor: event.ActorUser})
+	if err != nil || tk.ProjectID != "misc" || tk.Kind != "general" || tk.PersonaID != "ops" || tk.Place != "scratch" {
 		t.Fatalf("task %+v %v", tk, err)
 	}
 	if _, err := e.Create(ctx, task.Input{Title: "x", Persona: "nobody", Actor: event.ActorUser}); err == nil {
 		t.Fatal("unknown persona accepted")
 	}
-	if _, err := e.Create(ctx, task.Input{Title: "x", Kind: "ops", Actor: event.ActorUser}); err == nil {
-		t.Fatal("an ops task needs a project")
+	if _, err := e.Create(ctx, task.Input{Title: "x", Kind: "ops", Place: event.PlaceInPlace, Actor: event.ActorUser}); err == nil {
+		t.Fatal("an in-place task needs a project")
 	}
 	if _, err := e.PutPersona(ctx, task.PersonaInput{Name: "后端"}, event.ActorUser); err == nil {
 		t.Fatal("duplicate persona name accepted")
@@ -87,11 +87,16 @@ func TestProjectTools(t *testing.T) {
 
 	out, err := call(t, e, "project_put", map[string]any{"name": "blog", "repo_url": "git@github.com:me/blog.git", "default_persona": "前端",
 		"deploy": map[string]any{"machine": "服务器", "path": "/srv/blog", "command": "./deploy.sh", "auto_on_merge": true}})
+	if err == nil || !strings.Contains(err.Error(), "部署分支") {
+		t.Fatalf("automatic deploys without a deploy branch: %s %v", out, err)
+	}
+	out, err = call(t, e, "project_put", map[string]any{"name": "blog", "repo_url": "git@github.com:me/blog.git", "default_persona": "前端",
+		"deploy": map[string]any{"machine": "服务器", "path": "/srv/blog", "command": "./deploy.sh", "branch": "release", "auto_on_merge": true}})
 	if err != nil || !strings.Contains(out, "blog") {
 		t.Fatalf("%s %v", out, err)
 	}
 	p, _ := e.Log.Store.ProjectByKey(ctx, "github.com/me/blog")
-	if p.DefaultPersona != "frontend" || p.Deploy == nil || p.Deploy.NodeID != "srv" || !p.Deploy.AutoOnMerge {
+	if p.DefaultPersona != "frontend" || p.Deploy == nil || p.Deploy.NodeID != "srv" || !p.Deploy.AutoOnMerge || p.Deploy.Branch != "release" {
 		t.Fatalf("project %+v", p)
 	}
 	// The same repository cannot be registered twice; a dev machine is no deploy target.
@@ -105,7 +110,11 @@ func TestProjectTools(t *testing.T) {
 	if _, err := call(t, e, "project_create", map[string]any{"name": "My App"}); err == nil || !strings.Contains(err.Error(), "小写") {
 		t.Fatalf("bad name: %v", err)
 	}
-	if _, err := call(t, e, "project_create", map[string]any{"name": "my-app"}); err == nil || !strings.Contains(err.Error(), "没有机器") {
+	// No default structure: the supervisor says which (decision 0022).
+	if _, err := call(t, e, "project_create", map[string]any{"name": "my-app"}); err == nil || !strings.Contains(err.Error(), "结构") {
+		t.Fatalf("no layout: %v", err)
+	}
+	if _, err := call(t, e, "project_create", map[string]any{"name": "my-app", "layout": "wokspace"}); err == nil || !strings.Contains(err.Error(), "没有机器") {
 		t.Fatalf("no machine: %v", err)
 	}
 	if _, err := call(t, e, "project_clone", map[string]any{"project": "blog"}); err == nil {
@@ -113,16 +122,20 @@ func TestProjectTools(t *testing.T) {
 	}
 	// The supervisor's environment lists personas and the deploy target.
 	env := strings.Join(e.Environment(ctx, ""), "\n")
-	if !strings.Contains(env, "岗位 前端") || !strings.Contains(env, "部署到 服务器:/srv/blog") || !strings.Contains(env, "wokspace") {
+	if !strings.Contains(env, "岗位 前端") || !strings.Contains(env, "部署到 服务器:/srv/blog") || !strings.Contains(env, "release 有新提交时自动部署") {
 		t.Fatalf("environment:\n%s", env)
 	}
+	if strings.Contains(env, "默认使用 wokspace") {
+		t.Fatalf("the environment still presets a structure:\n%s", env)
+	}
 	// task_create takes a persona by name and an ops kind.
-	out, err = call(t, e, "task_create", map[string]any{"title": "部署", "detail": "d", "project": "blog", "kind": "ops", "persona": "运维", "dispatch": false})
+	out, err = call(t, e, "task_create", map[string]any{"title": "部署", "detail": "d", "project": "blog", "kind": "ops", "persona": "运维",
+		"place": "in_place", "review": "none", "dispatch": false})
 	if err != nil || !strings.Contains(out, "部署") {
 		t.Fatalf("%s %v", out, err)
 	}
 	ts, _ := e.Log.Store.Tasks(ctx, store.TaskFilter{ProjectID: p.ID})
-	if len(ts) != 1 || ts[0].Kind != "ops" || ts[0].PersonaID != "ops" {
+	if len(ts) != 1 || ts[0].Kind != "ops" || ts[0].PersonaID != "ops" || ts[0].Place != "in_place" || ts[0].Review != "none" {
 		t.Fatalf("tasks %+v", ts)
 	}
 	if got := e.DescribeContext(ctx, event.MessageContext{ProjectID: p.ID}); !strings.Contains(got, "blog") {
@@ -159,7 +172,8 @@ func TestArchiveProject(t *testing.T) {
 		t.Fatalf("environment:\n%s", env)
 	}
 	// A new task brings it back; its change moves touched_at.
-	tk, err := e.Create(ctx, task.Input{Title: "改首页", ProjectID: p.ID, Actor: event.ActorUser})
+	tk, err := e.Create(ctx, task.Input{Title: "改首页", ProjectID: p.ID, Actor: event.ActorUser,
+		Place: event.PlaceWorktree, Review: event.ReviewNone, BaseBranch: "main", BaseFrom: event.BaseLocal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,5 +268,52 @@ func TestProjectChatScope(t *testing.T) {
 	env := strings.Join(e.Environment(ctx, ev.ThreadID), "\n")
 	if !strings.Contains(env, "项目 blog") || strings.Contains(env, "项目 shop") || !strings.Contains(env, "改首页") {
 		t.Fatalf("scoped environment:\n%s", env)
+	}
+}
+
+// The supervisor's tools have no defaults where decision 0022 says the
+// supervisor decides: the attributes are required in the schema, and the
+// descriptions never name a default branch or structure.
+func TestToolsNameTheirChoices(t *testing.T) {
+	e, _ := engine(t)
+	required := map[string][]string{
+		"task_create":    {"place", "review"},
+		"git_merge":      {"task", "into"},
+		"git_push":       {"branch"},
+		"git_pr":         {"task", "base"},
+		"project_create": {"layout"},
+		"consult":        {"question"},
+		"project_read":   {"op"},
+	}
+	seen := map[string]bool{}
+	for _, tl := range e.Tools() {
+		spec := tl.Spec()
+		var schema struct{ Required []string }
+		if err := json.Unmarshal(spec.Schema, &schema); err != nil {
+			t.Fatalf("%s: %v", spec.Name, err)
+		}
+		for _, want := range required[spec.Name] {
+			found := false
+			for _, r := range schema.Required {
+				found = found || r == want
+			}
+			if !found {
+				t.Errorf("%s does not require %s", spec.Name, want)
+			}
+		}
+		if strings.Contains(spec.Description, "默认 wokspace") || strings.Contains(spec.Description, "默认 main") && !strings.Contains(spec.Description, "不要默认 main") {
+			t.Errorf("%s presets something: %s", spec.Name, spec.Description)
+		}
+		seen[spec.Name] = true
+	}
+	for name := range required {
+		if !seen[name] {
+			t.Errorf("no tool %s", name)
+		}
+	}
+	for _, name := range []string{"git_status", "git_commit", "git_undo", "git_discard", "task_restore", "task_review", "task_verdict"} {
+		if !seen[name] {
+			t.Errorf("no tool %s", name)
+		}
 	}
 }

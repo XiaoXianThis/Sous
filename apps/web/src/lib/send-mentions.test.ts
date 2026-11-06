@@ -15,7 +15,7 @@ describe('send with mentions', () => {
     await send('@blog 发版', undefined, [{ project_id: 'p2', name: 'blog' }])
     expect(spy).toHaveBeenCalledWith('t1', '@blog 发版', { project_id: 'p1', mentions: [{ project_id: 'p2', name: 'blog' }] }, undefined)
 
-    ui.state.route = { view: 'home' } as typeof ui.state.route
+    ui.state.route = { view: 'overview', id: '' } as typeof ui.state.route
     await send('@blog', undefined, [{ project_id: 'p2', name: 'blog' }])
     expect(spy).toHaveBeenLastCalledWith('t1', '@blog', { mentions: [{ project_id: 'p2', name: 'blog' }] }, undefined)
 

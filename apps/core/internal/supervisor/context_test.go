@@ -156,8 +156,8 @@ func TestCompactionFoldsOldMessages(t *testing.T) {
 	sup := &answering{fn: reply("嗯")}
 	comp := &answering{fn: reply("## 已做的决定\n- 部署在 agent.wxian.cc [#3]\n## 待办和承诺\n- 无")}
 	log, main := setupWith(t, Options{Provider: sup, Compactor: comp, CompactorModel: "c",
-		ContextWindow: func(context.Context) int { return 9000 }})
-	for i := 0; i < 14; i++ {
+		ContextWindow: func(context.Context) int { return 11000 }})
+	for i := 0; i < 18; i++ {
 		converse(t, log, main, long(string(rune('A'+i)), 300))
 	}
 	idle(t, log, main)
@@ -181,7 +181,7 @@ func TestCompactionFoldsOldMessages(t *testing.T) {
 			t.Fatal("a folded message is still sent")
 		}
 	}
-	if n := estimateRequest(last); n > int(SoftRatio*9000) {
+	if n := estimateRequest(last); n > int(SoftRatio*11000) {
 		t.Fatalf("after compaction the request is still %d tokens", n)
 	}
 }

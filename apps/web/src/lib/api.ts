@@ -122,6 +122,10 @@ export const api = {
   dispatchTask: (id: string, nodeId = '', agent = '') =>
     request<Task>('POST', `/api/v1/tasks/${id}/dispatch`, { node_id: nodeId, agent }),
   cancelTask: (id: string) => request<Task>('POST', `/api/v1/tasks/${id}/cancel`, {}),
+  /** The user's review of a task waiting for one (decision 0022). */
+  verdict: (id: string, pass: boolean, reason = '') => request<Task>('POST', `/api/v1/tasks/${id}/verdict`, { pass, reason }),
+  /** Review a finished task again: by the model, a reviewing agent or the user. */
+  reviewTask: (id: string, by: 'model' | 'agent' | 'user') => request<Task>('POST', `/api/v1/tasks/${id}/review`, { by }),
   projects: () => request<{ projects: Project[] }>('GET', '/api/v1/projects'),
   createProject: (p: Partial<Project>) => request<Project>('POST', '/api/v1/projects', p),
   updateProject: (id: string, p: Partial<Project>) => request<Project>('PATCH', `/api/v1/projects/${id}`, p),
