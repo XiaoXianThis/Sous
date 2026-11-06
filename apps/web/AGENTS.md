@@ -18,7 +18,7 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 
 ## Conventions
 
-- 使用 bun 运行前端 CLI（`bun install`、`bun run`）；现有锁文件是 `package-lock.json`。
+- 使用 bun 运行前端 CLI（`bun install`、`bun run`），锁文件是 `bun.lock`（由 `package-lock.json` 迁移，CI 与本地都固定 bun 1.3.14）。
 - `bun run dev` 在 5173 端口启动，把 `/api`、`/ws` 代理到 `SOUS_HUB`（默认 `http://127.0.0.1:8787`，先 `wok dev core`）。也可以 `wok build web` 之后直接打开 Hub 的 8787 端口。
 - 状态变化写成纯函数放在 `src/lib/reduce.ts`，并配上 `*.test.ts` 单元测试；组件里不写事件处理逻辑。
 - 共享状态在 `src/lib/app.ts`：`chat`、`ui`、`wb` 是可变的 store。改完字段后必须调用对应的 `emit()`，组件用 `useChat()` / `useUi()` / `useWb()` 订阅；不调用 `emit()` 的修改不会重绘。
