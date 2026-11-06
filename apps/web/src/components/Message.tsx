@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { showProject } from '../lib/app'
 import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
 import { splitMentions } from '../lib/mention'
@@ -56,10 +56,60 @@ function Attachments({ list }: { list: Attachment[] }) {
 }
 
 /**
+ * Long content folded to a fixed height with a fade and an expand toggle
+ * (task reports, consultant answers, a run's output). Short content is shown
+ * as it is; `follow` keeps the newest lines in view while it streams.
+ */
+export function Clamp({ children, max = 280, follow = false, label = '内容' }: { children: ReactNode; max?: number; follow?: boolean; label?: string }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [over, setOver] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const check = () => {
+      setOver(el.scrollHeight > max + 24)
+      if (follow && !open) el.scrollTop = el.scrollHeight
+    }
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+    return () => ro.disconnect()
+  }, [max, follow, open])
+
+  const folded = over && !open
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0">
+      <div
+        ref={box}
+        className={`min-w-0 ${folded ? (follow ? 'overflow-hidden [mask-image:linear-gradient(to_bottom,transparent,black_18%)]' : 'overflow-hidden [mask-image:linear-gradient(to_bottom,black_72%,transparent)]') : ''}`}
+        style={folded ? { maxHeight: max } : undefined}
+      >
+        <div className="min-w-0">{children}</div>
+      </div>
+      {over && (
+        <button
+          type="button"
+          className="justify-self-start inline-flex items-center gap-1 h-7 -ml-1.5 px-1.5 rounded-[8px] border-0 bg-transparent text-[12.5px] text-muted hover:bg-hover hover:text-ink"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          aria-label={open ? `收起${label}` : `展开${label}`}
+        >
+          <Icon name="chevron" size={12} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+          {open ? '收起' : '展开全部'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
  * The model's reasoning. Open while it is being written (a short box that
  * follows the newest line), folded once the answer starts; a click overrides.
  */
-function Thinking({ text, live }: { text: string; live: boolean }) {
+export function Thinking({ text, live }: { text: string; live: boolean }) {
   const [choice, setChoice] = useState<boolean | null>(null)
   const open = choice ?? live
   const box = useRef<HTMLDivElement>(null)
@@ -154,9 +204,8 @@ export default function MessageView({ message }: { message: Message }) {
     // A project consultant's answer, shown as it is (decision 0022): a bar on
     // the left and who said it, so it is never mistaken for the supervisor.
     const src = message.source
-    const [open, setOpen] = [showTrigger || message.content.length < 1600, setShowTrigger]
     return (
-      <article className="grid gap-2 min-w-0 group border-l-[3px] border-[color-mix(in_srgb,var(--accent)_55%,transparent)] pl-3.5" data-testid="message-consult">
+      <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 group border-l-[3px] border-[color-mix(in_srgb,var(--accent)_55%,transparent)] pl-3.5" data-testid="message-consult">
         <header className="flex items-center gap-2 min-w-0 h-6">
           <AgentIcon name={src?.agent ?? ''} size={20} />
           <span className="text-[13px] font-semibold text-ink overflow-hidden text-ellipsis whitespace-nowrap">
@@ -168,12 +217,7 @@ export default function MessageView({ message }: { message: Message }) {
             <CopyButton text={message.content} className="-my-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
           )}
         </header>
-        <div className={open ? '' : 'max-h-[260px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]'}>
-          <Markdown text={message.content} />
-        </div>
-        {!open && (
-          <button type="button" className="justify-self-start link text-[12.5px]" onClick={() => setOpen(true)}>展开全部</button>
-        )}
+        <Clamp max={260} label="回答"><Markdown text={message.content} /></Clamp>
       </article>
     )
   }
@@ -222,7 +266,7 @@ export default function MessageView({ message }: { message: Message }) {
 
   if (notice) {
     return (
-      <article className="grid gap-2 min-w-0 group bg-panel shadow-card rounded-[16px] px-4 pt-3 pb-3.5" data-testid={`message-${message.kind}`}>
+      <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 overflow-hidden group bg-panel shadow-card rounded-[16px] px-4 pt-3 pb-3.5" data-testid={`message-${message.kind}`}>
         <header className="flex items-center gap-2 min-w-0 h-6">
           <span
             className="grid place-items-center w-6 h-6 rounded-[8px] flex-none"
@@ -238,13 +282,17 @@ export default function MessageView({ message }: { message: Message }) {
           )}
         </header>
         {message.thinking && <Thinking text={message.thinking} live={!!message.streaming && !message.content} />}
-        {(message.content || message.streaming) && <Markdown text={message.content} streaming={message.streaming} />}
+        {(message.content || message.streaming) && (
+          <Clamp max={message.kind === 'report' ? 240 : 360} follow={message.streaming} label={notice.text}>
+            <Markdown text={message.content} streaming={message.streaming} />
+          </Clamp>
+        )}
       </article>
     )
   }
 
   return (
-    <article className="grid gap-2 min-w-0 group" data-testid={`message-${message.kind ?? message.role}`}>
+    <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 group" data-testid={`message-${message.kind ?? message.role}`}>
       {message.thinking && <Thinking text={message.thinking} live={!!message.streaming && !message.content} />}
       {message.error ? (
         <div className="flex gap-2 items-start text-[13.5px] text-danger rounded-[12px] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-3 py-2.5">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ago } from './time'
+import { ago, duration } from './time'
 
 describe('ago', () => {
   const now = Date.UTC(2026, 10, 4, 12)
@@ -15,5 +15,18 @@ describe('ago', () => {
     expect(ago(now - 29 * day, now)).toBe('29 天前')
     expect(ago(now - 95 * day, now)).toBe('3 个月前')
     expect(ago(now - 400 * day, now)).toBe('1 年前')
+  })
+})
+
+describe('duration', () => {
+  it('is short and drops zero parts', () => {
+    expect(duration(0)).toBe('')
+    expect(duration(-5)).toBe('')
+    expect(duration(400)).toBe('0 秒')
+    expect(duration(12_300)).toBe('12 秒')
+    expect(duration(185_000)).toBe('3 分 5 秒')
+    expect(duration(120_000)).toBe('2 分')
+    expect(duration(3_720_000)).toBe('1 小时 2 分')
+    expect(duration(7_200_000)).toBe('2 小时')
   })
 })

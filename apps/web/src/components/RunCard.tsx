@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { gitOpText, isActive, type RunView } from '../lib/runs'
+import { duration } from '../lib/time'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import ApprovalCard from './ApprovalCard'
 import { errorKindText } from '../lib/tasks'
 import Icon from './Icon'
+import Markdown from './Markdown'
+import { Clamp, Thinking } from './Message'
 import { PlanList, ToolList } from './RunSteps'
 import TextViewer from './TextViewer'
 
@@ -13,14 +16,33 @@ const statusText: Record<string, string> = {
 }
 const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付', clone: 'clone', create: '新建项目' }
 
-export default function RunCard({ view, nodeName, full = false }: { view: RunView; nodeName: (id: string) => string; full?: boolean }) {
+/** The current time, ticking every second while on is true. */
+function useNow(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [on])
+  return now
+}
+
+/**
+ * One Run in a task's run history, as a card. The agent's steps, thinking and raw output fold
+ * into one "执行过程" line with how long it ran; the latest run shows its
+ * prompt and final reply, earlier ones only their header until opened.
+ */
+export default function RunCard({ view, nodeName, latest = true }: { view: RunView; nodeName: (id: string) => string; latest?: boolean }) {
   const run = view.run
-  const pending = view.approvals.filter((a) => a.status === 'pending')
+  const pending = view.approvals.filter((a) => a.status === 'pending' && a.review === 'user')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [viewer, setViewer] = useState<{ title: string; text: string; diff: boolean } | null>(null)
-  const [showOutput, setShowOutput] = useState(false)
-  const [allSteps, setAllSteps] = useState(false)
+  const [opened, setOpened] = useState<boolean | null>(null)
+  const [process, setProcess] = useState(false)
+  const active = isActive(run)
+  const now = useNow(active && run.status === 'running')
 
   async function act(key: string, fn: () => Promise<unknown>) {
     setBusy(key)
@@ -41,7 +63,7 @@ export default function RunCard({ view, nodeName, full = false }: { view: RunVie
     })
   }
 
-  const tone = run.paused && isActive(run)
+  const tone = run.paused && active
     ? 'warning'
     : run.status === 'running' || run.status === 'queued'
       ? 'accent'
@@ -53,60 +75,114 @@ export default function RunCard({ view, nodeName, full = false }: { view: RunVie
   const stateIcon: Record<string, string> = { queued: 'clock', running: 'play', succeeded: 'check', failed: 'alert', cancelled: 'x', interrupted: 'alert' }
   const system = run.purpose === 'deliver' || run.purpose === 'clone' || run.purpose === 'create'
   const who = system ? 'sous' : run.agent
-  const tools = allSteps ? view.tools : view.tools.slice(full ? -6 : -8)
+  const start = run.started_at || 0
+  const took = start ? duration((run.ended_at || (active ? now : 0)) - start) : ''
+  // Earlier runs fold to their header; the latest (and any waiting for a person) stay open.
+  const expanded = opened ?? (latest || pending.length > 0)
+  const hasProcess = view.plan.length > 0 || view.tools.length > 0 || !!view.thinking || (!!view.output && (active || !run.summary))
+  const steps = view.tools.length
+
+  const prompt = run.purpose === 'deliver'
+    ? `push 分支并创建 PR${run.title ? `：${run.title}` : ''}`
+    : run.purpose === 'git'
+      ? `${gitOpText(run.git)}${run.summary && !active ? `：${run.summary}` : ''}`
+      : run.purpose === 'clone' || run.purpose === 'create'
+        ? run.title
+        : run.prompt
 
   return (
     <>
-      <section className="card p-3.5 grid gap-2.5 min-w-0" data-testid="run-card">
-        <header className="flex items-center gap-2.5 min-w-0">
-          <AgentIcon name={who} size={30} />
-          <div className="grid min-w-0 flex-1 leading-tight">
-            <span className="font-semibold text-[14px] overflow-hidden text-ellipsis whitespace-nowrap">
+      <section className="rounded-[16px] bg-[color-mix(in_srgb,var(--sunken)_55%,var(--panel))] p-4 grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0" data-testid="run-card">
+        <header className="flex items-center gap-2 min-w-0">
+          <button
+            className="flex items-center gap-2 min-w-0 flex-1 border-0 bg-transparent p-0 text-left text-ink cursor-pointer"
+            aria-expanded={expanded}
+            aria-label={`${agentTitle(who)}，${statusText[run.status] ?? run.status}${took ? `，用时 ${took}` : ''}`}
+            onClick={() => setOpened(!expanded)}
+          >
+            <AgentIcon name={who} size={22} />
+            <span className="font-semibold text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap">
               {run.persona && (run.purpose === 'work' || run.purpose === 'rebase') ? `${run.persona} · ` : ''}{agentTitle(who)}
               {purposeText[run.purpose] && <span className="text-muted font-normal"> · {purposeText[run.purpose]}</span>}
             </span>
-            <span className="flex items-center gap-2 text-[11.5px] text-muted min-w-0 mt-0.5">
+            <span className="flex items-center gap-2 text-[11.5px] text-muted min-w-0 max-[760px]:hidden">
               <span className="inline-flex items-center gap-0.5 whitespace-nowrap"><Icon name="laptop" size={11} />{nodeName(run.node_id)}</span>
               {run.branch && <span className="inline-flex items-center gap-0.5 min-w-0"><Icon name="branch" size={11} /><span className="overflow-hidden text-ellipsis whitespace-nowrap">{run.branch}</span></span>}
               {run.recovery_note && <span className="inline-flex items-center gap-0.5 text-warm" title={run.recovery_note}><Icon name="refresh" size={11} />重启</span>}
             </span>
-          </div>
-          <span className={`pill tone-${tone}`}>
-            <Icon name={run.paused && isActive(run) ? 'pause' : stateIcon[run.status] ?? 'dot'} size={11} stroke={2.4} />
-            {run.paused && isActive(run) ? '已暂停' : (statusText[run.status] ?? run.status)}
+            <span className="flex-1"></span>
+            {took && <span className="text-[11.5px] text-muted tabular-nums whitespace-nowrap inline-flex items-center gap-0.5"><Icon name="clock" size={11} />{took}</span>}
+            <span className={`pill tone-${tone}`}>
+              <Icon name={run.paused && active ? 'pause' : stateIcon[run.status] ?? 'dot'} size={11} stroke={2.4} />
+              {run.paused && active ? '已暂停' : (statusText[run.status] ?? run.status)}
+            </span>
+          </button>
+          <span className="flex items-center -mr-1.5">
+            {active && run.paused ? (
+              <button className="icon-btn" aria-label="继续" data-tip="继续" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('resume', () => api.resumeRun(run.id))}><Icon name="play" size={15} /></button>
+            ) : run.status === 'running' && run.purpose !== 'deliver' ? (
+              <button className="icon-btn" aria-label="暂停" data-tip="暂停" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('pause', () => api.pauseRun(run.id))}><Icon name="pause" size={15} /></button>
+            ) : null}
+            {active && (
+              <button className="icon-btn hover:!text-danger" aria-label="取消" data-tip="取消" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('cancel', () => api.cancelRun(run.id))}><Icon name="stop" size={15} /></button>
+            )}
+            {run.diffstat && run.purpose !== 'deliver' && (
+              <button className="icon-btn" aria-label="查看改动" data-tip="改动" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('diff')}><Icon name="diff" size={16} /></button>
+            )}
+            {run.status !== 'queued' && (
+              <button className="icon-btn" aria-label="日志" data-tip="日志" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('log')}><Icon name="log" size={16} /></button>
+            )}
           </span>
         </header>
-        {run.purpose === 'deliver' ? (
-          <p className="m-0 line-clamp-2 text-[13px] text-muted flex gap-1.5 items-start"><Icon name="pr" size={14} className="mt-[3px]" />push 分支并创建 PR{run.title ? `：${run.title}` : ''}</p>
-        ) : run.purpose === 'git' ? (
-          <p className="m-0 line-clamp-2 text-[13px] text-muted flex gap-1.5 items-start">
-            <Icon name="branch" size={14} className="mt-[3px]" />{gitOpText(run.git)}{run.summary && !isActive(run) ? `：${run.summary}` : ''}
-          </p>
-        ) : run.purpose === 'clone' || run.purpose === 'create' ? (
-          <p className="m-0 line-clamp-2 text-[13px] text-muted">{run.title}</p>
-        ) : (
-          <p className="m-0 line-clamp-2 text-[13px] text-muted" title={run.prompt}>{run.prompt}</p>
-        )}
 
-        {view.plan.length > 0 && <PlanList plan={view.plan} />}
-        {tools.length > 0 && <ToolList tools={tools} live={isActive(run)} more={view.tools.length - tools.length} onMore={full ? () => setAllSteps(true) : undefined} />}
-        {run.paused && isActive(run) ? (
-          <p className="m-0 text-[12.5px] text-warm flex items-center gap-1.5" role="status"><Icon name="pause" size={12} />{run.pause_reason || '已暂停'}</p>
-        ) : view.statusLine && isActive(run) ? (
-          <p className="m-0 text-[12.5px] text-muted flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-info live-dot"></span>{view.statusLine}</p>
-        ) : null}
+        {expanded && (
+          <>
+            {prompt && <p className="m-0 line-clamp-2 text-[13px] text-muted [overflow-wrap:anywhere]" title={prompt}>{prompt}</p>}
+
+            {(hasProcess || active) && (
+              <button
+                className="justify-self-start inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-[12.5px] text-muted hover:text-ink min-w-0 max-w-full"
+                aria-expanded={process}
+                onClick={() => setProcess(!process)}
+              >
+                {active && !run.paused ? <span className="w-1.5 h-1.5 rounded-full bg-info live-dot flex-none"></span> : <Icon name="terminal" size={13} />}
+                <span className="font-semibold whitespace-nowrap">{active ? '执行中' : '执行过程'}</span>
+                {took && <span className="tabular-nums whitespace-nowrap">· {took}</span>}
+                {steps > 0 && <span className="whitespace-nowrap">· {steps} 步</span>}
+                {active && !run.paused && view.statusLine && !process && <span className="overflow-hidden text-ellipsis whitespace-nowrap">· {view.statusLine}</span>}
+                <Icon name="chevron" size={12} className={`flex-none transition-transform ${process ? 'rotate-180' : '-rotate-90'}`} />
+              </button>
+            )}
+            {process && (
+              <div className="grid grid-cols-[minmax(0,1fr)] gap-2 pl-3 border-l-2 border-line" aria-label="执行过程">
+                {view.plan.length > 0 && <PlanList plan={view.plan} />}
+                {view.tools.length > 0 && <ToolList tools={view.tools} live={active} />}
+                {/* The agent's own words, drawn like an assistant message in the chat. */}
+                {view.thinking && <Thinking text={view.thinking} live={active && !run.paused && !view.output} />}
+                {view.output && (active || !run.summary) && (
+                  <Clamp max={320} follow={active} label="输出">
+                    <Markdown text={view.output} streaming={active} />
+                  </Clamp>
+                )}
+                {view.statusLine && active && !run.paused && (
+                  <p className="m-0 text-[12.5px] text-muted flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-info live-dot"></span>{view.statusLine}</p>
+                )}
+                {!hasProcess && !view.statusLine && <p className="m-0 text-[12.5px] text-faint">还没有动静</p>}
+              </div>
+            )}
+            {run.paused && active && (
+              <p className="m-0 text-[12.5px] text-warm flex items-center gap-1.5" role="status"><Icon name="pause" size={12} />{run.pause_reason || '已暂停'}</p>
+            )}
+          </>
+        )}
 
         {pending.map((a) => <ApprovalCard key={a.id} approval={a} />)}
 
-        {view.output && isActive(run) && showOutput && (
-          <pre className="m-0 max-h-[220px] overflow-auto font-mono text-[11.5px] leading-[1.5] bg-sunken rounded-[12px] px-2.5 py-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {view.output}
-          </pre>
-        )}
-
-        {!isActive(run) && (
+        {expanded && !active && (
           <>
-            {run.summary && <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-[13.5px]">{run.summary}</p>}
+            {run.summary && run.purpose !== 'git' && (
+              <Clamp max={320} label="最终回复"><Markdown text={run.summary} /></Clamp>
+            )}
             {run.error && (run.error_kind && errorKindText[run.error_kind] ? (
               <div className="grid gap-1">
                 <p className="m-0 text-danger text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{errorKindText[run.error_kind]}</p>
@@ -132,26 +208,6 @@ export default function RunCard({ view, nodeName, full = false }: { view: RunVie
             )}
           </>
         )}
-
-        <footer className="flex gap-1 items-center -mb-1 -ml-1.5">
-          {isActive(run) && run.paused ? (
-            <button className="btn small" disabled={!!busy} onClick={() => void act('resume', () => api.resumeRun(run.id))}><Icon name="play" size={12} />继续</button>
-          ) : run.status === 'running' && run.purpose !== 'deliver' ? (
-            <button className="icon-btn" aria-label="暂停" data-tip="暂停" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('pause', () => api.pauseRun(run.id))}><Icon name="pause" size={15} /></button>
-          ) : null}
-          {isActive(run) && (
-            <button className="icon-btn hover:!text-danger" aria-label="取消" data-tip="取消" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('cancel', () => api.cancelRun(run.id))}><Icon name="stop" size={15} /></button>
-          )}
-          {view.output && isActive(run) && (
-            <button className={`icon-btn ${showOutput ? '!text-ink bg-hover' : ''}`} aria-label="agent 的输出" data-tip="输出" data-tip-pos="bottom" onClick={() => setShowOutput(!showOutput)}><Icon name="terminal" size={16} /></button>
-          )}
-          {run.diffstat && run.purpose !== 'deliver' && (
-            <button className="icon-btn" aria-label="查看改动" data-tip="改动" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('diff')}><Icon name="diff" size={16} /></button>
-          )}
-          {run.status !== 'queued' && (
-            <button className="icon-btn" aria-label="日志" data-tip="日志" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('log')}><Icon name="log" size={16} /></button>
-          )}
-        </footer>
         {error && <p className="m-0 text-danger text-[12.5px] [overflow-wrap:anywhere]" role="alert">{error}</p>}
       </section>
 

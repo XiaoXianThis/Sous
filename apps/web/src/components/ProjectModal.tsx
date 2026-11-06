@@ -42,24 +42,8 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
   const [shown, setShown] = useState(false)
   const p = card.project
   const phone = usePhone()
-  // The project chat is docked on the right; remembered open or closed (closed on phones).
-  const [chatOpen, setChatOpenState] = useState(() => {
-    if (phone) return false
-    try {
-      return localStorage.getItem('sous.projectChat') !== 'closed'
-    } catch {
-      return true
-    }
-  })
-  const setChatOpen = (v: boolean) => {
-    setChatOpenState(v)
-    if (phone) return
-    try {
-      localStorage.setItem('sous.projectChat', v ? 'open' : 'closed')
-    } catch {
-      // ignore
-    }
-  }
+  // The project chat is docked on the right and starts closed; the title bar's button opens it.
+  const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth, resetChatWidth] = useStoredWidth('sous.projectChatWidth', 400)
   const docked = chatOpen && !phone
   const selectedTask = taskId ? card.listTasks.find((t) => t.task.id === taskId)?.task : undefined
@@ -159,15 +143,13 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
             <ProjectTabs tab={tab} onTab={onTab} tasks={card.allTasks.length + card.allAgents.length} shell={p.id !== 'misc'} />
           </header>
         ) : (
-          <header className="flex items-center gap-4 px-5 pt-4 pb-3 min-w-0 flex-wrap max-[760px]:gap-x-2 max-[760px]:gap-y-3 max-[760px]:px-3 max-[760px]:pt-2">
-            <div className="grid gap-1 min-w-0 flex-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</h2>
-                {card.archived && <ArchivedBadge />}
-              </div>
-              {p.id !== 'misc' && <Locations locations={card.locations} compact />}
+          <header className="flex items-center gap-4 h-[54px] px-5 min-w-0">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap flex-none max-w-[40%]">{p.name}</h2>
+              {card.archived && <ArchivedBadge />}
+              {p.id !== 'misc' && <div className="min-w-0 overflow-hidden"><Locations locations={card.locations} compact /></div>}
             </div>
-            <div className={`${p.id === 'misc' ? 'w-[220px]' : 'w-[300px]'} max-[760px]:order-last max-[760px]:w-full`}>
+            <div className={`${p.id === 'misc' ? 'w-[220px]' : 'w-[300px]'} flex-none`}>
               <ProjectTabs tab={tab} onTab={onTab} tasks={card.allTasks.length + card.allAgents.length} shell={p.id !== 'misc'} />
             </div>
             {p.id !== 'misc' && (card.archived ? (
@@ -235,12 +217,12 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
                 {card.listTasks.map((t) => <TaskRow key={t.task.id} task={t} selected={t.task.id === taskId} onOpen={() => onTask(t.task.id)} />)}
               </div>
             </div>
-            <div className="overflow-y-auto p-5 min-h-0 max-[760px]:px-4 max-[760px]:pb-[calc(20px+var(--safe-b))]" data-page={phone && taskId ? '' : undefined}>
+            <div className={`min-h-0 ${taskId ? 'overflow-hidden' : 'overflow-y-auto p-5 max-[760px]:px-4 max-[760px]:pb-[calc(20px+var(--safe-b))]'}`} data-page={phone && taskId ? '' : undefined}>
               {taskId ? (
                 <>
                   {/* For the edge swipe: it slides just this page back to the list. */}
                   {phone && <button className="sr-only" tabIndex={-1} aria-hidden="true" data-back onClick={() => onTask('')}></button>}
-                  <TaskView key={taskId} id={taskId} embedded />
+                  <TaskView key={taskId} id={taskId} />
                 </>
               ) : (
                 <div className="grid place-items-center h-full text-muted text-[13px] max-[760px]:hidden">

@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { wb } from '../lib/app'
 import { looks, taskStates } from '../lib/status'
 import { personaFor, runMeta, type CardTask } from '../lib/workbench'
 import { Who } from './Avatar'
 import AgentIcon, { agentTitle } from './AgentIcon'
+import { ApprovalStrip } from './ApprovalCard'
 import Icon from './Icon'
 
 /**
@@ -35,17 +37,33 @@ export default function TaskRow({ task, onOpen, selected = false }: { task: Card
   const look = task.runLook ? looks[task.runLook] : undefined
   const stateText = task.detail || info.text
   const meta = task.run && node ? runMeta(task.run, node) : undefined
+  // A pending approval that waits for a person turns the row into it (same
+  // height); it turns back once answered. The review agent's are not shown.
+  const [answered, setAnswered] = useState<string[]>([])
+  const asking = wb.state.inbox?.approvals.find((a) => a.review === 'user' && !answered.includes(a.id)
+    && (a.task_id === task.task.id || (!!task.run && a.run_id === task.run.id)))
+  if (asking) {
+    return (
+      <ApprovalStrip
+        approval={asking}
+        size="row"
+        onOpen={onOpen}
+        onDecided={() => setAnswered((l) => [...l, asking.id])}
+        className={`w-full ${selected ? 'shadow-[inset_0_0_0_1.5px_var(--accent)]' : ''}`}
+      />
+    )
+  }
   const label = `${task.task.title}，${stateText}${look ? '，运行' + look.text : ''}，${shownAgent ? agentTitle(shownAgent) : '未分配'}`
 
   return (
     <button
-      className={`flex items-center gap-2.5 w-full text-left border-0 bg-transparent px-2.5 py-3 min-h-[48px] rounded-[12px] min-w-0 transition-colors ${selected ? 'bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]' : 'hover:bg-hover active:bg-hover'}`}
+      className={`flex items-center gap-2.5 w-full text-left border-0 px-2.5 py-3 min-h-[48px] rounded-[12px] min-w-0 transition-colors ${selected ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)]' : 'bg-transparent hover:bg-hover active:bg-hover'}`}
       aria-label={label}
       aria-current={selected || undefined}
       title={task.summary}
       onClick={onOpen}
     >
-      <span className={`flex-1 min-w-0 text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap ${closed ? 'text-faint' : 'text-muted'}`}>{task.task.title}</span>
+      <span className={`flex-1 min-w-0 text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap ${selected ? 'text-ink font-semibold' : closed ? 'text-faint' : 'text-muted'}`}>{task.task.title}</span>
       <span className="text-[11.5px] text-faint whitespace-nowrap flex-none max-w-[30%] overflow-hidden text-ellipsis" title={[meta?.model ? `模型 ${meta.model}` : agent ? '执行的 agent' : '岗位默认的 agent', node?.name].filter(Boolean).join(' · ')}>{shownAgent ? agentTitle(shownAgent) : '未分配'}</span>
       <span className={`inline-flex items-center gap-1 text-[11.5px] whitespace-nowrap flex-none opacity-85 ${closed ? 'text-faint' : `tone-${look?.tone ?? info.tone}`}`} title={look ? `运行${look.text}` : undefined}>
         {look && <Icon name={look.icon} size={11} stroke={2.2} className={task.runLook === 'running' ? 'stage-current' : ''} />}{stateText}

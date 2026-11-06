@@ -4,8 +4,29 @@ import Icon from './Icon'
 const stateText: Record<Stage['state'], string> = { done: '已完成', current: '执行中', todo: '', failed: '失败' }
 const stageIcon: Record<string, string> = { plan: 'list', work: 'terminal', review: 'eye', pr: 'pr', deploy: 'rocket', health: 'pulse' }
 
-export default function StageBar({ stages, labels = false }: { stages: Stage[]; labels?: boolean }) {
+export default function StageBar({ stages, labels = false, inline = false }: { stages: Stage[]; labels?: boolean; inline?: boolean }) {
   const aria = stages.map((s) => `${s.text}${stateText[s.state]}`).join('，')
+  if (inline) {
+    // One row: small icon + name per stage, joined by short lines; sized to fit in a line of text.
+    return (
+      <span className="inline-flex items-center gap-1 flex-none" role="img" aria-label={aria}>
+        {stages.map((s, i) => {
+          const tone = s.state === 'done' ? 'success' : s.state === 'current' ? 'accent' : s.state === 'failed' ? 'danger' : 'neutral'
+          return (
+            <span key={s.key} className="inline-flex items-center gap-1">
+              <span className={`inline-flex items-center gap-1 whitespace-nowrap text-[12px] tone-${tone} ${s.state === 'todo' ? '!text-faint' : ''} ${s.state === 'current' || s.state === 'failed' ? 'font-semibold' : ''}`}>
+                <span className={`grid place-items-center w-4 h-4 rounded-full ${s.state === 'todo' ? 'bg-sunken' : 'bg-[color-mix(in_srgb,currentColor_16%,transparent)]'} ${s.state === 'current' ? 'stage-current' : ''}`}>
+                  <Icon name={s.state === 'done' ? 'check' : s.state === 'failed' ? 'x' : stageIcon[s.key] ?? 'dot'} size={12} stroke={2.4} />
+                </span>
+                {s.text}
+              </span>
+              {i < stages.length - 1 && <span className={`w-2.5 h-px ${s.state === 'done' ? 'bg-ok' : 'bg-line-strong'}`}></span>}
+            </span>
+          )
+        })}
+      </span>
+    )
+  }
   if (!labels) {
     return (
       <span className="flex gap-[3px]" role="img" aria-label={aria}>

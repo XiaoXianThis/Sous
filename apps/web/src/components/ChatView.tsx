@@ -8,7 +8,6 @@ import { activeProjects, filterProjects, insertMention, keptMentions, mentionQue
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
 import type { Mention, Message, Project, Thread } from '../lib/types'
-import ApprovalCard from './ApprovalCard'
 import { ContextPanel, ContextRing, useThreadContext } from './ContextMeter'
 import { dividerAt } from '../lib/context'
 import ModelSwitch from './ModelSwitch'
@@ -31,7 +30,7 @@ export interface ChatContext {
  * the project chats share it; they differ in which threads they list and how
  * a message is sent.
  */
-export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, context, onDropContext, placeholder, empty, actions, label }: {
+export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, context, onDropContext, placeholder, empty, actions, leading, label }: {
   /** The shown thread; '' before a project chat's first message. */
   threadId: string
   threads: Thread[]
@@ -47,6 +46,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   placeholder: string
   empty: ReactNode
   actions?: ReactNode
+  /** Drawn before the chat picker, e.g. a phone back button. */
+  leading?: ReactNode
   label: string
 }) {
   const chatState = useChat()
@@ -305,6 +306,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   return (
     <section ref={section} className={`flex flex-col min-h-0 h-full min-w-0 ${phone ? 'chat-phone' : ''}`} aria-label={label} data-typing={phone && typing ? '' : undefined}>
       <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
+        <div className="flex items-center gap-2 min-w-0">
+        {leading}
         <div className="relative picker min-w-0">
           <button
             className={phone ? 'glass-pill glass max-w-full' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
@@ -338,6 +341,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             </div>
           )}
         </div>
+        </div>
         {phone ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
           {ctxView && ctxView.segment > 0 && <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />}
@@ -364,12 +368,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               {item.kind === 'message' ? (
               <MessageView message={item.message} />
             ) : (
-              <>
-                <RunChip view={item.run} nodeName={nodeName} />
-                {item.run.approvals.filter((a) => a.status === 'pending').map((a) => (
-                  <ApprovalCard key={a.id} approval={a} context={item.run.run.title} />
-                ))}
-              </>
+              <RunChip view={item.run} nodeName={nodeName} />
             )}
             </Fragment>
           ))}

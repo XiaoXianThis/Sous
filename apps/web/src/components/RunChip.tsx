@@ -2,13 +2,16 @@ import { go, wb } from '../lib/app'
 import { gitOpText, type RunView } from '../lib/runs'
 import { avatarOf, looks, runLook } from '../lib/status'
 import { Who } from './Avatar'
+import { ApprovalStrip } from './ApprovalCard'
 import Icon from './Icon'
 
 const what: Record<string, string> = { deliver: '交付 PR', rebase: 'rebase', clone: 'clone 项目', create: '新建项目', review: '验收', consult: '顾问在看代码' }
 
 export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (id: string) => string }) {
   const run = view.run
-  const waiting = view.approvals.some((a) => a.status === 'pending' && a.review === 'user')
+  // Only approvals that wait for a person show; the review agent's are not drawn.
+  const asking = view.approvals.find((a) => a.status === 'pending' && a.review === 'user')
+  const waiting = !!asking
   const look = runLook(run, waiting)
   const info = looks[look]
   const persona = wb.state.data?.personas.find((p) => p.name === run.persona)
@@ -18,6 +21,11 @@ export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (
 
   function open() {
     if (run.task_id) go({ view: 'task', id: run.task_id })
+  }
+
+  if (asking) {
+    // The chip turns into the approval at the same height, and back once answered.
+    return <ApprovalStrip approval={asking} onOpen={run.task_id ? open : undefined} className="justify-self-start w-full max-w-[560px]" />
   }
 
   return (

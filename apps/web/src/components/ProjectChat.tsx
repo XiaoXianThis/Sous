@@ -4,6 +4,8 @@ import { loadProjectThreads, newProjectThread, pickProjectThread, sendToProject,
 import type { Project, Task } from '../lib/types'
 import ChatView from './ChatView'
 import Icon from './Icon'
+import { BackButton } from './PhoneHeader'
+import { usePhone } from '../lib/phone'
 
 /**
  * sous, scoped to one project: its chats only see and touch this project. The
@@ -11,6 +13,7 @@ import Icon from './Icon'
  */
 export default function ProjectChat({ project, task, onClose }: { project: Project; task?: Task; onClose?: () => void }) {
   const chatState = useChat()
+  const phone = usePhone()
   const uiState = useUi()
   const [dropTask, setDropTask] = useState(false)
   const threads = chatState.threads.filter((t) => t.project_id === project.id)
@@ -46,8 +49,10 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
           <p className="text-[13px] text-muted m-0 max-w-[260px]">这里的对话只看得到、也只会动这个项目：建的任务都归到它下面。</p>
         </>
       }
+      // On a phone the chat covers the project page, so it leads with a back button.
+      leading={phone && onClose ? <BackButton label="返回项目" onClick={onClose} /> : undefined}
       actions={
-        onClose && (
+        onClose && !phone && (
           <button className="icon-btn" data-back aria-label="收起项目对话" data-tip="收起对话" data-tip-pos="bottom" onClick={onClose}><Icon name="panel" size={18} /></button>
         )
       }

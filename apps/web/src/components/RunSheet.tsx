@@ -47,7 +47,7 @@ export default function RunSheet({ id, onClose }: { id: string; onClose: () => v
   const meta = run ? runMeta(run, node) : null
   const acts = wb.live[id] ?? []
   const approvals = view?.approvals ?? []
-  const pending = approvals.filter((x) => x.status === 'pending')
+  const pending = approvals.filter((x) => x.status === 'pending' && x.review === 'user')
   const liveIDs = new Set(acts.filter((x) => x.kind === 'tool').map((x) => x.id))
   const steps = (view?.tools ?? []).filter((t) => !liveIDs.has(t.id))
   const plan = view?.plan ?? []

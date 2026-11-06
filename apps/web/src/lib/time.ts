@@ -21,3 +21,14 @@ export function ago(ts: number, now = Date.now()): string {
 export function fullTime(ts: number): string {
   return ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : ''
 }
+
+/** How long something ran (ms), short: 12 秒, 3 分 5 秒, 1 小时 2 分; '' for nothing. */
+export function duration(ms: number): string {
+  if (!(ms > 0)) return ''
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s} 秒`
+  const m = Math.floor(s / 60)
+  if (m < 60) return s % 60 ? `${m} 分 ${s % 60} 秒` : `${m} 分`
+  const h = Math.floor(m / 60)
+  return m % 60 ? `${h} 小时 ${m % 60} 分` : `${h} 小时`
+}

@@ -31,6 +31,102 @@ const categoryIcon: Record<string, string> = {
   'outside-worktree': 'folder', delete: 'trash', 'git-remote': 'pr', irreversible: 'alert', floor: 'shield',
 }
 
+/** The two quick answers a compact approval offers: allow once and reject
+ *  once (or the first of each kind); the rest are in the task's details. */
+export function quickOptions(a: Pick<Approval, 'options'>) {
+  const allow = a.options.find((o) => o.kind === 'allow_once') ?? a.options.find((o) => o.kind.startsWith('allow'))
+  const reject = a.options.find((o) => o.kind === 'reject_once') ?? a.options.find((o) => o.kind.startsWith('reject'))
+  return { allow, reject }
+}
+
+/**
+ * A pending approval drawn inside a task item (the chat's Run chip, a task
+ * row), in place of its usual content and at the same height. The body opens
+ * the task's details (full card with the command and all options); the two
+ * buttons answer right here. Only approvals that wait for a person get here:
+ * ones the review agent is still judging are not shown at all.
+ */
+export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', className = '' }: {
+  approval: Approval
+  onOpen?: () => void
+  /** Called once the answer is accepted, before the list catches up. */
+  onDecided?: () => void
+  size?: 'chip' | 'row'
+  className?: string
+}) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const title = approvalTitle(approval.title)
+  const { allow, reject } = quickOptions(approval)
+  const chip = size === 'chip'
+
+  async function decide(optionId: string) {
+    setBusy(optionId)
+    setError('')
+    try {
+      await api.decide(approval.id, optionId, '')
+      onDecided?.()
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy('')
+    }
+  }
+
+  return (
+    <div
+      className={`flex items-center gap-2 min-w-0 overflow-hidden bg-[color-mix(in_srgb,var(--warm)_9%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warm)_35%,transparent)] ${chip ? 'rounded-[16px] py-1.5 pr-1.5 pl-1.5' : 'rounded-[12px] px-2 min-h-[48px]'} ${className}`}
+      role="group"
+      aria-label={`等你审批：${title}`}
+      data-testid="approval-strip"
+    >
+      <button
+        type="button"
+        className="flex items-center gap-2 flex-1 min-w-0 border-0 bg-transparent p-0 text-left text-ink disabled:cursor-default"
+        onClick={onOpen}
+        disabled={!onOpen}
+        title={error || (approval.detail ? `${approval.title}\n${approval.detail}` : approval.title)}
+      >
+        <span className={`grid place-items-center flex-none text-warm bg-[color-mix(in_srgb,var(--warm)_20%,transparent)] ${chip ? 'w-7 h-7 rounded-[10px]' : 'w-6 h-6 rounded-[8px]'}`}>
+          <Icon name={categoryIcon[approval.category] ?? 'shield'} size={chip ? 14 : 12} stroke={2} />
+        </span>
+        <span className="grid min-w-0 leading-tight">
+          <span className="text-[12.5px] font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{title}</span>
+          {chip ? (
+            <span className={`text-[11px] overflow-hidden text-ellipsis whitespace-nowrap ${error ? 'text-danger' : 'text-warm'}`}>
+              {error || ['等你审批', approval.category ? kindLabel(approval) : ''].filter(Boolean).join(' · ')}
+            </span>
+          ) : error ? (
+            <span className="text-[11px] text-danger overflow-hidden text-ellipsis whitespace-nowrap">{error}</span>
+          ) : null}
+        </span>
+      </button>
+      {reject && (
+        <button
+          type="button"
+          className="icon-btn w-7 h-7 flex-none hover:!text-danger"
+          aria-label={optionText[reject.kind]?.text ?? reject.name}
+          data-tip={optionText[reject.kind]?.text ?? reject.name}
+          disabled={!!busy}
+          onClick={() => void decide(reject.option_id)}
+        >
+          <Icon name="x" size={14} stroke={2.4} />
+        </button>
+      )}
+      {allow && (
+        <button
+          type="button"
+          className="btn small flex-none !min-h-7 !py-0 !px-2.5"
+          disabled={!!busy}
+          onClick={() => void decide(allow.option_id)}
+          title={optionText[allow.kind]?.tip ?? allow.name}
+        >
+          <Icon name="check" size={13} stroke={2.4} />{allow.kind === 'allow_once' ? '允许' : optionText[allow.kind]?.text ?? allow.name}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function ApprovalCard({ approval, context = '' }: { approval: Approval; context?: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')

@@ -11,7 +11,12 @@ import RunCard from './RunCard'
 import StageBar from './StageBar'
 import TaskDetail from './TaskDetail'
 
-export default function TaskView({ id, embedded = false }: { id: string; embedded?: boolean }) {
+/**
+ * A task's detail inside the project dialog: a fixed header (title, actions),
+ * its runs newest first, and a fixed bottom: one line of task info, plus the
+ * verdict and the note to the running agent when either is needed.
+ */
+export default function TaskView({ id }: { id: string }) {
   const chatState = useChat()
   const wb = useWb()
   const [task, setTask] = useState<Task | null>(null)
@@ -99,106 +104,151 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
   const latestDiff = [...runs].reverse().find((r) => r.diffstat)
   const kindIcon: Record<string, string> = { code: 'terminal', general: 'sparkles', ops: 'server' }
 
+  const placeLine = task ? [
+    task.place ? placeText[task.place] : '',
+    task.place === 'worktree' && task.base_branch ? `从 ${task.base_from === 'remote' ? 'origin/' : '本地 '}${task.base_branch}${task.base_commit ? `（${task.base_commit.slice(0, 8)}）` : ''}` : '',
+  ].filter(Boolean).join(' · ') : ''
+
   return (
-    <div className={`grid gap-4 content-start ${embedded ? 'p-0 max-w-none' : 'px-[22px] pt-4 pb-7 max-w-[900px] max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-6'}`}>
-      {missing ? (
-        <div className="grid justify-items-center gap-2 py-10 text-muted">
-          <Icon name="circle-dashed" size={32} />
-          <p className="m-0 text-[13px]">这个任务不存在，可能链接已经过期。</p>
-        </div>
-      ) : task ? (
-        <>
-          <header className="flex items-start gap-3.5">
-            {!embedded && (
-              <button className="icon-btn" aria-label="返回项目" onClick={() => go(project ? { view: 'project', id: project.id } : { view: 'overview', id: '' })}><Icon name="back" /></button>
-            )}
-            <div className="min-w-0 grid gap-1.5">
-              <h1 className="m-0 text-[20px] font-bold tracking-tight leading-[1.3] [overflow-wrap:anywhere]">{task.title}</h1>
-              <p className="m-0 flex flex-wrap gap-1.5 items-center">
-                <span className={`pill tone-${info.tone}`}><Icon name={info.icon} size={12} stroke={2.2} />{info.text}</span>
-                <span className="pill" title={a.title}><Icon name="user" size={12} />{a.title}</span>
-                {whoAgent && (
-                  <span className="pill" title={task.last_agent ? '最近一次执行的 agent 和机器' : '指定的 agent 和机器'}>
-                    <Icon name="terminal" size={12} />{agentTitle(whoAgent)}{whoNode ? ` · ${nodeName(whoNode)}` : ''}
-                  </span>
+    <div className="grid grid-rows-[auto_minmax(0,1fr)_auto] h-full min-h-0">
+      {/* The title, actions and the one-line info stay put while the runs scroll. */}
+      {task && !missing ? (
+          <header className="min-w-0 px-5 pt-5 pb-1 max-[760px]:px-4">
+            <div className="flex items-start gap-3 min-w-0">
+              <h1 className="m-0 flex-1 min-w-0 text-[20px] font-bold tracking-tight leading-[1.3] [overflow-wrap:anywhere]">{task.title}</h1>
+              <div className="flex items-center gap-0.5 flex-none -mr-1.5" role="toolbar" aria-label="任务操作">
+                {canDispatch && (
+                  <button className="btn small mr-1" onClick={() => void act(() => api.dispatchTask(task.id))}>
+                    <Icon name={stuck ? 'refresh' : 'send'} size={14} stroke={2.2} />{dispatchText}
+                  </button>
                 )}
-                <span className="pill" title={`${kindText[task.kind]}任务`}><Icon name={kindIcon[task.kind] ?? 'dot'} size={12} />{kindText[task.kind]}</span>
-                {task.status === 'done' && task.git_state && (
-                  <span className="pill" title="改动的去向"><Icon name="branch" size={12} />{gitStateText[task.git_state]}</span>
+                {canDispatch && onlineNodes.length > 1 && (
+                  <label className="icon-btn relative cursor-pointer" data-tip="换一台机器重新派发" data-tip-pos="bottom">
+                    <Icon name="server" size={16} />
+                    <select
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                      aria-label="换一台机器重新派发"
+                      value=""
+                      onChange={(e) => { const n = e.currentTarget.value; if (n) void act(() => api.dispatchTask(task.id, n)) }}
+                    >
+                      <option value="">选机器…</option>
+                      {onlineNodes.map((n) => <option key={n.id} value={n.id}>{n.name}{n.role === 'server' ? '（服务器）' : ''}</option>)}
+                    </select>
+                  </label>
                 )}
-              </p>
+                {latestDiff && (
+                  <a className="icon-btn no-underline" href={`/api/v1/runs/${latestDiff.id}/diff`} target="_blank" rel="noreferrer" aria-label="看改动" data-tip={`看改动 · ${latestDiff.diffstat}`} data-tip-pos="bottom">
+                    <Icon name="branch" size={16} />
+                  </a>
+                )}
+                {isOpenTask && (
+                  <button className="icon-btn hover:!text-danger" aria-label="取消任务" data-tip="取消任务" data-tip-pos="bottom" onClick={() => { if (confirm('取消这个任务？正在执行的 Run 会被停止，未完成的子任务也会一起取消。')) void act(() => api.cancelTask(task.id)) }}>
+                    <Icon name="x" size={16} />
+                  </button>
+                )}
+                <button className={`icon-btn ${showForm ? '!text-ink bg-hover' : ''}`} onClick={() => setShowForm(!showForm)} aria-expanded={showForm} aria-label="说明与设置" data-tip="说明与设置" data-tip-pos="bottom">
+                  <Icon name="settings" size={16} />
+                </button>
+              </div>
             </div>
           </header>
+      ) : <div></div>}
+      <div
+        className="overflow-y-auto min-h-0 p-5 max-[760px]:px-4"
+      >
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 content-start">
+          {missing ? (
+            <div className="grid justify-items-center gap-2 py-10 text-muted">
+              <Icon name="circle-dashed" size={32} />
+              <p className="m-0 text-[13px]">这个任务不存在，可能链接已经过期。</p>
+            </div>
+          ) : task ? (
+            <>
 
-          <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="任务操作">
-            {canDispatch && (
-              <button className="btn small" onClick={() => void act(() => api.dispatchTask(task.id))}>
-                <Icon name={stuck ? 'refresh' : 'send'} size={14} stroke={2.2} />{dispatchText}
-              </button>
-            )}
-            {canDispatch && onlineNodes.length > 1 && (
-              <label className="btn small ghost relative cursor-pointer" title="换一台机器重新派发">
-                <Icon name="server" size={14} />换机器
-                <select
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  aria-label="换一台机器重新派发"
-                  value=""
-                  onChange={(e) => { const n = e.currentTarget.value; if (n) void act(() => api.dispatchTask(task.id, n)) }}
-                >
-                  <option value="">选机器…</option>
-                  {onlineNodes.map((n) => <option key={n.id} value={n.id}>{n.name}{n.role === 'server' ? '（服务器）' : ''}</option>)}
-                </select>
-              </label>
-            )}
-            {latestDiff && (
-              <a className="btn small ghost no-underline" href={`/api/v1/runs/${latestDiff.id}/diff`} target="_blank" rel="noreferrer" title={latestDiff.diffstat}>
-                <Icon name="branch" size={14} />看改动
-              </a>
-            )}
-            {isOpenTask && (
-              <button className="btn small ghost" onClick={() => { if (confirm('取消这个任务？正在执行的 Run 会被停止，未完成的子任务也会一起取消。')) void act(() => api.cancelTask(task.id)) }}>
-                <Icon name="x" size={14} />取消
-              </button>
-            )}
-            <button className="btn small ghost" onClick={() => setShowForm(true)} aria-label="说明与设置">
-              <Icon name="settings" size={14} />设置
-            </button>
-          </div>
+              {showForm && (
+                <div className="card px-4 py-3.5 embed">
+                  <TaskDetail
+                    id={id}
+                    compact
+                    onClose={() => setShowForm(false)}
+                    onOpenTask={(tid) => go({ view: 'task', id: tid })}
+                    onOpenThread={(tid) => {
+                      void openThread(tid)
+                      ui.state.chatOpen = true
+                      ui.emit()
+                    }}
+                  />
+                </div>
+              )}
 
-          <div className="card px-3 pt-4 pb-3">
-            <StageBar stages={stages(task)} labels />
-          </div>
+              {/* Every run of the task, newest first. */}
+              <section className="grid grid-cols-[minmax(0,1fr)] gap-3" aria-label="执行记录">
+                {views.length === 0 ? (
+                  <div className="flex items-center gap-2 text-muted text-[13px] py-2">
+                    <Icon name="clock" size={16} />还没有执行过
+                  </div>
+                ) : (
+                  views.map((v, i) => <RunCard key={v.run.id} view={v} nodeName={nodeName} latest={i === 0} />)
+                )}
+              </section>
+            </>
+          ) : (
+            <div className="grid gap-3">
+              <div className="h-12 rounded-[16px] bg-sunken animate-pulse"></div>
+              <div className="h-20 rounded-[16px] bg-sunken animate-pulse"></div>
+            </div>
+          )}
+        </div>
+      </div>
 
-          <dl className="card m-0 px-4 py-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]" aria-label="怎么做">
-            <dt className="text-muted">在哪儿做</dt>
-            <dd className="m-0">{task.place ? placeText[task.place] : <span className="text-faint">还没定（派发前要定下）</span>}</dd>
-            {task.place === 'worktree' && (
-              <>
-                <dt className="text-muted">从哪儿开始</dt>
-                <dd className="m-0 [overflow-wrap:anywhere]">
-                  {task.base_branch ? `${task.base_from === 'remote' ? 'origin/' : '本地 '}${task.base_branch}` : <span className="text-faint">还没定</span>}
-                  {task.base_commit && <span className="text-faint">（{task.base_commit.slice(0, 8)}）</span>}
-                </dd>
-              </>
+      {task && !missing && (
+        <footer className="grid grid-cols-[minmax(0,1fr)] gap-2.5 bg-panel px-5 pt-2.5 pb-3.5 max-[760px]:px-4 max-[760px]:pb-[calc(12px+var(--safe-b))]" aria-label="任务状态">
+          {/* Everything about the task on one line: state, stages, who, where, how it is checked, where it went. */}
+          <div className="flex items-center gap-x-3.5 text-[12.5px] text-muted whitespace-nowrap overflow-x-auto [scrollbar-width:none] min-w-0" aria-label="任务信息">
+            <span className={`inline-flex items-center gap-1 font-semibold tone-${info.tone}`}><span className="sr-only">状态</span><span className="inline-flex items-center gap-1"><Icon name={info.icon} size={13} stroke={2.2} />{info.text}</span></span>
+            <StageBar stages={stages(task)} inline />
+            <span className="inline-flex items-center gap-1" title={`岗位 · ${kindText[task.kind]}任务`}><span className="sr-only">岗位</span><span className="inline-flex items-center gap-1"><Icon name={kindIcon[task.kind] ?? 'user'} size={13} />{a.title}</span></span>
+            {whoAgent && (
+              <span className="inline-flex items-center gap-1" title={task.last_agent ? '最近一次执行的 agent 和机器' : '指定的 agent 和机器'}>
+                <span className="sr-only">agent</span><span className="inline-flex items-center gap-1"><Icon name="terminal" size={13} />{agentTitle(whoAgent)}{whoNode ? ` · ${nodeName(whoNode)}` : ''}</span>
+              </span>
             )}
+            <span className="inline-flex items-center gap-1" title="在哪做">
+              <span className="inline-flex"><Icon name="folder" size={13} /><span className="sr-only">在哪做</span></span>
+              <span >{placeLine || <span className="text-faint">在哪做还没定</span>}</span>
+            </span>
+            <span className="inline-flex items-center gap-1" title={task.review && task.review !== 'none' && task.on_fail ? `不通过时${task.on_fail === 'rework' ? '返工' : '停下来商量'}` : '验收'}>
+              <span className="inline-flex"><Icon name="eye" size={13} /><span className="sr-only">验收</span></span>
+              <span >{task.review ? reviewText[task.review] : <span className="text-faint">验收还没定</span>}</span>
+            </span>
             {task.branch && (
-              <>
-                <dt className="text-muted">分支</dt>
-                <dd className="m-0 [overflow-wrap:anywhere]"><code>{task.branch}</code>{task.git_state && <span className="text-muted"> · {gitStateText[task.git_state]}</span>}</dd>
-              </>
+              <span className="inline-flex items-center gap-1" title={`分支 ${task.branch}`}>
+                <span className="inline-flex"><Icon name="branch" size={13} /><span className="sr-only">分支</span></span>
+                <span className="font-mono text-[12px]">{task.branch}{task.git_state ? <span className="font-sans"> · {gitStateText[task.git_state]}</span> : null}</span>
+              </span>
             )}
-            <dt className="text-muted">验收</dt>
-            <dd className="m-0">{task.review ? reviewText[task.review] : <span className="text-faint">还没定</span>}{task.review && task.review !== 'none' && task.on_fail ? <span className="text-muted">（不通过时{task.on_fail === 'rework' ? '返工' : '停下来商量'}）</span> : null}</dd>
-          </dl>
-
+            {!task.branch && task.git_state && (
+              <span className="inline-flex items-center gap-1"><span className="inline-flex"><Icon name="check-circle" size={13} /><span className="sr-only">完成</span></span><span >{gitStateText[task.git_state]}</span></span>
+            )}
+            {task.pr_url && (
+              <span className="inline-flex"><span className="sr-only">PR</span><span >
+                <a className="inline-flex items-center gap-1 font-semibold text-accent" href={task.pr_url} target="_blank" rel="noreferrer" title={task.pr_url}><Icon name="pr" size={13} />PR<Icon name="external" size={11} /></a>
+              </span></span>
+            )}
+            {task.status_reason && (
+              <span className="inline-flex items-center gap-1 min-w-0" title={task.status_reason}>
+                <span className="inline-flex"><Icon name="bulb" size={13} /><span className="sr-only">说明</span></span>
+                <span className="max-w-[360px] overflow-hidden text-ellipsis">{task.status_reason}</span>
+              </span>
+            )}
+          </div>
           {userReviewing(task) && (
-            <div className="card px-4 py-3 grid gap-2" aria-label="验收">
-              <p className="m-0 font-semibold text-[14px] flex items-center gap-1.5"><Icon name="eye" size={16} />等你验收</p>
+            <div className="grid gap-2" aria-label="验收">
               <textarea
-                className="min-h-[64px]"
+                className="min-h-[56px]"
                 value={verdictNote}
                 onChange={(e) => setVerdictNote(e.currentTarget.value)}
-                placeholder="不通过时写下要改什么，agent 会照着返工"
+                placeholder="等你验收：不通过时写下要改什么，agent 会照着返工"
                 aria-label="验收意见"
               />
               <div className="flex gap-2 justify-end">
@@ -207,31 +257,8 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
               </div>
             </div>
           )}
-
-          {task.status_reason && (
-            <p className="m-0 flex gap-2 items-start text-muted text-[13px] [overflow-wrap:anywhere] bg-sunken rounded-[14px] px-3 py-2">
-              <Icon name="bulb" size={15} className="mt-[2px]" />{task.status_reason}
-            </p>
-          )}
-          {task.pr_url && (
-            <a
-              className="flex gap-3 items-center rounded-[16px] px-3 py-2.5 no-underline text-ink bg-[color-mix(in_srgb,var(--ok)_9%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--ok)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--ok)_14%,var(--panel))]"
-              href={task.pr_url}
-              target="_blank"
-              rel="noreferrer"
-              title="打开 Pull Request"
-            >
-              <span className="grid place-items-center w-9 h-9 rounded-[12px] bg-ok text-white flex-none"><Icon name="pr" size={18} stroke={2} /></span>
-              <span className="grid min-w-0 flex-1 leading-tight">
-                <span className="font-semibold text-[14px]">Pull Request</span>
-                <span className="text-[12px] text-muted overflow-hidden text-ellipsis whitespace-nowrap">{task.pr_url.replace(/^https?:\/\//, '')}</span>
-              </span>
-              <Icon name="external" size={16} className="text-muted" />
-            </a>
-          )}
-
           {active && (
-            <form className="flex items-center gap-1.5 bg-panel shadow-card rounded-[18px] py-1 pr-1 pl-3" onSubmit={(e) => { e.preventDefault(); void sendNote() }}>
+            <form className="flex items-center gap-1.5 rounded-[16px] border border-line py-1 pr-1 pl-3" onSubmit={(e) => { e.preventDefault(); void sendNote() }}>
               <Icon name="message" size={16} className="text-muted" />
               <input
                 className="flex-1 border-0 outline-0 bg-transparent py-1.5 !shadow-none"
@@ -243,45 +270,8 @@ export default function TaskView({ id, embedded = false }: { id: string; embedde
               <button className="icon-btn primary w-8 h-8 disabled:bg-sunken disabled:text-faint" type="submit" aria-label="发送" disabled={!note.trim()}><Icon name="send" size={16} stroke={2.2} /></button>
             </form>
           )}
-
           {error && <p className="text-danger text-[13px] m-0 flex items-center gap-1.5"><Icon name="alert" size={14} />{error}</p>}
-
-          <section className="grid gap-3" aria-label="执行记录">
-            {views.length === 0 ? (
-              <div className="flex items-center gap-2 text-muted text-[13px] rounded-[16px] border border-dashed border-line-strong px-3 py-3">
-                <Icon name="clock" size={16} />还没有执行过
-              </div>
-            ) : (
-              views.map((v) => <RunCard key={v.run.id} view={v} nodeName={nodeName} full />)
-            )}
-          </section>
-
-          <section className="grid gap-2">
-            <button className="toggle justify-self-start inline-flex gap-1.5 items-center border-0 bg-sunken rounded-full text-muted text-[12.5px] font-semibold px-3 py-1.5 hover:text-ink" onClick={() => setShowForm(!showForm)} aria-expanded={showForm}>
-              <Icon name="settings" size={14} />说明与设置<Icon name="chevron" size={13} />
-            </button>
-            {showForm && (
-              <div className="card px-4 py-3.5 embed">
-                <TaskDetail
-                  id={id}
-                  compact
-                  onClose={() => setShowForm(false)}
-                  onOpenTask={(tid) => go({ view: 'task', id: tid })}
-                  onOpenThread={(tid) => {
-                    void openThread(tid)
-                    ui.state.chatOpen = true
-                    ui.emit()
-                  }}
-                />
-              </div>
-            )}
-          </section>
-        </>
-      ) : (
-        <div className="grid gap-3">
-          <div className="h-12 rounded-[16px] bg-sunken animate-pulse"></div>
-          <div className="h-20 rounded-[16px] bg-sunken animate-pulse"></div>
-        </div>
+        </footer>
       )}
     </div>
   )
