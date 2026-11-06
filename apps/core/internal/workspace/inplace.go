@@ -61,19 +61,26 @@ func PrepareInPlaceTask(ctx context.Context, root, dir, key string) (Prepared, e
 }
 
 func initShadow(ctx context.Context, p Prepared) error {
-	if _, err := os.Stat(filepath.Join(p.Shadow, "HEAD")); err == nil {
-		return nil
+	if _, err := os.Stat(filepath.Join(p.Shadow, "HEAD")); err != nil {
+		if err := os.MkdirAll(p.Shadow, 0o700); err != nil {
+			return err
+		}
+		if _, err := p.git(ctx, "init", "-q"); err != nil {
+			return err
+		}
 	}
-	if err := os.MkdirAll(p.Shadow, 0o700); err != nil {
+	info := filepath.Join(p.Shadow, "info")
+	if err := os.MkdirAll(info, 0o700); err != nil {
 		return err
 	}
-	if _, err := p.git(ctx, "init", "-q"); err != nil {
+	if err := os.WriteFile(filepath.Join(info, "exclude"), []byte(strings.Join(shadowExclude, "\n")+"\n"), 0o600); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(p.Shadow, "info"), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(p.Shadow, "info", "exclude"), []byte(strings.Join(shadowExclude, "\n")+"\n"), 0o600)
+	// Snapshots keep the bytes they were taken from: without this, git
+	// converts line endings on checkout (core.autocrlf on Windows) and an
+	// undo would put back different files than the ones the task found.
+	// info/attributes wins over the project's own .gitattributes.
+	return os.WriteFile(filepath.Join(info, "attributes"), []byte("* -text\n"), 0o600)
 }
 
 // snapshot records the directory as it is now and returns the commit.

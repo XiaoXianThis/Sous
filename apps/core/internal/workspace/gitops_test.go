@@ -15,6 +15,11 @@ import (
 // and Restore puts it back as it was.
 func TestInPlaceSnapshotWithoutGit(t *testing.T) {
 	ctx := context.Background()
+	// Windows checkouts convert line endings by default (core.autocrlf);
+	// a snapshot must give back the bytes it found anyway.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
 	root := t.TempDir()
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("old\n"), 0o644)

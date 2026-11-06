@@ -709,8 +709,13 @@ func pushesDeletion(args []string) bool {
 	return false
 }
 
+// isSystemPath is for files that belong to the system and are safe to read
+// (headers, tools' config samples). Temporary directories are not among
+// them: they belong to other processes and projects, and on Linux a test or
+// workspace often lives under /tmp, which must still count as outside the
+// workdir.
 func isSystemPath(p string) bool {
-	for _, prefix := range []string{"/usr/", "/bin/", "/opt/homebrew/", "/dev/null", "/tmp/", "/var/folders/", "/private/tmp/", "/etc/"} {
+	for _, prefix := range []string{"/usr/", "/bin/", "/opt/homebrew/", "/dev/null", "/etc/"} {
 		if strings.HasPrefix(p, prefix) {
 			return true
 		}

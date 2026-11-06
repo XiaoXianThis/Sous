@@ -60,11 +60,17 @@ func TestClassifyCommands(t *testing.T) {
 		"sudo rm -rf node_modules":        Irreversible,
 		"cd /etc && cat hosts":            OutsideWorktree,
 		"cp a.txt /Users/u/Desktop/a.txt": OutsideWorktree,
-		"python3 script.py":               ExecOther,
-		"FOO=1 go build ./cmd/x":          ExecSafe,
-		"terraform apply":                 Service,
-		"cat /usr/include/stdio.h":        Read,
-		"mkfs.ext4 /dev/sdb1":             Floor,
+		// Temp directories belong to other processes and projects: on Linux
+		// the tests themselves live under /tmp, and the merge of a task
+		// touches the user's checkout there.
+		"git -C /tmp/other merge --ff-only sous/x": OutsideWorktree,
+		"cp a.txt /tmp/a.txt":                      OutsideWorktree,
+		"cat /tmp/a.txt":                           Read,
+		"python3 script.py":                        ExecOther,
+		"FOO=1 go build ./cmd/x":                   ExecSafe,
+		"terraform apply":                          Service,
+		"cat /usr/include/stdio.h":                 Read,
+		"mkfs.ext4 /dev/sdb1":                      Floor,
 	}
 	for cmd, want := range cases {
 		if got, _ := p.Classify(exec(cmd)); got != want {
