@@ -88,6 +88,9 @@ func Describe(ctx context.Context, dir string) proto.Repo {
 			}
 		}
 	}
+	if r.Remote != "" {
+		r.Heads = Heads(ctx, dir)
+	}
 	r.Branch, r.Git = State(ctx, dir)
 	r.Dirty = r.Git != nil && r.Git.Changes+r.Git.Untracked > 0
 	if r.Branch == "" {

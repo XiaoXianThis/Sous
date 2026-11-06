@@ -27,6 +27,18 @@ type Prepared struct {
 	// Note says where a new branch started, for the run's log: the remote's
 	// latest code, or the local HEAD and why. Empty for a reused branch.
 	Note string
+	// Shadow is the shadow repository of an in-place task (its git dir; the
+	// work tree is Dir). Base is then the snapshot taken before the task.
+	Shadow string
+}
+
+// git runs git on the prepared directory: through the shadow repository
+// for an in-place task, else in Dir itself.
+func (p Prepared) git(ctx context.Context, args ...string) (string, error) {
+	if p.Shadow != "" {
+		return gitEnv(ctx, p.Dir, []string{"GIT_DIR=" + p.Shadow, "GIT_WORK_TREE=" + p.Dir}, args...)
+	}
+	return git(ctx, p.Dir, args...)
 }
 
 const (
@@ -43,29 +55,27 @@ func ShortID(runID string) string {
 	return id
 }
 
-// PrepareCode creates a worktree of repoPath at root/worktrees/<repo>/<id> on
-// branch sous/<id>. A second call for the same run reuses it.
-func PrepareCode(ctx context.Context, root, repoPath, runID string) (Prepared, error) {
-	return PrepareTask(ctx, root, repoPath, runID, "", "")
+// Start says where a new task branch starts (decision 0022). There is no
+// default: Branch names the branch, From says whether the local branch
+// (with commits not pushed yet) or origin/<Branch> after a fetch is meant.
+type Start struct {
+	Branch string
+	From   string // "local" / "remote"
 }
 
-// PrepareTask creates or reuses the worktree of one task, keyed by key (the
-// task id), at root/worktrees/<repo>/<short key>. Every run of a task works
-// on the same branch: branch when given, else sous/<slug>-<short key>. The
-// branch starts at the repository's HEAD; its base commit and base branch
-// are remembered in the repository's git config for diffs and pull requests.
-func PrepareTask(ctx context.Context, root, repoPath, key, branch, slug string) (Prepared, error) {
-	return PrepareTaskOn(ctx, root, repoPath, key, branch, slug, "")
-}
+// Where a task branch starts from.
+const (
+	FromLocal  = "local"
+	FromRemote = "remote"
+)
 
-// PrepareTaskOn is PrepareTask for a task that names the branch to start
-// from (baseBranch, empty for the remote's default). A new branch starts
-// at the remote's latest code (work/specs/multi-machine-sync, R1): sous
-// fetches origin and branches from origin/<base>, so a machine whose
-// checkout is behind still starts where the other machines are. The
-// user's checkout is not touched. Without a usable remote it starts at
-// the local HEAD, as before, and Note says why.
-func PrepareTaskOn(ctx context.Context, root, repoPath, key, branch, slug, baseBranch string) (Prepared, error) {
+// PrepareTaskOn creates or reuses the worktree of one task, keyed by key
+// (the task id), at root/worktrees/<repo>/<short key>. Every run of a task
+// works on the same branch: branch when given, else sous/<slug>-<short key>.
+// A new branch starts where start says; its base commit and base branch are
+// remembered in the repository's git config for diffs. The user's checkout
+// is not touched.
+func PrepareTaskOn(ctx context.Context, root, repoPath, key, branch, slug string, start Start) (Prepared, error) {
 	if !filepath.IsAbs(repoPath) {
 		return Prepared{}, fmt.Errorf("repo_path %q must be an absolute path", repoPath)
 	}
@@ -100,7 +110,7 @@ func PrepareTaskOn(ctx context.Context, root, repoPath, key, branch, slug, baseB
 		p.Base, p.BaseBranch = baseOf(ctx, top, branch)
 		return p, nil
 	}
-	base, baseBranch, note, err := startPoint(ctx, top, baseBranch)
+	base, note, err := startPoint(ctx, top, start)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -109,61 +119,54 @@ func PrepareTaskOn(ctx context.Context, root, repoPath, key, branch, slug, baseB
 		return Prepared{}, fmt.Errorf("create worktree: %w", err)
 	}
 	git(ctx, top, "config", "branch."+branch+".sousbase", base)
-	if baseBranch != "" {
-		git(ctx, top, "config", "branch."+branch+".sousbaseref", baseBranch)
-	}
-	p.Base, p.BaseBranch = base, baseBranch
+	git(ctx, top, "config", "branch."+branch+".sousbaseref", start.Branch)
+	p.Base, p.BaseBranch = base, start.Branch
 	return p, nil
 }
 
-// startPoint picks the commit a new task branch starts from, and the branch
-// its pull request targets.
-func startPoint(ctx context.Context, top, want string) (base, baseBranch, note string, err error) {
-	head, herr := git(ctx, top, "rev-parse", "HEAD")
-	cur, _ := git(ctx, top, "rev-parse", "--abbrev-ref", "HEAD")
-	if cur == "HEAD" {
-		cur = "" // detached
-	}
-	local := func(why string) (string, string, string, error) {
-		if herr != nil {
-			// sous never commits in a user's repository on its own; say what to do.
-			return "", "", "", fmt.Errorf("%s 还没有任何提交，请先在该目录执行一次 git add -A 和 git commit", top)
-		}
-		b := want
-		if b == "" {
-			b = cur
-		}
-		return head, b, why, nil
-	}
+// ErrNoStart is returned when a new task branch has no explicit start.
+var ErrNoStart = errors.New("没有指定任务分支从哪里开始：需要起点分支和来源（local 或 remote）")
 
+// startPoint resolves the commit a new task branch starts from. It never
+// picks a branch by itself.
+func startPoint(ctx context.Context, top string, st Start) (base, note string, err error) {
+	if st.Branch == "" || (st.From != FromLocal && st.From != FromRemote) {
+		return "", "", ErrNoStart
+	}
+	if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		// sous never commits in a user's repository on its own; say what to do.
+		return "", "", fmt.Errorf("%s 还没有任何提交，请先在该目录执行一次 git add -A 和 git commit", top)
+	}
+	if st.From == FromLocal {
+		base, err = git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+st.Branch+"^{commit}")
+		if err != nil || base == "" {
+			return "", "", fmt.Errorf("这台机器上没有本地分支 %s", st.Branch)
+		}
+		note = fmt.Sprintf("基于本地的 %s（%s）开始", st.Branch, short(base))
+		if up, err := git(ctx, top, "rev-parse", "--abbrev-ref", st.Branch+"@{upstream}"); err == nil && up != "" {
+			if n, _ := git(ctx, top, "rev-list", "--count", up+".."+st.Branch); n != "" && n != "0" {
+				note += fmt.Sprintf("，含 %s 个还没推送的提交", n)
+			}
+		}
+		return base, note, nil
+	}
 	if _, err := git(ctx, top, "remote", "get-url", "origin"); err != nil {
-		return local("") // a local-only repository: its HEAD is the truth
+		return "", "", errors.New("仓库没有名为 origin 的远端，不能基于远端分支开始")
 	}
 	if out, err := Fetch(ctx, top); err != nil {
-		return local(fmt.Sprintf("拉取 origin 失败（%s），基于这台机器本地的 %s 开始", firstLine(out, err), orHead(cur)))
+		return "", "", fmt.Errorf("拉取 origin 失败（%s），没有基于远端开始", firstLine(out, err))
 	}
-	target := ""
-	for _, b := range []string{want, remoteDefault(ctx, top), cur, "main", "master"} {
-		if b == "" {
-			continue
-		}
-		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+b+"^{commit}"); err == nil {
-			target = b
-			break
-		}
+	base, err = git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+st.Branch+"^{commit}")
+	if err != nil || base == "" {
+		return "", "", fmt.Errorf("origin 上没有分支 %s", st.Branch)
 	}
-	if target == "" {
-		return local("origin 上还没有可用的分支，基于这台机器本地的 " + orHead(cur) + " 开始")
-	}
-	base, _ = git(ctx, top, "rev-parse", "refs/remotes/origin/"+target)
-	note = fmt.Sprintf("基于 origin/%s 的最新代码（%s）开始", target, short(base))
-	if herr == nil && cur == target && head != base {
-		// Say what the user's own checkout has that the task will not see.
-		if n, _ := git(ctx, top, "rev-list", "--count", "refs/remotes/origin/"+target+"..HEAD"); n != "" && n != "0" {
-			note += fmt.Sprintf("；这台机器本地的 %s 有 %s 个提交还没推送，任务里没有它们", target, n)
+	note = fmt.Sprintf("基于 origin/%s 的最新代码（%s）开始", st.Branch, short(base))
+	if local, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+st.Branch); err == nil && local != base {
+		if n, _ := git(ctx, top, "rev-list", "--count", "refs/remotes/origin/"+st.Branch+".."+st.Branch); n != "" && n != "0" {
+			note += fmt.Sprintf("；这台机器本地的 %s 有 %s 个提交还没推送，任务里没有它们", st.Branch, n)
 		}
 	}
-	return base, target, note, nil
+	return base, note, nil
 }
 
 // Fetch updates the remote-tracking branches of origin without asking for
@@ -277,14 +280,15 @@ func Diff(ctx context.Context, p Prepared) (diff, stat string, err error) {
 	if p.Base == "" {
 		return "", "", nil
 	}
-	// Stage everything, including new files, so the diff sees them.
-	if _, err := git(ctx, p.Dir, "add", "-A"); err != nil {
+	// Stage everything, including new files, so the diff sees them. For an
+	// in-place task this is the shadow repository's index, not the user's.
+	if _, err := p.git(ctx, "add", "-A"); err != nil {
 		return "", "", err
 	}
-	if diff, err = git(ctx, p.Dir, "diff", "--cached", "--binary", p.Base); err != nil {
+	if diff, err = p.git(ctx, "diff", "--cached", "--binary", p.Base); err != nil {
 		return "", "", err
 	}
-	if stat, err = git(ctx, p.Dir, "diff", "--cached", "--shortstat", p.Base); err != nil {
+	if stat, err = p.git(ctx, "diff", "--cached", "--shortstat", p.Base); err != nil {
 		return "", "", err
 	}
 	return diff, strings.TrimSpace(stat), nil

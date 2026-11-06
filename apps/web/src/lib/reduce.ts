@@ -99,7 +99,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
   }
   if (ev.type.startsWith('task.') || ev.type.startsWith('project.')) {
     state.tasksRev++
-    if (ev.type === 'task.status' || ev.type === 'task.updated') state.inboxRev++
+    if (ev.type === 'task.status' || ev.type === 'task.updated' || ev.type === 'task.git') state.inboxRev++
     return true
   }
   if (ev.type.startsWith('schedule.')) {
@@ -115,6 +115,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     return true
   }
   if (ev.type === 'run.ended' || ev.type === 'run.queued') state.tasksRev++
+  if (ev.type === 'consult.closed') state.tasksRev++
   // The workbench reloads on any Run lifecycle change. Output does not bump:
   // it is ephemeral and would reload the whole grid for every chunk.
   if (ev.type === 'run.queued' || ev.type === 'run.started' || ev.type === 'run.ended' || ev.type === 'run.paused' || ev.type === 'run.resumed') {
@@ -148,6 +149,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         reply_to: p.reply_to || undefined,
         kind: p.kind || undefined,
         attachments: p.attachments?.length ? p.attachments : undefined,
+        source: p.source || undefined,
         seq: ev.seq,
         created_at: ev.ts,
       })

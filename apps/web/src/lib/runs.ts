@@ -39,7 +39,7 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
           summary: '', diffstat: '', error: '', created_at: ev.ts, started_at: 0, ended_at: 0,
           purpose: p.purpose || 'work', permission_mode: p.permission_mode || 'default', base_branch: p.base_branch ?? '',
           pr_url: '', conflict: false, title: p.title ?? '', paused: false, pause_reason: '', recovery_note: p.recovery_note ?? '',
-          persona: p.persona ?? '', setup: p.setup,
+          persona: p.persona ?? '', setup: p.setup, git: p.git, project_id: p.project_id ?? '', base_from: p.base_from ?? '',
         },
         seq: ev.seq, tools: [], plan: [], output: '', thinking: '', statusLine: '', approvals: [],
       }
@@ -79,7 +79,7 @@ export function applyRunEvent(runs: Record<string, RunView>, ev: HubEvent): bool
       Object.assign(v.run, {
         paused: false,
         status: p.status, summary: p.summary ?? '', diffstat: p.diffstat ?? '', error: p.error ?? '', ended_at: ev.ts,
-        pr_url: p.pr_url ?? '', conflict: !!p.conflict,
+        pr_url: p.pr_url ?? '', conflict: !!p.conflict, git_result: p.git ?? v.run.git_result,
       })
       v.statusLine = ''
       for (const a of v.approvals) if (a.status === 'pending') a.status = 'expired'
@@ -167,4 +167,25 @@ export function runFromHistory(run: Run, events: HubEvent[], approvals: Approval
   v.run = run
   v.approvals = approvals
   return v
+}
+
+/** A git run's operation in words: "合并到 main". */
+export function gitOpText(op?: { op: string; into?: string; base?: string; branch?: string; in_place?: boolean }): string {
+  switch (op?.op) {
+    case 'commit':
+      return op.in_place ? '提交任务的改动' : '提交任务分支'
+    case 'merge':
+      return `合并到 ${op.into ?? ''}`
+    case 'push':
+      return `推送 ${op.branch ?? ''}`
+    case 'pr':
+      return `开 PR → ${op.base ?? ''}`
+    case 'undo':
+      return '撤回上一次 git 操作'
+    case 'discard':
+      return '丢弃任务分支'
+    case 'restore':
+      return '恢复到任务开始前'
+  }
+  return 'git 操作'
 }

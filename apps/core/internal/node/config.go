@@ -47,6 +47,10 @@ type Config struct {
 	// in the workspaces (every 10 minutes, so the page can say a checkout
 	// is behind). It never changes a checkout. Default on.
 	AutoFetch *bool `json:"auto_fetch,omitempty"`
+	// ConsultIdleMinutes is how long a project consultant waits for the
+	// next question before its agent stops (default 30); the session is
+	// kept and loaded again for the next question (decision 0022).
+	ConsultIdleMinutes int `json:"consult_idle_minutes,omitempty"`
 	// Role is "dev" (default) or "server" (M5, docs/decisions/0014). The
 	// Hub may turn a dev machine into a server, never back: only this file
 	// can.

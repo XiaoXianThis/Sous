@@ -149,7 +149,9 @@ func gitRepo(t *testing.T) string {
 	t.Helper()
 	repo := filepath.Join(t.TempDir(), "demo")
 	os.MkdirAll(repo, 0o755)
-	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"}} {
+	// The branch is main whatever init.defaultBranch says; runs on a
+	// repository name where they start (decision 0022).
+	for _, args := range [][]string{{"init", "-q"}, {"symbolic-ref", "HEAD", "refs/heads/main"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"}} {
 		exec.Command("git", append([]string{"-C", repo}, args...)...).Run()
 	}
 	os.WriteFile(filepath.Join(repo, "README.md"), []byte("# demo\n"), 0o644)
@@ -166,7 +168,7 @@ func TestRunWithApprovalEndToEnd(t *testing.T) {
 	repo := gitRepo(t)
 	ctx := context.Background()
 
-	run, err := e.hub.Create(ctx, nodehub.CreateRun{ThreadID: e.main, Agent: "fake", RepoPath: repo, Prompt: "创建 hello.txt"})
+	run, err := e.hub.Create(ctx, nodehub.CreateRun{ThreadID: e.main, Agent: "fake", RepoPath: repo, BaseBranch: "main", BaseFrom: "local", Prompt: "创建 hello.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +217,7 @@ func TestRunWithApprovalEndToEnd(t *testing.T) {
 func TestRejectedApproval(t *testing.T) {
 	e := newEnv(t)
 	defer e.startDaemon("write")()
-	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), BaseBranch: "main", BaseFrom: "local", Prompt: "x"})
 	a := e.pendingApproval(run.ID)
 	e.hub.Decide(context.Background(), a.ID, "reject", "不要动")
 	r := e.ended(run.ID)
@@ -234,7 +236,7 @@ func TestRefusalDoesNotCancelRun(t *testing.T) {
 	prompts := filepath.Join(t.TempDir(), "prompts.txt")
 	_, stop := e.startDaemonWith("reject", "FAKE_ACP_PROMPTS="+prompts)
 	defer stop()
-	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), BaseBranch: "main", BaseFrom: "local", Prompt: "x"})
 	a := e.pendingApproval(run.ID)
 	e.hub.Decide(context.Background(), a.ID, "reject", "不要用 shell 写文件")
 	r := e.ended(run.ID)
@@ -252,7 +254,7 @@ func TestRefusalDoesNotCancelRun(t *testing.T) {
 func TestAgentCancelledTurnFails(t *testing.T) {
 	e := newEnv(t)
 	defer e.startDaemon("reject")()
-	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), BaseBranch: "main", BaseFrom: "local", Prompt: "x"})
 	a := e.pendingApproval(run.ID)
 	// Expire the request instead of refusing it: the agent sees no option
 	// chosen and still ends its turn as "cancelled".
@@ -300,7 +302,7 @@ func TestQueuedUntilMachineConnects(t *testing.T) {
 func TestApprovalSurvivesReconnect(t *testing.T) {
 	e := newEnv(t)
 	defer e.startDaemon("write")()
-	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), BaseBranch: "main", BaseFrom: "local", Prompt: "x"})
 	a := e.pendingApproval(run.ID)
 	// Drop the connection while the agent waits for the answer.
 	e.srv.CloseClientConnections()
@@ -316,7 +318,7 @@ func TestApprovalSurvivesReconnect(t *testing.T) {
 func TestDaemonRestartInterruptsRun(t *testing.T) {
 	e := newEnv(t)
 	stop := e.startDaemon("write")
-	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), Prompt: "x"})
+	run, _ := e.hub.Create(context.Background(), nodehub.CreateRun{Agent: "fake", RepoPath: gitRepo(t), BaseBranch: "main", BaseFrom: "local", Prompt: "x"})
 	e.pendingApproval(run.ID)
 	stop() // the daemon goes away with the run in progress
 	defer e.startDaemon("write")()
@@ -457,7 +459,12 @@ func TestHTTPEndpoints(t *testing.T) {
 		return resp.StatusCode
 	}
 	var run store.Run
-	body, _ := json.Marshal(map[string]string{"agent": "fake", "prompt": "x", "repo_path": gitRepo(t)})
+	repo := gitRepo(t)
+	body, _ := json.Marshal(map[string]string{"agent": "fake", "prompt": "x", "repo_path": repo})
+	if code := do("POST", "/api/v1/runs", string(body), nil); code != 400 {
+		t.Fatalf("a run in a repository without a start branch: %d", code)
+	}
+	body, _ = json.Marshal(map[string]string{"agent": "fake", "prompt": "x", "repo_path": repo, "base_branch": "main", "base_from": "local"})
 	if code := do("POST", "/api/v1/runs", string(body), &run); code != 201 {
 		t.Fatalf("create run: %d", code)
 	}

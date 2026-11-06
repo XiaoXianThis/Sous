@@ -27,7 +27,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
         ? [{ node_id: preset.node_id, path: preset.path, priority: 0 }]
         : [],
   )
-  const [deploy, setDeploy] = useState<Deploy>(project?.deploy ? { ...project.deploy } : { node_id: '', path: '', command: '', health: '', auto_on_merge: false })
+  const [deploy, setDeploy] = useState<Deploy>(project?.deploy ? { ...project.deploy } : { node_id: '', path: '', command: '', health: '', branch: '', auto_on_merge: false })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -47,7 +47,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
       const body: Partial<Project> = {
         name, repo_url: repo, notes, default_persona: persona, default_mode: mode as Project['default_mode'],
         nodes: places.filter((p) => p.path.trim()),
-        deploy: deploy.node_id ? deploy : null,
+        deploy: deploy.node_id ? { ...deploy, branch: deploy.branch?.trim() ?? '', auto_on_merge: !!deploy.auto_on_merge && !!deploy.branch?.trim() } : null,
       }
       const p = isNew ? await api.createProject(body) : await api.updateProject(project!.id, body)
       await loadOverview()
@@ -208,8 +208,22 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
                       />
                     </label>
                   </div>
+                  <label className="grid gap-1 text-[13px] text-muted">
+                    部署分支
+                    <input
+                      className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
+                      value={deploy.branch ?? ''}
+                      onChange={(e) => setDeploy({ ...deploy, branch: e.currentTarget.value })}
+                      placeholder="origin 上要部署的分支"
+                    />
+                  </label>
                   <label className="flex gap-1.5 items-center text-ink">
-                    <input type="checkbox" checked={deploy.auto_on_merge ?? false} onChange={(e) => setDeploy({ ...deploy, auto_on_merge: e.currentTarget.checked })} />sous 开的 PR 合并后自动部署
+                    <input
+                      type="checkbox"
+                      checked={deploy.auto_on_merge ?? false}
+                      disabled={!deploy.branch?.trim()}
+                      onChange={(e) => setDeploy({ ...deploy, auto_on_merge: e.currentTarget.checked })}
+                    />部署分支有新提交时自动部署
                   </label>
                 </>
               )}

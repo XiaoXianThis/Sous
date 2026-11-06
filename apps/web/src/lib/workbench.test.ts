@@ -50,8 +50,15 @@ describe('project cards', () => {
     expect(p.agents[0].title).toBe('clone p')
   })
 
+  it('puts a consultant on its project', () => {
+    const o = overview({ runs: [run('r1', '', { purpose: 'consult', project_id: 'p', title: '顾问：p' })] })
+    const p = projectCards(o).find((c) => c.project.id === 'p')!
+    expect(p.agents).toHaveLength(1)
+    expect(p.agents[0].title).toBe('顾问：p')
+  })
+
   it('merges inbox tasks and does not count duplicates twice', () => {
-    const stale = task('old', 'p', 'done', { pr_url: 'https://x/pull/1' })
+    const stale = task('old', 'p', 'review', { status_reason: '等你验收' })
     const o = overview({
       tasks: [task('t1', 'p', 'planned'), stale],
     })
@@ -59,6 +66,15 @@ describe('project cards', () => {
     expect(p.allTasks.map((t) => t.task.id).sort()).toEqual(['old', 't1', 't2'])
     expect(p.counts).toEqual({ todo: 1, active: 0, attention: 2, closed: 0 })
     expect(p.rank).toBe('attention')
+  })
+
+  it('counts unmerged branches, which need no attention', () => {
+    const o = overview({
+      tasks: [task('a', 'p', 'done', { git_state: 'unmerged' }), task('b', 'p', 'done', { git_state: 'merged' }), task('c', 'p', 'done', { git_state: 'unmerged' })],
+    })
+    const p = projectCards(o).find((c) => c.project.id === 'p')!
+    expect(p.unmerged).toBe(2)
+    expect(p.counts).toEqual({ todo: 0, active: 0, attention: 0, closed: 3 })
   })
 
   it('caps agents and tasks and keeps the rest for the project sheet', () => {

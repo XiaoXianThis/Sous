@@ -32,32 +32,29 @@ type Node struct {
 }
 
 type Request struct {
-	Kind string // code / general
-	// ProjectNodes are where the project lives; code tasks run only there.
+	// Place is where the task works (decision 0022): worktree and in_place
+	// need the project's directory on the machine; scratch runs anywhere.
+	Place        string
 	ProjectNodes []event.ProjectNode
-	// NodePref is a machine the user or supervisor chose.
-	NodePref string
-	// Sticky is the machine that holds the task's branch from earlier runs.
-	Sticky string
-	// Agent is the agent to use; empty picks the first usable one.
-	Agent string
-	// Role is the machine role the run needs: code and general tasks run on
-	// dev machines, ops tasks on servers (M5). Empty: any. A machine named by
-	// NodePref or Sticky is used whatever its role.
-	Role string
-	// Path overrides the project's path on the chosen machine (an ops
-	// task's deploy target).
+	NodePref     string // a machine the task names
+	Sticky       string // the machine that holds the task's branch or snapshot
+	Agent        string
+	// Prefer is the machine role tried first (dev / server). It is a
+	// preference: machines of the other role are used only when the
+	// candidates have none of the preferred role. Naming a machine wins.
+	Prefer string
+	// Path overrides the project's directory on a named machine (a deploy
+	// target's directory).
 	Path string
 }
 
 type Choice struct {
 	NodeID string
 	Agent  string
-	Path   string // the repository on that machine (code tasks)
+	Path   string // the project's directory on that machine (worktree, in_place)
 }
 
-// Route picks a machine. When none fits, the error wraps ErrNoMachine and
-// says why, in words for the user.
+// Route picks the machine and agent for a task's next run.
 func Route(req Request, nodes []Node) (Choice, error) {
 	byID := map[string]Node{}
 	for _, n := range nodes {
@@ -69,6 +66,7 @@ func Route(req Request, nodes []Node) (Choice, error) {
 	for _, p := range pn {
 		paths[p.NodeID] = p.Path
 	}
+	needsDir := req.Place == event.PlaceWorktree || req.Place == event.PlaceInPlace
 
 	var order []string
 	switch {
@@ -76,7 +74,7 @@ func Route(req Request, nodes []Node) (Choice, error) {
 		order = []string{req.Sticky}
 	case req.NodePref != "":
 		order = []string{req.NodePref}
-	case req.Kind == event.TaskKindCode || req.Kind == event.TaskKindOps || len(pn) > 0:
+	case needsDir || len(pn) > 0:
 		for _, p := range pn {
 			order = append(order, p.NodeID)
 		}
@@ -85,15 +83,28 @@ func Route(req Request, nodes []Node) (Choice, error) {
 			order = append(order, n.ID)
 		}
 	}
-	if req.Kind == event.TaskKindCode && len(pn) == 0 {
-		return Choice{}, fmt.Errorf("%w: 代码任务需要一个登记了机器和路径的项目", ErrNoMachine)
-	}
-	if req.Kind == event.TaskKindOps && len(pn) == 0 && req.NodePref == "" && req.Sticky == "" {
-		return Choice{}, fmt.Errorf("%w: 运维任务需要项目登记部署目标，或者在某台服务器上有目录", ErrNoMachine)
-	}
 	explicit := req.Sticky != "" || req.NodePref != ""
+	if needsDir && len(pn) == 0 && !(explicit && req.Path != "") {
+		return Choice{}, fmt.Errorf("%w: %s需要一个登记了机器和目录的项目", ErrNoMachine, placeName[req.Place])
+	}
 	if len(order) == 0 {
 		return Choice{}, fmt.Errorf("%w: 还没有配对任何机器", ErrNoMachine)
+	}
+	if !explicit && req.Prefer != "" {
+		// Preferred role first; the others only when no candidate has it.
+		var pref, rest []string
+		for _, id := range order {
+			if n, ok := byID[id]; ok && roleOf(n) == req.Prefer {
+				pref = append(pref, id)
+			} else {
+				rest = append(rest, id)
+			}
+		}
+		if len(pref) > 0 {
+			order = pref
+		} else {
+			order = rest
+		}
 	}
 
 	var reasons []string
@@ -107,14 +118,8 @@ func Route(req Request, nodes []Node) (Choice, error) {
 		if req.Path != "" && explicit {
 			path = req.Path
 		}
-		if (req.Kind == event.TaskKindCode || req.Kind == event.TaskKindOps) && path == "" {
-			reasons = append(reasons, n.Name+" 上没有登记这个项目的路径")
-			continue
-		}
-		if req.Role != "" && !explicit && roleOf(n) != req.Role {
-			if len(order) == 1 || req.Role == "dev" && roleOf(n) == "server" {
-				reasons = append(reasons, n.Name+" 是"+roleName[roleOf(n)]+"，不接"+kindName[req.Kind])
-			}
+		if needsDir && path == "" {
+			reasons = append(reasons, n.Name+" 上没有登记这个项目的目录")
 			continue
 		}
 		if !n.Online {
@@ -134,6 +139,9 @@ func Route(req Request, nodes []Node) (Choice, error) {
 			reasons = append(reasons, n.Name+why)
 			continue
 		}
+		if !needsDir {
+			path = ""
+		}
 		return Choice{NodeID: id, Agent: agent, Path: path}, nil
 	}
 	return Choice{}, fmt.Errorf("%w: %s", ErrNoMachine, strings.Join(reasons, "；"))
@@ -146,8 +154,7 @@ func roleOf(n Node) string {
 	return "dev"
 }
 
-var roleName = map[string]string{"dev": "开发机", "server": "服务器"}
-var kindName = map[string]string{event.TaskKindCode: "代码任务", event.TaskKindGeneral: "一般任务", event.TaskKindOps: "运维任务"}
+var placeName = map[string]string{event.PlaceWorktree: "在 worktree 里做的任务", event.PlaceInPlace: "就地执行的任务"}
 
 func pickAgent(n Node, want string) (string, string) {
 	usable := func(name string) (bool, string) {

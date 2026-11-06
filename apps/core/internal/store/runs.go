@@ -101,23 +101,34 @@ func projectRun(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Setup)
 			setup = string(raw)
 		}
-		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, p.RecoveryNote, ev.TS, ev.TS, opts, p.Persona, setup)
+		gitOp := ""
+		if p.Git != nil {
+			raw, _ := json.Marshal(p.Git)
+			gitOp = string(raw)
+		}
+		return exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup,
+			base_from, git, project_id, resume_session)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, p.RecoveryNote, ev.TS, ev.TS, opts, p.Persona, setup,
+			p.BaseFrom, gitOp, p.ProjectID, p.ResumeSession)
 	case event.RunStarted:
 		var p event.RunStartedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
 		if err := exec(`UPDATE runs SET status = ?, workdir = ?, branch = ?, base_branch = CASE WHEN ? = '' THEN base_branch ELSE ? END,
+			base_commit = CASE WHEN ? = '' THEN base_commit ELSE ? END,
 			started_at = CASE WHEN started_at = 0 THEN ? ELSE started_at END, last_event = ? WHERE id = ?`,
-			event.RunStatusRunning, p.Workdir, p.Branch, p.BaseBranch, p.BaseBranch, ev.TS, ev.TS, ev.RunID); err != nil {
+			event.RunStatusRunning, p.Workdir, p.Branch, p.BaseBranch, p.BaseBranch, p.BaseCommit, p.BaseCommit, ev.TS, ev.TS, ev.RunID); err != nil {
 			return err
 		}
-		// The first run of a code task names the task's branch.
+		// The first work run of a task names the task's branch and where its
+		// changes are measured from. Git and review runs never do.
 		return exec(`UPDATE tasks SET branch = CASE WHEN branch = '' THEN ? ELSE branch END,
-			base_branch = CASE WHEN base_branch = '' THEN ? ELSE base_branch END
-			WHERE id = (SELECT task_id FROM runs WHERE id = ?) AND ? != ''`, p.Branch, p.BaseBranch, ev.RunID, p.Branch)
+			base_branch = CASE WHEN base_branch = '' THEN ? ELSE base_branch END,
+			base_commit = CASE WHEN base_commit = '' THEN ? ELSE base_commit END
+			WHERE id = (SELECT task_id FROM runs WHERE id = ? AND purpose IN ('work', 'rebase')) AND (? != '' OR ? != '')`,
+			p.Branch, p.BaseBranch, p.BaseCommit, ev.RunID, p.Branch, p.BaseCommit)
 	case event.RunUpdate:
 		// The event log is the record; the run row keeps only its state and
 		// when it last showed progress (for the inspector).
@@ -153,13 +164,32 @@ func projectRun(w *Writer, ev event.Event) error {
 		return nil
 	case event.RunArchived:
 		return exec(`UPDATE runs SET archived = 1 WHERE id = ?`, ev.RunID)
+	case event.RunTurn:
+		var p event.RunTurnPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`UPDATE runs SET session = CASE WHEN ? = '' THEN session ELSE ? END, last_event = ? WHERE id = ?`,
+			p.SessionID, p.SessionID, ev.TS, ev.RunID)
+	case event.ConsultClosed:
+		var p event.ConsultClosedPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		return exec(`UPDATE runs SET consult_closed = 1 WHERE project_id = ? AND purpose = 'consult'`, p.ProjectID)
 	case event.RunEnded:
 		var p event.RunEndedPayload
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
-		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ?, paused = 0 WHERE id = ?`,
-			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, ev.RunID); err != nil {
+		gitResult := ""
+		if p.Git != nil {
+			raw, _ := json.Marshal(p.Git)
+			gitResult = string(raw)
+		}
+		if err := exec(`UPDATE runs SET status = ?, summary = ?, diffstat = ?, error = ?, pr_url = ?, conflict = ?, ended_at = ?, paused = 0,
+			git_result = ?, session = CASE WHEN ? = '' THEN session ELSE ? END WHERE id = ?`,
+			p.Status, p.Summary, p.DiffStat, p.Error, p.PRURL, p.Conflict, ev.TS, gitResult, p.SessionID, p.SessionID, ev.RunID); err != nil {
 			return err
 		}
 		// Questions the run left open can no longer be answered.
@@ -321,21 +351,44 @@ type Run struct {
 	Options map[string]string `json:"options,omitempty"`
 	Persona string            `json:"persona,omitempty"`
 	Setup   *proto.Setup      `json:"setup,omitempty"`
+	// Decision 0022.
+	BaseFrom      string           `json:"base_from,omitempty"`
+	BaseCommit    string           `json:"base_commit,omitempty"`
+	Git           *proto.GitOp     `json:"git,omitempty"`
+	GitResult     *proto.GitResult `json:"git_result,omitempty"`
+	ProjectID     string           `json:"project_id,omitempty"`
+	Session       string           `json:"session,omitempty"`
+	ResumeSession string           `json:"resume_session,omitempty"`
+	ConsultClosed bool             `json:"consult_closed,omitempty"`
 }
 
 const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at,
-	paused, pause_reason, archived, recovery_note, last_event, options, persona, setup`
+	paused, pause_reason, archived, recovery_note, last_event, options, persona, setup,
+	base_from, base_commit, git, git_result, project_id, session, resume_session, consult_closed`
 
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	defer rows.Close()
 	out := []Run{}
 	for rows.Next() {
 		var r Run
-		var opts, setup string
+		var opts, setup, gitOp, gitResult string
 		if err := rows.Scan(&r.ID, &r.ThreadID, &r.TaskID, &r.Purpose, &r.Mode, &r.BaseBranch, &r.PRURL, &r.Conflict, &r.Title, &r.Force, &r.NodeID, &r.Agent, &r.Kind, &r.RepoPath, &r.Prompt, &r.Status,
 			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt,
-			&r.Paused, &r.PauseReason, &r.Archived, &r.RecoveryNote, &r.LastEvent, &opts, &r.Persona, &setup); err != nil {
+			&r.Paused, &r.PauseReason, &r.Archived, &r.RecoveryNote, &r.LastEvent, &opts, &r.Persona, &setup,
+			&r.BaseFrom, &r.BaseCommit, &gitOp, &gitResult, &r.ProjectID, &r.Session, &r.ResumeSession, &r.ConsultClosed); err != nil {
 			return nil, err
+		}
+		if gitOp != "" {
+			r.Git = &proto.GitOp{}
+			if json.Unmarshal([]byte(gitOp), r.Git) != nil {
+				r.Git = nil
+			}
+		}
+		if gitResult != "" {
+			r.GitResult = &proto.GitResult{}
+			if json.Unmarshal([]byte(gitResult), r.GitResult) != nil {
+				r.GitResult = nil
+			}
 		}
 		if opts != "" {
 			json.Unmarshal([]byte(opts), &r.Options)
@@ -368,11 +421,13 @@ func (s *Store) Run(ctx context.Context, id string) (Run, error) {
 
 // RunFilter selects runs; empty fields match everything.
 type RunFilter struct {
-	ThreadID string
-	TaskID   string
-	NodeID   string
-	Statuses []string
-	Limit    int
+	ThreadID  string
+	TaskID    string
+	NodeID    string
+	ProjectID string
+	Purpose   string
+	Statuses  []string
+	Limit     int
 }
 
 // Runs lists runs, oldest first.
@@ -391,6 +446,14 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, error) {
 		q += ` AND node_id = ?`
 		args = append(args, f.NodeID)
 	}
+	if f.ProjectID != "" {
+		q += ` AND project_id = ?`
+		args = append(args, f.ProjectID)
+	}
+	if f.Purpose != "" {
+		q += ` AND purpose = ?`
+		args = append(args, f.Purpose)
+	}
 	if len(f.Statuses) > 0 {
 		q += ` AND status IN (?` + repeat(",?", len(f.Statuses)-1) + `)`
 		for _, st := range f.Statuses {
@@ -407,6 +470,44 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, error) {
 		return nil, err
 	}
 	return scanRuns(rows)
+}
+
+// Consultant returns a project's current consultant run: the newest consult
+// run that was not closed. ErrNotFound when there is none.
+func (s *Store) Consultant(ctx context.Context, projectID string) (Run, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runCols+` FROM runs
+		WHERE project_id = ? AND purpose = 'consult' AND consult_closed = 0 ORDER BY created_at DESC LIMIT 1`, projectID)
+	if err != nil {
+		return Run{}, err
+	}
+	rs, err := scanRuns(rows)
+	if err != nil {
+		return Run{}, err
+	}
+	if len(rs) == 0 {
+		return Run{}, ErrNotFound
+	}
+	return rs[0], nil
+}
+
+// ConsultTurns returns the answers a consultant gave in its runs since the
+// session started (oldest first), for a handoff note.
+func (s *Store) ConsultTurns(ctx context.Context, projectID string, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT m.content FROM messages m
+		WHERE m.kind = 'consult' AND json_extract(m.source, '$.project_id') = ? ORDER BY m.event_seq DESC LIMIT ?`, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append([]string{c}, out...)
+	}
+	return out, rows.Err()
 }
 
 func repeat(s string, n int) string {

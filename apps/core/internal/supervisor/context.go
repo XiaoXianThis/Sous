@@ -120,7 +120,7 @@ func plain(m store.Message) store.Message {
 func clipAnswered(msgs []store.Message) []store.Message {
 	var answered int64
 	for _, m := range msgs {
-		if m.Role == "assistant" && m.Kind != event.KindStep && m.ReplyTo > answered {
+		if m.Role == "assistant" && m.Kind != event.KindStep && m.Kind != event.KindConsult && m.ReplyTo > answered {
 			answered = m.ReplyTo
 		}
 	}

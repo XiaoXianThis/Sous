@@ -57,8 +57,13 @@ func projectWorkbench(w *Writer, ev event.Event) error {
 				raw, _ := json.Marshal(r.Git)
 				gitState = string(raw)
 			}
-			if err := exec(`INSERT OR REPLACE INTO repo_scans(node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at, git) VALUES (?,?,?,?,?,?,?,?,?)`,
-				p.NodeID, r.Path, r.Remote, projectkey.Key(r.Remote), r.Branch, r.Dirty, r.Wokspace, ev.TS, gitState); err != nil {
+			heads := ""
+			if len(r.Heads) > 0 {
+				raw, _ := json.Marshal(r.Heads)
+				heads = string(raw)
+			}
+			if err := exec(`INSERT OR REPLACE INTO repo_scans(node_id, path, remote, remote_key, branch, dirty, wokspace, seen_at, git, heads) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+				p.NodeID, r.Path, r.Remote, projectkey.Key(r.Remote), r.Branch, r.Dirty, r.Wokspace, ev.TS, gitState, heads); err != nil {
 				return err
 			}
 		}
@@ -175,6 +180,8 @@ type RepoScan struct {
 	SeenAt    int64  `json:"seen_at"`
 	// ProjectID is the project it belongs to, if any.
 	ProjectID string `json:"project_id"`
+	// Heads are origin's remote-tracking branches and their commits.
+	Heads map[string]string `json:"heads,omitempty"`
 }
 
 // RepoScans lists the repositories the machines found, each with the
@@ -182,7 +189,7 @@ type RepoScan struct {
 func (s *Store) RepoScans(ctx context.Context) ([]RepoScan, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT s.node_id, s.path, s.remote, s.remote_key, s.branch, s.dirty, s.wokspace, s.seen_at,
 		COALESCE((SELECT pn.project_id FROM project_nodes pn WHERE pn.node_id = s.node_id AND pn.path = s.path LIMIT 1),
-		         (SELECT p.id FROM projects p WHERE p.remote_key != '' AND p.remote_key = s.remote_key LIMIT 1), '')
+		         (SELECT p.id FROM projects p WHERE p.remote_key != '' AND p.remote_key = s.remote_key LIMIT 1), ''), s.heads
 		FROM repo_scans s JOIN nodes n ON n.id = s.node_id AND n.revoked = 0 ORDER BY s.node_id, s.path`)
 	if err != nil {
 		return nil, err
@@ -191,8 +198,12 @@ func (s *Store) RepoScans(ctx context.Context) ([]RepoScan, error) {
 	out := []RepoScan{}
 	for rows.Next() {
 		var r RepoScan
-		if err := rows.Scan(&r.NodeID, &r.Path, &r.Remote, &r.RemoteKey, &r.Branch, &r.Dirty, &r.Wokspace, &r.SeenAt, &r.ProjectID); err != nil {
+		var heads string
+		if err := rows.Scan(&r.NodeID, &r.Path, &r.Remote, &r.RemoteKey, &r.Branch, &r.Dirty, &r.Wokspace, &r.SeenAt, &r.ProjectID, &heads); err != nil {
 			return nil, err
+		}
+		if heads != "" {
+			json.Unmarshal([]byte(heads), &r.Heads)
 		}
 		out = append(out, r)
 	}

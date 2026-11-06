@@ -1,6 +1,6 @@
 # 0014 服务器作为机器接入，部署和维护走运维任务
 
-- Status: Accepted
+- Status: Accepted（“合并后自动部署”的触发方式被 0022 取代）
 - Date: 2026-11-04
 
 ## Context

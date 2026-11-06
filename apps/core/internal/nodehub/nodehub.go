@@ -188,10 +188,20 @@ type CreateRun struct {
 	RecoveryNote   string // a run that picks up after an interrupted one
 
 	// M5
-	Kind    string            // empty: code with a RepoPath, else general; "ops" runs in place
+	Kind    string            // empty: code with a RepoPath, else general; "ops" / "in_place" run in place
 	Options map[string]string // the persona's session options
 	Persona string            // the persona's name
 	Setup   *proto.Setup      // clone and create runs
+
+	// RunID, when set, is the new run's id (a caller that waits for the run
+	// registers for it first).
+	RunID string
+
+	// Decision 0022.
+	BaseFrom      string       // where a new task branch starts: local / remote
+	Git           *proto.GitOp // git runs
+	ProjectID     string       // consult runs
+	ResumeSession string       // an agent session to load
 }
 
 // Create queues a run and dispatches it if its machine is connected.
@@ -200,13 +210,17 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 	r.Prompt = strings.TrimSpace(r.Prompt)
 	r.RepoPath = strings.TrimSpace(r.RepoPath)
 	setup := r.Purpose == proto.PurposeClone || r.Purpose == proto.PurposeCreate
-	if r.Purpose == proto.PurposeDeliver || setup {
-		r.Agent = "sous" // the node itself pushes, clones or creates
+	noAgent := setup || r.Purpose == proto.PurposeDeliver || r.Purpose == proto.PurposeGit
+	if noAgent {
+		r.Agent = "sous" // the node itself runs fixed commands
 	}
 	if setup && r.Setup == nil {
 		return store.Run{}, errors.New("a setup run needs what to set up")
 	}
-	if r.Agent == "" || (r.Prompt == "" && r.Purpose != proto.PurposeDeliver && !setup) {
+	if r.Purpose == proto.PurposeGit && (r.Git == nil || r.RepoPath == "" || r.NodeID == "") {
+		return store.Run{}, errors.New("a git run needs its operation, machine and repository")
+	}
+	if r.Agent == "" || (r.Prompt == "" && !noAgent) {
 		return store.Run{}, errors.New("agent and prompt are required")
 	}
 	if r.PermissionMode == "" {
@@ -225,15 +239,19 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 	if r.RepoPath != "" {
 		kind = event.RunKindCode
 	}
-	if r.Kind == event.RunKindOps {
-		kind = event.RunKindOps
+	if r.Kind == event.RunKindOps || r.Kind == proto.KindInPlace {
+		kind = r.Kind
 	}
 	ev := event.New(event.RunQueued, event.ActorSupervisor, r.ThreadID, event.RunQueuedPayload{
 		NodeID: r.NodeID, Agent: r.Agent, Kind: kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.PermissionMode,
 		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force, RecoveryNote: r.RecoveryNote,
 		Options: r.Options, Persona: r.Persona, Setup: r.Setup,
+		BaseFrom: r.BaseFrom, Git: r.Git, ProjectID: r.ProjectID, ResumeSession: r.ResumeSession,
 	})
-	ev.RunID = ids.New()
+	ev.RunID = r.RunID
+	if ev.RunID == "" {
+		ev.RunID = ids.New()
+	}
 	ev.TaskID = r.TaskID
 	if _, err := h.log.Append(ctx, ev); err != nil {
 		return store.Run{}, err
@@ -477,7 +495,13 @@ func (h *Hub) Busy(ctx context.Context, nodeID string) int {
 	if err != nil {
 		return 0
 	}
-	return len(runs)
+	n := 0
+	for _, r := range runs {
+		if r.Purpose != event.PurposeConsult { // consultants take no slot (decision 0022)
+			n++
+		}
+	}
+	return n
 }
 
 // RemoveWorkspace asks a node to delete a closed task's worktree.

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
-import { isActive, type RunView } from '../lib/runs'
+import { gitOpText, isActive, type RunView } from '../lib/runs'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import ApprovalCard from './ApprovalCard'
 import Icon from './Icon'
@@ -77,6 +77,10 @@ export default function RunCard({ view, nodeName, full = false }: { view: RunVie
         </header>
         {run.purpose === 'deliver' ? (
           <p className="m-0 line-clamp-2 text-[13px] text-muted flex gap-1.5 items-start"><Icon name="pr" size={14} className="mt-[3px]" />push 分支并创建 PR{run.title ? `：${run.title}` : ''}</p>
+        ) : run.purpose === 'git' ? (
+          <p className="m-0 line-clamp-2 text-[13px] text-muted flex gap-1.5 items-start">
+            <Icon name="branch" size={14} className="mt-[3px]" />{gitOpText(run.git)}{run.summary && !isActive(run) ? `：${run.summary}` : ''}
+          </p>
         ) : run.purpose === 'clone' || run.purpose === 'create' ? (
           <p className="m-0 line-clamp-2 text-[13px] text-muted">{run.title}</p>
         ) : (

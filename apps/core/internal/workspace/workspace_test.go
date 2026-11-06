@@ -31,11 +31,24 @@ func gitInit(t *testing.T) string {
 	return repo
 }
 
+// prepareLocal prepares a task branch that starts at the checkout's current
+// branch, as the supervisor would ask for "the current branch, locally".
+func prepareLocal(ctx context.Context, t *testing.T, root, repo, key, branch, slug string) (Prepared, error) {
+	t.Helper()
+	cur := strings.TrimSpace(gitOut(repo, "rev-parse", "--abbrev-ref", "HEAD"))
+	return PrepareTaskOn(ctx, root, repo, key, branch, slug, Start{Branch: cur, From: FromLocal})
+}
+
+func gitOut(dir string, args ...string) string {
+	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	return string(out)
+}
+
 func TestWorktreeAndDiff(t *testing.T) {
 	ctx := context.Background()
 	repo := gitInit(t)
 	root := t.TempDir()
-	p, err := PrepareCode(ctx, root, filepath.Join(repo, "."), "01JABCDEFGHJKMNPQRST")
+	p, err := prepareLocal(ctx, t, root, filepath.Join(repo, "."), "01JABCDEFGHJKMNPQRST", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +73,7 @@ func TestWorktreeAndDiff(t *testing.T) {
 		t.Fatalf("main checkout changed: %q", b)
 	}
 	// Preparing the same run again reuses the worktree.
-	again, err := PrepareCode(ctx, root, repo, "01JABCDEFGHJKMNPQRST")
+	again, err := prepareLocal(ctx, t, root, repo, "01JABCDEFGHJKMNPQRST", "", "")
 	if err != nil || again.Dir != p.Dir {
 		t.Fatalf("reuse: %v %+v", err, again)
 	}
@@ -72,13 +85,24 @@ func TestWorktreeAndDiff(t *testing.T) {
 	}
 }
 
-func TestPrepareCodeErrors(t *testing.T) {
+func TestPrepareTaskErrors(t *testing.T) {
 	ctx := context.Background()
-	if _, err := PrepareCode(ctx, t.TempDir(), "relative/path", "r1"); err == nil {
+	st := Start{Branch: "main", From: FromLocal}
+	if _, err := PrepareTaskOn(ctx, t.TempDir(), "relative/path", "r1", "", "", st); err == nil {
 		t.Fatal("relative path accepted")
 	}
-	if _, err := PrepareCode(ctx, t.TempDir(), t.TempDir(), "r1"); err == nil || !strings.Contains(err.Error(), "not a git repository") {
+	if _, err := PrepareTaskOn(ctx, t.TempDir(), t.TempDir(), "r1", "", "", st); err == nil || !strings.Contains(err.Error(), "not a git repository") {
 		t.Fatalf("non-repo: %v", err)
+	}
+	// A new branch never starts from a branch sous picked by itself.
+	repo := gitInit(t)
+	for _, bad := range []Start{{}, {Branch: "main"}, {From: FromLocal}} {
+		if _, err := PrepareTaskOn(ctx, t.TempDir(), repo, "r2", "", "", bad); err != ErrNoStart {
+			t.Fatalf("start %+v: %v, want ErrNoStart", bad, err)
+		}
+	}
+	if _, err := PrepareTaskOn(ctx, t.TempDir(), repo, "r3", "", "", Start{Branch: "nope", From: FromLocal}); err == nil || !strings.Contains(err.Error(), "没有本地分支 nope") {
+		t.Fatalf("missing branch: %v", err)
 	}
 }
 
@@ -137,7 +161,7 @@ func TestTaskStartsFromRemoteWhenBehind(t *testing.T) {
 	latest := commitFile(t, other, "b.txt", "from the other machine\n")
 	gitT(t, other, "push", "-q", "origin", "main")
 
-	p, err := PrepareTask(ctx, t.TempDir(), mine, "01JTASKREMOTEAAAAAAAAAAAAA", "", "x")
+	p, err := PrepareTaskOn(ctx, t.TempDir(), mine, "01JTASKREMOTEAAAAAAAAAAAAA", "", "x", Start{Branch: "main", From: FromRemote})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +188,12 @@ func TestTaskStartsFromRemoteWhenBehind(t *testing.T) {
 	}
 }
 
-// Local commits that were never pushed are not in the task; the note says so.
-func TestTaskNotesUnpushedCommits(t *testing.T) {
+// Starting from the remote leaves out local commits that were never pushed
+// (the note says so); starting from the local branch includes them.
+func TestTaskStartLocalOrRemote(t *testing.T) {
 	_, mine, _ := twoMachines(t)
-	commitFile(t, mine, "local.txt", "only here\n")
-	p, err := PrepareTask(context.Background(), t.TempDir(), mine, "01JTASKUNPUSHEDAAAAAAAAAAA", "", "")
+	local := commitFile(t, mine, "local.txt", "only here\n")
+	p, err := PrepareTaskOn(context.Background(), t.TempDir(), mine, "01JTASKUNPUSHEDAAAAAAAAAAA", "", "", Start{Branch: "main", From: FromRemote})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +201,17 @@ func TestTaskNotesUnpushedCommits(t *testing.T) {
 		t.Fatalf("note %q", p.Note)
 	}
 	if _, err := os.Stat(filepath.Join(p.Dir, "local.txt")); err == nil {
-		t.Error("an unpushed commit is in the task")
+		t.Error("an unpushed commit is in the remote-based task")
+	}
+	q, err := PrepareTaskOn(context.Background(), t.TempDir(), mine, "01JTASKLOCALSTARTBBBBBBBBB", "", "", Start{Branch: "main", From: FromLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Base != local || q.BaseBranch != "main" || !strings.Contains(q.Note, "含 1 个还没推送的提交") {
+		t.Fatalf("local start %+v", q)
+	}
+	if _, err := os.Stat(filepath.Join(q.Dir, "local.txt")); err != nil {
+		t.Error("the local-based task lacks the unpushed commit")
 	}
 }
 
@@ -186,7 +221,7 @@ func TestTaskStartsFromRequestedBranch(t *testing.T) {
 	gitT(t, other, "checkout", "-qb", "release")
 	rel := commitFile(t, other, "r.txt", "release\n")
 	gitT(t, other, "push", "-q", "origin", "release")
-	p, err := PrepareTaskOn(context.Background(), t.TempDir(), mine, "01JTASKRELEASEAAAAAAAAAAAA", "", "", "release")
+	p, err := PrepareTaskOn(context.Background(), t.TempDir(), mine, "01JTASKRELEASEAAAAAAAAAAAA", "", "", Start{Branch: "release", From: FromRemote})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,24 +230,22 @@ func TestTaskStartsFromRequestedBranch(t *testing.T) {
 	}
 }
 
-// Without a reachable remote the task starts from the local HEAD and says why.
-func TestTaskFallsBackToLocalHead(t *testing.T) {
+// Without a reachable remote a remote start fails instead of quietly
+// falling back to something else; a local start does not need the remote.
+func TestRemoteStartNeedsTheRemote(t *testing.T) {
 	ctx := context.Background()
 	_, mine, _ := twoMachines(t)
 	gitT(t, mine, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	if _, err := PrepareTaskOn(ctx, t.TempDir(), mine, "01JTASKOFFLINEAAAAAAAAAAAA", "", "", Start{Branch: "main", From: FromRemote}); err == nil || !strings.Contains(err.Error(), "拉取 origin 失败") {
+		t.Fatalf("offline remote start: %v", err)
+	}
 	head := gitT(t, mine, "rev-parse", "HEAD")
-	p, err := PrepareTask(ctx, t.TempDir(), mine, "01JTASKOFFLINEAAAAAAAAAAAA", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Base != head || p.BaseBranch != "main" || !strings.Contains(p.Note, "拉取 origin 失败") {
-		t.Fatalf("%+v", p)
-	}
-
-	// A repository with no remote at all just uses its HEAD, quietly.
-	repo := gitInit(t)
-	p, err = PrepareTask(ctx, t.TempDir(), repo, "01JTASKLOCALONLYAAAAAAAAAA", "", "")
-	if err != nil || p.Base != gitT(t, repo, "rev-parse", "HEAD") || p.Note != "" {
+	p, err := PrepareTaskOn(ctx, t.TempDir(), mine, "01JTASKOFFLINEBBBBBBBBBBBB", "", "", Start{Branch: "main", From: FromLocal})
+	if err != nil || p.Base != head {
 		t.Fatalf("%+v %v", p, err)
+	}
+	repo := gitInit(t)
+	if _, err := PrepareTaskOn(ctx, t.TempDir(), repo, "01JTASKLOCALONLYAAAAAAAAAA", "", "", Start{Branch: "master", From: FromRemote}); err == nil || !strings.Contains(err.Error(), "origin") {
+		t.Fatalf("no origin: %v", err)
 	}
 }

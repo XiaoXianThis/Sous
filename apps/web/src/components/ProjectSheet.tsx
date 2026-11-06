@@ -34,7 +34,7 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
     try {
       const ops = wb.data?.personas.find((p) => p.kinds.includes('ops'))
       const t = await api.createTask({
-        kind: 'ops', project_id: id, title: `部署 ${project.name}`, persona_id: ops?.id ?? '',
+        kind: 'ops', place: 'in_place', review: 'none', project_id: id, title: `部署 ${project.name}`, persona_id: ops?.id ?? '',
         detail: `把项目「${project.name}」部署到服务器：先拉取最新代码，再执行部署命令，最后做健康检查。`, dispatch: true,
       })
       go({ view: 'task', id: t.id })
@@ -86,7 +86,7 @@ export default function ProjectSheet({ id, onClose }: { id: string; onClose: () 
           <div className="flex gap-1.5 flex-wrap items-center">
             <button className="btn small" onClick={() => { ui.state.newTask = project.id; ui.emit() }}><Icon name="plus" size={15} stroke={2.2} />新任务</button>
             {project.deploy && (
-              <button className="btn small ghost" disabled={busy} onClick={() => void deploy()} title="sous 不会合并 PR；PR 合并后才部署">
+              <button className="btn small ghost" disabled={busy} onClick={() => void deploy()} title="在服务器上按部署命令部署">
                 <Icon name="rocket" size={14} />部署
               </button>
             )}

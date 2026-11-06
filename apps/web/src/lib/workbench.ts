@@ -62,6 +62,8 @@ export interface ProjectCard {
   /** The tasks the card shows (capped, without the ones in agents). */
   tasks: CardTask[]
   counts: Record<TaskState, number>
+  /** Done tasks whose branch is not merged yet (decision 0022). */
+  unmerged: number
   /** The most urgent state in the project; closed means idle. */
   rank: TaskState
   /** Everything behind the caps, for the project sheet. */
@@ -123,8 +125,7 @@ function optionName(info: AgentInfo | undefined, id: string, value?: string): st
  * it lives, who works there, and what waits.
  */
 export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[] {
-  // Keep the tasks the overview has; add the inbox ones it no longer lists
-  // (a done task with a PR stays in the inbox until dismissed).
+  // Keep the tasks the overview has; add the inbox ones it no longer lists.
   const tasks = new Map<string, Task>()
   for (const t of [...o.tasks, ...inboxTasks]) if (!tasks.has(t.id)) tasks.set(t.id, t)
   const nodes = new Map(o.nodes.map((n) => [n.id, n]))
@@ -174,6 +175,7 @@ export function projectCards(o: Overview, inboxTasks: Task[] = []): ProjectCard[
       agents,
       tasks: listed,
       counts,
+      unmerged: mine.filter((t) => t.status === 'done' && t.git_state === 'unmerged').length,
       rank,
       allAgents,
       allTasks,
@@ -240,6 +242,8 @@ function projectOfRun(r: Run, tasks: Map<string, Task>, projects: Project[]): st
   const t = r.task_id ? tasks.get(r.task_id) : undefined
   if (t) return t.project_id || MISC
   if (r.purpose === 'create' || r.purpose === 'clone') return projects.some((p) => p.id === r.prompt) ? r.prompt : MISC
+  // A consultant or a git operation names its project (decision 0022).
+  if (r.project_id && projects.some((p) => p.id === r.project_id)) return r.project_id
   return MISC
 }
 
@@ -248,6 +252,8 @@ function setupTitle(r: Run): string {
   if (r.purpose === 'create') return '新建项目'
   if (r.purpose === 'deliver') return '交付'
   if (r.purpose === 'rebase') return 'rebase'
+  if (r.purpose === 'consult') return '顾问'
+  if (r.purpose === 'git') return 'git 操作'
   return '准备中'
 }
 

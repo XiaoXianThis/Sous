@@ -39,6 +39,12 @@ const (
 	RunUpdate  Type = "run.update" // tool calls, plans, status changes
 	RunOutput  Type = "run.output" // ephemeral text from the agent; also kept in the run log
 	RunEnded   Type = "run.ended"
+	// RunTurn is one finished turn of a long-lived run (a project
+	// consultant): the answer and the agent's session id.
+	RunTurn Type = "run.turn"
+	// ConsultClosed retires a project's consultant session: a new topic, or
+	// the session went on as a task (decision 0022).
+	ConsultClosed Type = "consult.closed"
 
 	ApprovalRequested Type = "approval.requested"
 	ApprovalDecided   Type = "approval.decided"
@@ -128,6 +134,24 @@ type MessagePayload struct {
 	Context *MessageContext `json:"context,omitempty"`
 	// Attachments are the files of a user message.
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Source names who wrote an assistant message that is not the
+	// supervisor's own words: a project consultant (kind "consult").
+	Source *MessageSource `json:"source,omitempty"`
+}
+
+// MessageSource is the agent behind a consult message.
+type MessageSource struct {
+	RunID     string `json:"run_id"`
+	Agent     string `json:"agent"`
+	ProjectID string `json:"project_id"`
+	Project   string `json:"project,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+}
+
+// ConsultClosedPayload retires a consultant session.
+type ConsultClosedPayload struct {
+	ProjectID string `json:"project_id"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // Message kinds.
@@ -139,6 +163,8 @@ const (
 	// then what the tools did (tasks, runs, reports), then the next words.
 	// It does not answer the user message; the turn's last message does.
 	KindStep = "step"
+	// KindConsult is a project consultant's answer, shown as it is.
+	KindConsult = "consult"
 )
 
 type MemoryPayload struct {

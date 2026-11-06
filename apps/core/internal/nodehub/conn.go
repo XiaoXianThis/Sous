@@ -230,6 +230,7 @@ func (c *nodeConn) dispatch(r store.Run) {
 		RunID: r.ID, Agent: r.Agent, Kind: r.Kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.Mode,
 		TaskID: r.TaskID, Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
 		RecoveryNote: r.RecoveryNote, Options: r.Options, Persona: r.Persona, Setup: r.Setup,
+		BaseFrom: r.BaseFrom, Git: r.Git, ResumeSession: r.ResumeSession,
 	}))
 }
 
@@ -300,7 +301,8 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		if err != nil {
 			return err
 		}
-		ev := event.New(event.RunStarted, event.ActorSystem, "", event.RunStartedPayload{Workdir: p.Workdir, Branch: p.Branch, BaseBranch: p.BaseBranch})
+		ev := event.New(event.RunStarted, event.ActorSystem, "", event.RunStartedPayload{Workdir: p.Workdir, Branch: p.Branch, BaseBranch: p.BaseBranch,
+			BaseCommit: p.BaseCommit})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 
 	case proto.TRunUpdate, proto.TRunOutput:
@@ -351,8 +353,20 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		}
 		ev := event.New(event.RunEnded, event.ActorSystem, "", event.RunEndedPayload{
 			Status: p.Status, StopReason: p.StopReason, Summary: p.Summary, DiffStat: p.DiffStat, Error: p.Error,
-			PRURL: p.PRURL, Conflict: p.Conflict,
+			PRURL: p.PRURL, Conflict: p.Conflict, Git: p.Git, SessionID: p.SessionID,
 		})
+		return c.store(ctx, f, ref.stamp(ev, p.RunID))
+
+	case proto.TRunTurn:
+		var p proto.RunTurn
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		ref, err := c.refOf(ctx, p.RunID)
+		if err != nil {
+			return err
+		}
+		ev := event.New(event.RunTurn, event.ActorSystem, "", event.RunTurnPayload{Text: p.Text, SessionID: p.SessionID})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 
 	case proto.TRunDelivered:

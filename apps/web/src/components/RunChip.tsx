@@ -1,10 +1,10 @@
 import { go, wb } from '../lib/app'
-import type { RunView } from '../lib/runs'
+import { gitOpText, type RunView } from '../lib/runs'
 import { avatarOf, looks, runLook } from '../lib/status'
 import { Who } from './Avatar'
 import Icon from './Icon'
 
-const what: Record<string, string> = { deliver: '交付 PR', rebase: 'rebase', clone: 'clone 项目', create: '新建项目' }
+const what: Record<string, string> = { deliver: '交付 PR', rebase: 'rebase', clone: 'clone 项目', create: '新建项目', review: '验收', consult: '顾问在看代码' }
 
 export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (id: string) => string }) {
   const run = view.run
@@ -12,7 +12,7 @@ export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (
   const look = runLook(run, waiting)
   const info = looks[look]
   const persona = wb.state.data?.personas.find((p) => p.name === run.persona)
-  const system = run.purpose === 'deliver' || run.purpose === 'clone' || run.purpose === 'create'
+  const system = run.purpose === 'deliver' || run.purpose === 'clone' || run.purpose === 'create' || run.purpose === 'git'
   const a = system ? { glyph: 's', color: 'gray' as const, title: 'sous' } : avatarOf(persona, run.agent)
   const steps = view.tools.length
 
@@ -29,7 +29,7 @@ export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (
     >
       <Who persona={system ? undefined : persona} agent={system ? 'sous' : run.agent} size={28} />
       <span className="grid min-w-0 text-left leading-tight">
-        <span className="font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{what[run.purpose] ?? run.title ?? ''}</span>
+        <span className="font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{run.purpose === 'git' ? gitOpText(run.git) : (what[run.purpose] ?? run.title ?? '')}</span>
         <span className="flex items-center gap-1.5 text-[11px] text-muted whitespace-nowrap">
           <span className={`inline-flex items-center gap-0.5 font-semibold tone-${info.tone}`}><Icon name={info.icon} size={10} stroke={2.4} />{info.text}</span>
           <span className="inline-flex items-center gap-0.5"><Icon name="laptop" size={10} />{nodeName(run.node_id)}</span>

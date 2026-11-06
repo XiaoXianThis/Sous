@@ -30,9 +30,10 @@ export interface Message {
    * "notice": a proactive notification; "silent": a turn that chose not to
    * reply; "report": a task's result posted by the task engine; "trigger":
    * input nobody typed (a schedule or a follow-up, role user); "inspector":
-   * the inspector's note about a finding.
+   * the inspector's note about a finding; "consult": a project consultant's
+   * answer, shown as it is (decision 0022).
    */
-  kind?: 'notice' | 'silent' | 'report' | 'trigger' | 'inspector' | 'step'
+  kind?: 'notice' | 'silent' | 'report' | 'trigger' | 'inspector' | 'step' | 'consult'
   seq: number
   created_at: number
   /** Set while the reply is still streaming; never sent by the server. */
@@ -43,6 +44,16 @@ export interface Message {
   context?: MessageContext
   /** The files of a user message. */
   attachments?: Attachment[]
+  /** Who wrote a consult message: the consultant's run, agent and project. */
+  source?: MessageSource
+}
+
+export interface MessageSource {
+  run_id: string
+  agent: string
+  project_id: string
+  project?: string
+  node_id?: string
 }
 
 export interface HubEvent {
@@ -176,7 +187,7 @@ export interface Node {
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
-export type RunPurpose = 'work' | 'rebase' | 'deliver' | 'clone' | 'create'
+export type RunPurpose = 'work' | 'rebase' | 'deliver' | 'clone' | 'create' | 'review' | 'git' | 'consult'
 
 export interface Run {
   id: string
@@ -190,7 +201,7 @@ export interface Run {
   title: string
   node_id: string
   agent: string
-  kind: 'code' | 'general' | 'ops'
+  kind: 'code' | 'general' | 'ops' | 'in_place'
   repo_path: string
   prompt: string
   status: RunStatus
@@ -211,6 +222,35 @@ export interface Run {
   persona?: string
   options?: Record<string, string>
   setup?: { name: string; remote?: string; layout?: string; owner?: string; private?: boolean }
+  /** Decision 0022: git runs, consult runs, where a task branch started. */
+  base_from?: string
+  base_commit?: string
+  git?: GitOp
+  git_result?: GitResult
+  project_id?: string
+  session?: string
+  resume_session?: string
+}
+
+export interface GitOp {
+  op: 'commit' | 'merge' | 'push' | 'pr' | 'undo' | 'discard' | 'restore'
+  into?: string
+  base?: string
+  branch?: string
+  remote?: string
+  squash?: boolean
+  in_place?: boolean
+}
+
+export interface GitResult {
+  op: string
+  branch?: string
+  before?: string
+  after?: string
+  commits?: number
+  conflicts?: string[]
+  pr_url?: string
+  message: string
 }
 
 export interface ApprovalOption {
@@ -270,7 +310,19 @@ export interface Task {
   depends_on: string[]
   created_at: number
   updated_at: number
+  /** Decision 0022: where it works, how it is reviewed, its branch's fate. */
+  place: TaskPlace | ''
+  review: TaskReview | ''
+  on_fail: 'rework' | 'ask' | ''
+  base_from: 'local' | 'remote' | ''
+  base_commit: string
+  git_state: GitTaskState | ''
+  deploy_commit?: string
 }
+
+export type TaskPlace = 'worktree' | 'in_place' | 'scratch'
+export type TaskReview = 'none' | 'model' | 'agent' | 'user'
+export type GitTaskState = 'unmerged' | 'merged' | 'pr' | 'discarded' | 'restored'
 
 export interface ProjectNode {
   node_id: string
@@ -395,6 +447,9 @@ export interface Deploy {
   path: string
   command: string
   health?: string
+  /** The deploy branch: new commits on origin/<branch> get deployed. */
+  branch?: string
+  /** Deploy every new commit of branch automatically. */
   auto_on_merge?: boolean
 }
 
@@ -414,6 +469,8 @@ export interface Project {
   deploy?: Deploy | null
   /** When the project was archived (unix ms); 0 or missing means active. */
   archived_at?: number
+  /** The deploy branch's commit that is deployed (or the baseline). */
+  deployed_commit?: string
   /** When the project or any of its tasks last changed. */
   touched_at?: number
 }

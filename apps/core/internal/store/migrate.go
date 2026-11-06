@@ -408,6 +408,40 @@ CREATE TABLE mcp_servers (
   updated_at     INTEGER NOT NULL
 );
 `,
+	// 13: flexible tasks (decision 0022): where a task works, how it is
+	// reviewed, where its branch starts and what became of it; git runs,
+	// review runs and project consultants; deployed commits; who wrote a
+	// consult message.
+	`
+ALTER TABLE tasks ADD COLUMN place TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN review TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN on_fail TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN base_from TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN base_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN git_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN deploy_commit TEXT NOT NULL DEFAULT '';
+UPDATE tasks SET place = 'worktree', review = 'model', on_fail = 'rework', base_from = 'remote' WHERE kind = 'code';
+UPDATE tasks SET place = 'scratch', review = 'model', on_fail = 'rework' WHERE kind = 'general';
+UPDATE tasks SET place = 'in_place', review = 'none', on_fail = 'ask' WHERE kind = 'ops';
+UPDATE tasks SET git_state = 'pr' WHERE pr_url != '';
+UPDATE tasks SET git_state = 'unmerged' WHERE kind = 'code' AND pr_url = '' AND branch != '' AND status = 'done';
+
+ALTER TABLE runs ADD COLUMN base_from TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN base_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN git TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN git_result TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN project_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN session TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN resume_session TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN consult_closed INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX runs_consult ON runs(project_id, purpose, created_at);
+
+ALTER TABLE projects ADD COLUMN deployed_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE repo_scans ADD COLUMN heads TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

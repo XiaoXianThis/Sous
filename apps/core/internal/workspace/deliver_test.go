@@ -14,7 +14,7 @@ func TestTaskWorktreeIsReused(t *testing.T) {
 	ctx := context.Background()
 	repo := gitInit(t)
 	root := t.TempDir()
-	p, err := PrepareTask(ctx, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", "", Slug("Add dark mode 黑暗模式!"))
+	p, err := prepareLocal(ctx, t, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", "", Slug("Add dark mode 黑暗模式!"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestTaskWorktreeIsReused(t *testing.T) {
 	os.WriteFile(filepath.Join(p.Dir, "b.txt"), []byte("b\n"), 0o644)
 
 	// A second run of the same task sees the work of the first.
-	again, err := PrepareTask(ctx, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", p.Branch, "")
+	again, err := prepareLocal(ctx, t, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", p.Branch, "")
 	if err != nil || again.Dir != p.Dir || again.Branch != p.Branch || again.Base != p.Base || again.BaseBranch != p.BaseBranch {
 		t.Fatalf("reuse: %+v %v", again, err)
 	}
@@ -36,7 +36,7 @@ func TestTaskWorktreeIsReused(t *testing.T) {
 	if err := RemoveTask(ctx, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA"); err != nil {
 		t.Fatal(err)
 	}
-	back, err := PrepareTask(ctx, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", p.Branch, "")
+	back, err := prepareLocal(ctx, t, root, repo, "01JTASKAAAAAAAAAAAAAAAAAAA", p.Branch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestDeliverPushesAndOpensPR(t *testing.T) {
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	p, err := PrepareTask(ctx, t.TempDir(), repo, "01JTASKBBBBBBBBBBBBBBBBBBB", "", "x")
+	p, err := prepareLocal(ctx, t, t.TempDir(), repo, "01JTASKBBBBBBBBBBBBBBBBBBB", "", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestDeliverPushesAndOpensPR(t *testing.T) {
 
 func TestPushNeedsOrigin(t *testing.T) {
 	ctx := context.Background()
-	p, _ := PrepareTask(ctx, t.TempDir(), gitInit(t), "01JTASKCCCCCCCCCCCCCCCCCCC", "", "")
+	p, _ := prepareLocal(ctx, t, t.TempDir(), gitInit(t), "01JTASKCCCCCCCCCCCCCCCCCCC", "", "")
 	if err := Push(ctx, p, false); err == nil || !strings.Contains(err.Error(), "origin") {
 		t.Fatalf("want an origin error, got %v", err)
 	}

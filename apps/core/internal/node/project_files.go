@@ -2,15 +2,18 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/workspace"
 )
 
 // Browsing and editing a project's files from the page. The Hub names a
@@ -175,4 +178,92 @@ func readProjectFile(abs, rel string) (proto.ProjectFile, error) {
 	}
 	out.Content = string(raw)
 	return out, nil
+}
+
+// grepSkip are directories a project search never enters.
+var grepSkip = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true, "target": true,
+	".venv": true, "venv": true, "__pycache__": true, ".next": true}
+
+const (
+	grepMaxMatches = 200
+	grepMaxFiles   = 5000
+	grepMaxLine    = 300
+)
+
+// grep searches a project's text files for a regular expression, for the
+// supervisor's project_read (decision 0022). Read only, inside the project.
+func (a *admin) grep(ctx context.Context, args proto.GrepArgs) (proto.GrepResult, error) {
+	out := proto.GrepResult{Matches: []proto.GrepMatch{}}
+	if args.Pattern == "" || len(args.Pattern) > 300 {
+		return out, nodeErr(proto.ErrCodeInvalid, "搜索的正则表达式不能为空，也不能超过 300 个字符")
+	}
+	re, err := regexp.Compile(args.Pattern)
+	if err != nil {
+		return out, nodeErr(proto.ErrCodeInvalid, "正则表达式不对：%v", err)
+	}
+	root, abs, _, err := a.projectPath(proto.ProjectArgs{Root: args.Root, Rel: args.Rel})
+	if err != nil {
+		return out, err
+	}
+	stop := errors.New("enough")
+	walkErr := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || ctx.Err() != nil {
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			if path != abs && grepSkip[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if out.Files >= grepMaxFiles {
+			out.Truncated = true
+			return stop
+		}
+		fi, err := d.Info()
+		if err != nil || fi.Size() > maxFileBytes {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil || bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw) {
+			return nil
+		}
+		out.Files++
+		rel, _ := filepath.Rel(root, path)
+		for i, line := range strings.Split(string(raw), "\n") {
+			if !re.MatchString(line) {
+				continue
+			}
+			if len(out.Matches) >= grepMaxMatches {
+				out.Truncated = true
+				return stop
+			}
+			text := strings.TrimRight(line, "\r")
+			if r := []rune(text); len(r) > grepMaxLine {
+				text = string(r[:grepMaxLine]) + "…"
+			}
+			out.Matches = append(out.Matches, proto.GrepMatch{Rel: filepath.ToSlash(rel), Line: i + 1, Text: text})
+		}
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, stop) {
+		return out, walkErr
+	}
+	return out, nil
+}
+
+// gitStatus reads where a project checkout stands right now.
+func (a *admin) gitStatus(ctx context.Context, root string) (proto.GitStatus, error) {
+	dir, _, _, err := a.projectPath(proto.ProjectArgs{Root: root})
+	if err != nil {
+		return proto.GitStatus{}, err
+	}
+	st, err := workspace.Status(ctx, dir)
+	if err != nil {
+		return st, nodeErr(proto.ErrCodeFailed, "%v", err)
+	}
+	return st, nil
 }

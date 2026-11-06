@@ -8,6 +8,9 @@ type Turn struct {
 	MainThreadID string
 	// ProjectID is set in a project chat: the turn may only touch this project.
 	ProjectID string
+	// ReplyTo is the seq of the user message the turn answers: messages a
+	// tool adds to the conversation (a consultant's answer) belong to it.
+	ReplyTo int64
 }
 
 type turnKey struct{}
