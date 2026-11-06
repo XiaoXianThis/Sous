@@ -119,12 +119,17 @@ func TestGeneral(t *testing.T) {
 	}
 }
 
-// gitT runs git in dir and fails the test on error.
+// gitT runs git in dir and fails the test on error. It returns stdout only:
+// git warns on stderr about line endings on Windows (autocrlf), which is not
+// part of any answer.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git %v: %v %s", args, err, out)
+		t.Fatalf("git %v: %v %s", args, err, stderr.String())
 	}
 	return strings.TrimSpace(string(out))
 }
