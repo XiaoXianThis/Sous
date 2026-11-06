@@ -97,7 +97,7 @@ func TestRefusalWithoutChangesStops(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("write")()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "写 hello", Dispatch: true, Review: event.ReviewNone}))
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "写 hello", Dispatch: true, Review: event.ReviewNone}))
 	first := te.rejectNext(tk.ID)
 	blocked := te.waitStatus(tk.ID, event.TaskBlocked, event.TaskDone)
 	if blocked.Status != event.TaskBlocked || !strings.Contains(blocked.StatusReason, "没有留下改动") || !strings.Contains(blocked.StatusReason, "不要动这个") {
@@ -134,7 +134,7 @@ func TestRefusalStopsRework(t *testing.T) {
 	te := newTaskEnv(t, `{"pass":false,"reason":"写法不对"}`)
 	defer te.startDaemon("reject")()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "写 hello", Dispatch: true, OnFail: event.OnFailRework}))
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "写 hello", Dispatch: true, OnFail: event.OnFailRework}))
 	te.rejectNext(tk.ID)
 	blocked := te.waitStatus(tk.ID, event.TaskBlocked, event.TaskDone)
 	if blocked.Status != event.TaskBlocked || !strings.Contains(blocked.StatusReason, "没有自动返工") {
@@ -156,8 +156,8 @@ func TestWaitingForTheUserFreesTheSlot(t *testing.T) {
 	te.cfg.Concurrency = 1
 	defer te.startDaemon("write")()
 	ctx := context.Background()
-	a, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "一", Dispatch: true}))
-	b, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "二", Dispatch: true}))
+	a, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "一", Dispatch: true}))
+	b, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "二", Dispatch: true}))
 	te.waitFor("both tasks asking the user at once", func() bool {
 		as, _ := te.log.Store.Approvals(ctx, "pending", "")
 		seen := map[string]bool{}
@@ -254,7 +254,7 @@ func TestInPlaceTasksTakeTurnsInADirectory(t *testing.T) {
 	defer te.startDaemon("write")()
 	ctx := context.Background()
 	in := func(title string) store.Task {
-		tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: title, Place: event.PlaceInPlace,
+		tk, err := te.tasks.Create(ctx, task.Input{Mode: "default", ThreadID: te.main, ProjectID: "p1", Title: title, Place: event.PlaceInPlace,
 			Review: event.ReviewNone, Dispatch: true, Actor: event.ActorSupervisor})
 		if err != nil {
 			t.Fatal(err)

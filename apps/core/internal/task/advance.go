@@ -404,14 +404,40 @@ func (e *Engine) afterReviewRun(ctx context.Context, t store.Task, r store.Run) 
 	case event.RunStatusCancelled:
 		return e.transition(ctx, t, event.TaskPlanned, "验收被取消："+firstNonEmpty(r.Error, "已取消"), "", event.ActorSystem)
 	default:
-		// The reviewer could not finish: let the user judge.
-		return e.askUserReview(ctx, t, work, "审查岗位没能完成验收（"+truncate(firstNonEmpty(r.Error, r.Summary, "原因不明"), 200)+"），等你验收")
+		return e.reviewFallback(ctx, t, r, work, "审查岗位没能完成验收（"+truncate(firstNonEmpty(r.Error, r.Summary, "原因不明"), 200)+"），等你验收")
 	}
 	verdict, ok := parseVerdict(r.Summary)
 	if !ok {
-		return e.askUserReview(ctx, t, work, "审查岗位没有给出明确结论，等你验收")
+		return e.reviewFallback(ctx, t, r, work, "审查岗位没有给出明确结论，等你验收")
 	}
 	return e.applyVerdict(ctx, t, work, verdict, event.ActorReviewer, false)
+}
+
+// reviewFallback is called with e.mu held. Release it while asking the model,
+// then recheck the task and latest run before applying the result.
+func (e *Engine) reviewFallback(ctx context.Context, t store.Task, review, work store.Run, reason string) error {
+	if work.ID == "" || !models.Usable(ctx, e.Reviewer.Provider) {
+		return e.askUserReview(ctx, t, work, reason)
+	}
+	if t.Status != event.TaskReview {
+		if err := e.transition(ctx, t, event.TaskReview, "等待验收", "", event.ActorSystem); err != nil {
+			return err
+		}
+	}
+	e.mu.Unlock()
+	verdict, verdictErr := e.verdict(ctx, t, work)
+	e.mu.Lock()
+	current, err := e.store().Task(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	if current.Status != event.TaskReview || e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver, event.PurposeReview).ID != review.ID {
+		return nil
+	}
+	if verdictErr == nil {
+		return e.applyVerdict(ctx, current, work, verdict, event.ActorReviewer, false)
+	}
+	return e.askUserReview(ctx, current, work, reason)
 }
 
 // parseVerdict finds {"pass": …, "reason": …} in a reviewing agent's answer.
@@ -727,7 +753,7 @@ func (e *Engine) checkDeploy(ctx context.Context, t store.Task, work store.Run) 
 	cr := nodehub.CreateRun{
 		ThreadID: thread, Purpose: event.PurposeGit, TaskID: t.ID, NodeID: work.NodeID, RepoPath: work.RepoPath,
 		Title: t.Title, Agent: "sous",
-		PermissionMode: firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault),
+		PermissionMode: firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeAuto),
 		Git:            &proto.GitOp{Op: proto.GitHealth, Command: strings.TrimSpace(proj.Deploy.Health)},
 	}
 	if _, err := e.Nodes.Create(ctx, cr); err != nil {

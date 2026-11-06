@@ -106,7 +106,7 @@ func (e *Engine) StartGit(ctx context.Context, in GitInput) (store.Run, error) {
 		proj, _ = e.store().Project(ctx, t.ProjectID)
 		cr.TaskID, cr.NodeID, cr.RepoPath, cr.Branch, cr.Title = t.ID, work.NodeID, work.RepoPath, t.Branch, t.Title
 		cr.Prompt = t.Detail
-		cr.PermissionMode = firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
+		cr.PermissionMode = firstNonEmpty(t.PermissionMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeAuto)
 		if in.ThreadID == "" {
 			cr.ThreadID = t.OriginThreadID
 		}
@@ -136,7 +136,7 @@ func (e *Engine) StartGit(ctx context.Context, in GitInput) (store.Run, error) {
 			return store.Run{}, err
 		}
 		cr.NodeID, cr.RepoPath = place.NodeID, place.Path
-		cr.PermissionMode = firstNonEmpty(p.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
+		cr.PermissionMode = firstNonEmpty(p.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeAuto)
 	}
 	if cr.ThreadID == "" {
 		cr.ThreadID, _ = e.store().MainThreadID(ctx)

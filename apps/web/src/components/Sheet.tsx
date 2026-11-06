@@ -1,9 +1,19 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import Icon from './Icon'
 
 // The sheets currently mounted, oldest first. Escape only closes the top one,
 // so a nested sheet does not take its parent down with it.
 const sheets: symbol[] = []
+
+/**
+ * Where a Sheet is drawn. Settings pages are embedded in a clipped, transformed
+ * panel: the page's own root sheet is flattened into it ('root'), but a dialog
+ * opened from there ('nested') would be clipped by that panel and sit under the
+ * phone tab bar, so it is drawn in <body> instead. Elsewhere it stays in place.
+ */
+export type SheetPlace = 'inline' | 'root' | 'nested'
+export const SheetPlaceContext = createContext<SheetPlace>('inline')
 
 export default function Sheet({ title, onClose, wide = false, head, children }: {
   title: string
@@ -33,7 +43,9 @@ export default function Sheet({ title, onClose, wide = false, head, children }: 
     return () => window.removeEventListener('keydown', onKey)
   }, [me, onClose])
 
-  return (
+  const place = useContext(SheetPlaceContext)
+
+  const body = (
     <>
       <div className="backdrop" role="presentation" onClick={onClose}></div>
       <div className={`sheet ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
@@ -46,5 +58,13 @@ export default function Sheet({ title, onClose, wide = false, head, children }: 
         <div className="overflow-y-auto grid gap-3.5 content-start min-h-0 pb-1 -mx-1 px-1">{children}</div>
       </div>
     </>
+  )
+
+  return (
+    <SheetPlaceContext.Provider value={place === 'root' ? 'nested' : place}>
+      {place === 'nested' && typeof document !== 'undefined'
+        ? createPortal(<div data-nested-sheet style={{ display: 'contents' }}>{body}</div>, document.body)
+        : body}
+    </SheetPlaceContext.Provider>
   )
 }

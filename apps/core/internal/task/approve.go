@@ -18,10 +18,10 @@ const (
 	// maxAIAllowsPerRun is how many operations the approver may allow in one
 	// run; past it the user is asked, so a run that keeps asking for more is
 	// seen by a person.
-	maxAIAllowsPerRun = 40
+	maxAIAllowsPerRun = 150
 	// maxAIDeniesPerOp is how often the approver refuses the same operation
 	// before the user is told the agent keeps asking.
-	maxAIDeniesPerOp = 2
+	maxAIDeniesPerOp = 3
 	// historyShown is how many earlier decisions the approver is shown.
 	historyShown = 10
 )
@@ -114,7 +114,7 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 		}
 		return e.Nodes.DecideAs(ctx, a.ID, allow, firstNonEmpty(reason, "审批 agent 批准"), event.ActorApprover)
 	case "deny":
-		if reject == "" || !sure {
+		if reject == "" || out.Confidence == "low" {
 			return e.Nodes.Escalate(ctx, a.ID, "审批 agent 倾向拒绝："+firstNonEmpty(reason, "没有说明理由"))
 		}
 		return e.Nodes.DecideAs(ctx, a.ID, reject, firstNonEmpty(reason, "审批 agent 认为这个操作不合适"), event.ActorApprover)

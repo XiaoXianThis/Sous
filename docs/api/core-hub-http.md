@@ -76,7 +76,7 @@
 | POST | `/schedules/{id}/run` | 立刻触发一次（不影响下次的时间） |
 | GET | `/findings?run_id=&limit=` | 巡检发现的问题，新的在前 |
 | GET | `/usage?days=&tz=` | 最近 N 天（默认 30，按 `tz` 的自然日算）的 token 用量：`{days, since, usage, daily, by_project}`。`usage` 按 provider、model、role 汇总；`daily` 是 `[{day: "YYYY-MM-DD", role, calls, input_tokens, output_tokens, cached_tokens}]`；`by_project` 是 `[{project_id, name, calls, input_tokens, output_tokens, cached_tokens}]`（任务的调用算在任务的项目上，项目对话里的算在那个项目上，`project_id` 为空是主线对话和其他） |
-| GET/PATCH | `/settings` | `{default_mode, default_agent, notify: {kind: bool}, quiet: {enabled, start, end, tz}, roles, push_devices}`；`roles` 只读（每个角色当前的“供应商/模型 · 思考强度”，在 `/models` 里改），不返回任何密钥。PATCH 只改出现的字段 |
+| GET/PATCH | `/settings` | `{default_mode, default_agent, notify: {kind: bool}, quiet: {enabled, start, end, tz}, roles, push_devices}`；`roles` 只读（每个角色当前的“供应商/模型 · 思考强度”，在 `/models` 里改），不返回任何密钥。PATCH 只改出现的字段；未设置 `default_mode` 时返回 `auto` |
 | POST/DELETE | `/push/subscriptions` | 浏览器的 `PushSubscription.toJSON()`（`{endpoint, keys: {p256dh, auth}}`）；删除时 `{endpoint}` |
 | GET | `/push/vapid-public-key` | `{key}`：base64url 的 VAPID 公钥（`applicationServerKey`） |
 | POST | `/push/test` | 给所有已订阅的设备发一条测试通知，返回 `{devices, sent, errors}` |

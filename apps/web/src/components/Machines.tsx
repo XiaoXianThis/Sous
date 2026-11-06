@@ -6,6 +6,7 @@ import { jobTitle, latestJob } from '../lib/jobs'
 import type { AgentInfo, Node, Updates } from '../lib/types'
 import AgentIcon from './AgentIcon'
 import AgentPanel from './AgentPanel'
+import { SheetPlaceContext } from './Sheet'
 import Icon from './Icon'
 import ConfigEditor from './ConfigEditor'
 
@@ -161,7 +162,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
 
   const pairCommand = code ? `sous pair ${location.origin} ${code.code}` : ''
   return (
-    <>
+    <SheetPlaceContext.Provider value="nested">
       <div className="backdrop" role="presentation" onClick={onClose}></div>
       <div className="sheet gap-2.5" role="dialog" aria-modal="true" aria-label="机器">
         <header className="flex items-center justify-between">
@@ -203,7 +204,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="relative grid place-items-center w-9 h-9 rounded-[12px] bg-sunken text-muted flex-none">
                   <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={19} />
-                  <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--panel)] ${n.online ? 'bg-ok' : 'bg-faint'}`}></span>
+                  <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--panel)] ${n.online ? 'bg-[var(--online)]' : 'bg-faint'}`}></span>
                 </span>
                 {renaming === n.id ? (
                   <>
@@ -315,6 +316,6 @@ export default function Machines({ onClose }: { onClose: () => void }) {
       {/* Opened from a machine, on top of this sheet. */}
       {panel && panelNode && <AgentPanel node={panelNode} name={panel.agent} onClose={() => setPanel(null)} />}
       {nodeFile && fileNode && <ConfigEditor nodeId={fileNode.id} agent="sous" file="node" title={`${fileNode.name} · node.json`} onClose={() => setNodeFile(null)} />}
-    </>
+    </SheetPlaceContext.Provider>
   )
 }

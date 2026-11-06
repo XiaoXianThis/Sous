@@ -79,7 +79,7 @@ describe('@ references', () => {
   it('lists active projects only and filters as you type', async () => {
     setProjects([project('p1', 'sous'), project('p2', 'blog'), project('p3', 'old-site', 1)])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('看看 @')
     expect(options()).toEqual(['sous', 'blog'])
     await type('bl')
@@ -89,7 +89,7 @@ describe('@ references', () => {
   it('picks with the keyboard and sends the project id', async () => {
     setProjects([project('p1', 'sous'), project('p2', 'blog')])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('@')
     await key('ArrowDown')
     expect(el.querySelector('[aria-selected=true]')?.textContent).toBe('blog')
@@ -106,7 +106,7 @@ describe('@ references', () => {
   it('picks with the mouse, keeping the text after the caret', async () => {
     setProjects([project('p1', 'sous'), project('p2', 'blog')])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('改一下')
     box().setSelectionRange(0, 0)
     await type('@so')
@@ -119,7 +119,7 @@ describe('@ references', () => {
   it('Tab picks, Escape closes without picking', async () => {
     setProjects([project('p1', 'sous')])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('@s')
     await key('Escape')
     expect(menu()).toBeNull()
@@ -133,7 +133,7 @@ describe('@ references', () => {
   it('drops a reference whose tag was deleted', async () => {
     setProjects([project('p1', 'sous')])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('@')
     await key('Enter')
     await act(async () => {
@@ -147,7 +147,7 @@ describe('@ references', () => {
   it('says so when there is nothing to reference', async () => {
     setProjects([project('p3', 'old-site', 1)])
     await render()
-    box().focus()
+    act(() => box().focus())
     await type('@')
     expect(options()).toEqual([])
     expect(menu()?.textContent).toContain('没有可引用的项目')
@@ -156,5 +156,31 @@ describe('@ references', () => {
   })
 })
 
-vi.mock('./ModelSwitch', () => ({ default: () => null }))
+vi.mock('./ModelSwitch', () => ({ default: ({ placement = 'composer' }: { placement?: string }) => <button data-model-placement={placement}>模型</button> }))
+vi.mock('../lib/phone', () => ({ usePhone: () => phone.value }))
+const phone = vi.hoisted(() => ({ value: false }))
 vi.mock('./ContextMeter', () => ({ ContextPanel: () => null, ContextRing: () => null, useThreadContext: () => [null, () => {}] }))
+
+
+describe('phone composer', () => {
+  it('puts the model in the header and dismisses the keyboard', async () => {
+    phone.value = true
+    try {
+      await render()
+      expect(el.querySelector('.chat-head [data-model-placement=header]')).not.toBeNull()
+      expect(el.querySelector('.composer-tools [data-model-placement]')).toBeNull()
+      act(() => box().focus())
+      expect(el.querySelector('[data-typing]')).not.toBeNull()
+      const hide = el.querySelector('[aria-label=收起键盘]') as HTMLButtonElement
+      expect(hide).not.toBeNull()
+      act(() => hide.click())
+      expect(document.activeElement).not.toBe(box())
+      expect(el.querySelector('.kb-hide')).toBeNull()
+    } finally { phone.value = false }
+  })
+  it('keeps the desktop model in the composer', async () => {
+    await render()
+    expect(el.querySelector('.composer-tools [data-model-placement=composer]')).not.toBeNull()
+    expect(el.querySelector('.chat-head [data-model-placement]')).toBeNull()
+  })
+})

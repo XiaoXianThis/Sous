@@ -1,7 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { resolved, setTheme, useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
-import { barAfterScroll } from '../lib/gesture'
 import { useStoredWidth } from '../lib/resize'
 import ChatPanel from './ChatPanel'
 import Icon from './Icon'
@@ -88,15 +87,6 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
     ui.state.settings = ''
     ui.emit()
   }
-  // Phone: the tab bar shrinks while the workbench scrolls down.
-  const [barMin, setBarMin] = useState(false)
-  const lastY = useRef(0)
-  const onWorkScroll = (e: React.UIEvent<HTMLElement>) => {
-    const y = e.currentTarget.scrollTop
-    setBarMin((m) => barAfterScroll(m, lastY.current, y))
-    lastY.current = y
-  }
-  useEffect(() => setBarMin(false), [uiState.tab, uiState.settings])
   const tabs = [
     { key: 'work', icon: 'grid', text: '工作台', count: pending, on: uiState.tab === 'work' && !uiState.settings, act: () => setTab('work') },
     { key: 'chat', icon: 'chat', text: '对话', count: 0, on: uiState.tab === 'chat' && !uiState.settings, act: () => setTab('chat') },
@@ -113,7 +103,6 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
       <div
         className={`shell ${uiState.chatOpen ? '' : 'chat-closed'}`}
         data-tab={uiState.tab}
-        data-bar={barMin ? 'min' : undefined}
         data-settings={uiState.settings ? '' : undefined}
         style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
         <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+var(--safe-t))] pb-[calc(14px+var(--safe-b))]" aria-label="主导航">
@@ -147,7 +136,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
                   onClick={() => openSettings('machines')}
                 >
                   <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={19} />
-                  <span className={`absolute bottom-[5px] right-[5px] w-[9px] h-[9px] rounded-full shadow-[0_0_0_2px_var(--rail)] ${n.online ? (busy ? 'bg-info live-dot' : 'bg-ok') : 'bg-faint'}`}></span>
+                  <span className={`absolute bottom-[5px] right-[5px] w-[9px] h-[9px] rounded-full shadow-[0_0_0_2px_var(--rail)] ${n.online ? (busy ? 'bg-info live-dot' : 'bg-[var(--online)]') : 'bg-faint'}`}></span>
                 </button>
               )
             })}
@@ -160,7 +149,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           </RailButton>
         </nav>
 
-        <main className="work overflow-y-auto min-w-0 min-h-0 pt-[var(--safe-t)]" aria-label="工作台" onScroll={onWorkScroll}>
+        <main className="work overflow-y-auto min-w-0 min-h-0 pt-[var(--safe-t)]" aria-label="工作台">
           <Workbench />
         </main>
 
@@ -185,7 +174,6 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           className="tabbar glass"
           aria-label="主导航"
           style={{ '--tabs': tabs.length, '--tab-i': tabIndex } as React.CSSProperties}
-          onClick={() => barMin && setBarMin(false)}
         >
           <span className="tabbar-lens" aria-hidden="true"></span>
           {tabs.map((t) => (
@@ -194,11 +182,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
               className="tabbar-item"
               aria-label={t.text}
               aria-current={t.on ? 'page' : undefined}
-              onClick={(e) => {
-                // A tap on the shrunk bar only brings it back.
-                if (barMin) return e.stopPropagation(), setBarMin(false)
-                t.act()
-              }}
+              onClick={() => t.act()}
             >
               <Icon name={t.icon} size={24} />
               <span>{t.text}</span>

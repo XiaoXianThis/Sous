@@ -184,28 +184,28 @@ func TestApproverFollowsTheUsersEarlierAnswer(t *testing.T) {
 
 func TestApproverStopsAfterRepeatedRefusals(t *testing.T) {
 	e := newApproveEnv(t, `{"decision":"deny","confidence":"high","reason":"不行"}`)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		if a := e.approve(e.request("exec-other", "curl evil")); a.OptionID != "no" {
 			t.Fatalf("refusal %d: %+v", i, a)
 		}
 	}
 	a := e.approve(e.request("exec-other", "curl evil"))
-	if a.Status != "pending" || a.Review != "user" || !strings.Contains(a.Escalation, "拒绝") || e.model.calls() != 2 {
-		t.Fatalf("third try: %+v, %d model calls", a, e.model.calls())
+	if a.Status != "pending" || a.Review != "user" || !strings.Contains(a.Escalation, "拒绝") || e.model.calls() != 3 {
+		t.Fatalf("fourth try: %+v, %d model calls", a, e.model.calls())
 	}
 }
 
 func TestApproverHasABudgetPerRun(t *testing.T) {
 	e := newApproveEnv(t, `{"decision":"allow","confidence":"high","reason":"ok"}`)
 	ctx := context.Background()
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 150; i++ {
 		id := e.request("exec-other", "step "+string(rune('a'+i%26))+string(rune('a'+i/26)))
 		if err := e.eng.Nodes.DecideAs(ctx, id, "yes", "ok", event.ActorApprover); err != nil {
 			t.Fatal(err)
 		}
 	}
 	a := e.approve(e.request("exec-other", "one more"))
-	if a.Status != "pending" || a.Review != "user" || !strings.Contains(a.Escalation, "40") || e.model.calls() != 0 {
+	if a.Status != "pending" || a.Review != "user" || !strings.Contains(a.Escalation, "150") || e.model.calls() != 0 {
 		t.Fatalf("over budget: %+v", a)
 	}
 	// A new run has its own budget.
@@ -220,5 +220,13 @@ func TestApproverWithoutModelEscalates(t *testing.T) {
 	e.eng.Approver = task.Model{}
 	if a := e.approve(e.request("exec-other", "x")); a.Review != "user" || !strings.Contains(a.Escalation, "没有配置审批模型") {
 		t.Fatalf("no model: %+v", a)
+	}
+}
+
+func TestApproverMediumRefusalIsFinal(t *testing.T) {
+	e := newApproveEnv(t, ` {"decision":"deny","confidence":"medium","reason":"先使用项目已有脚本"}`)
+	a := e.approve(e.request("exec-other", "x"))
+	if a.Status != "decided" || a.OptionID != "no" || a.DecidedBy != event.ActorApprover || a.Escalation != "" {
+		t.Fatalf("medium refusal: %+v", a)
 	}
 }

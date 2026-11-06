@@ -110,7 +110,8 @@ func TestWorkspacesProjectsAndSetup(t *testing.T) {
 	// Cloning puts a registered project into the workspace.
 	origin := te.origin
 	p4name := "cloned"
-	p4, err := te.tasks.PutProject(ctx, task.ProjectInput{Name: &p4name, RepoURL: &origin}, event.ActorUser)
+	manual := "default"
+	p4, err := te.tasks.PutProject(ctx, task.ProjectInput{Name: &p4name, RepoURL: &origin, DefaultMode: &manual}, event.ActorUser)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -224,7 +224,7 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 		return store.Run{}, errors.New("agent and prompt are required")
 	}
 	if r.PermissionMode == "" {
-		r.PermissionMode = proto.ModeDefault
+		r.PermissionMode = proto.ModeAuto
 	}
 	if r.NodeID == "" {
 		id, err := h.pickNode(ctx, r.Agent)

@@ -26,6 +26,7 @@
   --danger: var(--text);
   --done: var(--faint);
   --ok: var(--muted);
+  --online: #34c759;
   --info: var(--text);
   --user-bubble: #ececec;
   --user-text: rgb(20 20 20 / .92);
@@ -82,6 +83,7 @@
   --danger: var(--text);
   --done: var(--faint);
   --ok: var(--muted);
+  --online: #30d158;
   --info: var(--text);
   --user-bubble: #2c2c2c;
   --user-text: rgb(228 228 228 / .94);
@@ -371,9 +373,12 @@
   /*
    * Phones, after iOS 26/27 Liquid Glass: content runs edge to edge on the
    * gray grouped background and the controls float over it as glass. The tab
-   * bar is a capsule above the home indicator that shrinks while you scroll.
+   * bar is a capsule above the home indicator.
    */
   .shell, .shell.chat-closed { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); background: var(--chrome); position: relative; }
+  /* The page never scrolls on a phone: the content areas scroll inside. */
+  html, body { overflow: hidden; }
+  .shell, .shell.chat-closed { overflow: hidden; }
   .shell .rail { display: none; }
   .shell .work, .shell .side { grid-row: 1; grid-column: 1; border-radius: 0; box-shadow: none; }
   .shell .work { background: var(--chrome); padding-top: 0; padding-bottom: var(--tabbar-space); }
@@ -385,7 +390,7 @@
   .shell .work .card[data-project-card] { box-shadow: none; border-radius: 22px; }
   /* The composer floats above the tab bar; with the keyboard up the bar hides. */
   .shell .side .chat-composer { padding-bottom: calc(var(--tabbar-space) - 6px); }
-  :root.kb-open .shell .side .chat-composer { padding-bottom: 8px; }
+  :root.kb-open .shell .side .chat-composer, .shell:has(.side .chat-composer textarea:focus) .side .chat-composer { padding-bottom: 8px; }
   /* iOS zooms into a focused field under 16px. */
   input, select, textarea, .mention-layer { font-size: 16px !important; }
 }
@@ -415,13 +420,10 @@
 }
 .tabbar-item[aria-current='page'] { color: var(--accent); }
 .tabbar-item:active { transform: scale(1.1); }
-/* Shrunk while scrolling down: only the current tab, as a glass circle. */
-.shell[data-bar='min'] .tabbar { right: calc(100% - 18px - var(--tabbar-h)); grid-template-columns: 1fr; }
-.shell[data-bar='min'] .tabbar-item:not([aria-current='page']), .shell[data-bar='min'] .tabbar-lens { display: none; }
-.shell[data-bar='min'] .tabbar-item span:not(.badge) { display: none; }
 /* Over the full-screen settings, which act as the third tab on a phone. */
 .shell[data-settings] .tabbar { z-index: 30; }
-:root.kb-open .tabbar { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+/* Hidden for real (not slid off screen): out of layout, hit testing and the accessibility tree. */
+:root.kb-open .tabbar, .shell:has(.side .chat-composer textarea:focus) .tabbar { display: none; }
 @media (min-width: 761px) { .tabbar { display: none; } }
 
 /*
@@ -485,9 +487,13 @@
  */
 .chat-phone { position: relative; }
 .chat-phone > .chat-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   position: absolute; inset: 0 0 auto; z-index: 6; border: 0; gap: 8px;
   padding: calc(var(--safe-t) + 6px) 12px 6px;
 }
+.chat-phone > .chat-head > :nth-child(1) { justify-self: start; max-width: 100%; }
+.chat-phone > .chat-head > :nth-child(2) { justify-self: center; }
+.chat-phone > .chat-head > :nth-child(3) { justify-self: end; }
 .chat-phone > .chat-head::before {
   content: ''; position: absolute; inset: 0 0 -24px; z-index: -1; pointer-events: none;
   background: linear-gradient(var(--bg) 0 50%, color-mix(in srgb, var(--bg) 60%, transparent) 75%, transparent);
@@ -496,15 +502,18 @@
 }
 .chat-phone > .chat-scroll { padding-top: calc(var(--safe-t) + 58px); padding-bottom: var(--composer-h, 96px); }
 .chat-phone > .chat-composer { position: absolute; inset: auto 0 0; z-index: 6; max-width: none; }
-/* One row like iOS Messages: the field and the send button side by side, the context chip above. */
-.chat-phone .composer-box { grid-template-columns: minmax(0, 1fr) auto; align-items: end; column-gap: 8px; row-gap: 0; }
+/* Attachments, text, then tools and send on one shared row. */
+.chat-phone .composer-box { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 2px; }
 .chat-phone .composer-box > .composer-tray { grid-row: 1; grid-column: 1 / -1; }
-.chat-phone .composer-box > .composer-tools { grid-row: 2; grid-column: 1 / -1; justify-self: start; max-width: 100%; margin: 2px 0 4px; }
-.chat-phone .composer-box > .composer-input { grid-row: 3; grid-column: 1; }
+.chat-phone .composer-box > .composer-tools { grid-row: 3; grid-column: 1; justify-self: start; max-width: 100%; margin: 0; }
+.chat-phone .composer-box > .composer-input { grid-row: 2; grid-column: 1 / -1; }
 .chat-phone .composer-input > textarea { min-height: 36px; padding-top: 6px; }
 .chat-phone .composer-input > .mention-layer { padding-top: 6px; }
-.chat-phone .composer-box > .composer-send { grid-row: 3; grid-column: 2; margin-bottom: 1px; }
+.chat-phone .composer-box > .composer-send { grid-row: 3; grid-column: 2; margin: 0; }
 .chat-phone .composer-tools > .flex-1 { display: none; }
+
+.chat-phone .kb-hide { position: absolute; right: 12px; bottom: 100%; width: 38px; height: 38px; z-index: 7; }
+.chat-phone[data-typing] > .chat-scroll { padding-bottom: calc(var(--composer-h, 96px) + 46px); }
 
 /* A pushed phone page (settings detail, project): it slides in from the right. */
 .push-in { animation: push-in .42s cubic-bezier(.2, .9, .25, 1); }

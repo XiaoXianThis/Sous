@@ -10,16 +10,16 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 
 | task | command | windows |
 |---|---|---|
-| install | npm ci | |
-| dev | npm run dev | |
-| test | npm test | |
-| check | npm run check | |
-| build | npm run build -- --outDir "$WOK_OUT" | |
+| install | bun install | |
+| dev | bun run dev | |
+| test | bun run test | |
+| check | bun run check | |
+| build | bun run build -- --outDir "$WOK_OUT" | |
 
 ## Conventions
 
-- 使用 npm（不要用 pnpm 或 yarn），锁文件是 `package-lock.json`。
-- `npm run dev` 在 5173 端口启动，把 `/api`、`/ws` 代理到 `SOUS_HUB`（默认 `http://127.0.0.1:8787`，先 `wok dev core`）。也可以 `wok build web` 之后直接打开 Hub 的 8787 端口。
+- 使用 bun 运行前端 CLI（`bun install`、`bun run`）；现有锁文件是 `package-lock.json`。
+- `bun run dev` 在 5173 端口启动，把 `/api`、`/ws` 代理到 `SOUS_HUB`（默认 `http://127.0.0.1:8787`，先 `wok dev core`）。也可以 `wok build web` 之后直接打开 Hub 的 8787 端口。
 - 状态变化写成纯函数放在 `src/lib/reduce.ts`，并配上 `*.test.ts` 单元测试；组件里不写事件处理逻辑。
 - 共享状态在 `src/lib/app.ts`：`chat`、`ui`、`wb` 是可变的 store。改完字段后必须调用对应的 `emit()`，组件用 `useChat()` / `useUi()` / `useWb()` 订阅；不调用 `emit()` 的修改不会重绘。
 - 构建时 `vite.config.ts` 写出 `build-info.json`（commit、是否有未提交改动、构建时间），并把同样的信息定义成 `__BUILD__`；Hub 的 `/healthz` 和设置页的“版本”据此提示旧构建。首包只放 React、图标和 Markdown：设置、项目对话框、终端日志用 `lazy()` 加载，`highlight.js` 在第一次出现代码块时才加载（`Markdown.tsx` 的 `useHljs`）；新加的大依赖也要这样分出去。
@@ -44,12 +44,13 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 - 模型：设置的“模型”页是 `Models.tsx`（角色的模型 / 思考强度、供应商增删改、读取模型列表、测试）；聊天标题旁的 `ModelSwitch.tsx` 直接切主管的模型和思考强度。选项值是 `provider_id + \u0000 + model`（`choiceValue` / `parseChoice`）。改供应商可能 401 `reauth`，按钮里调 `reauthenticate()` 再重试。显示成“跟主管一样”的角色（`inherited`）不要把主管的值当成自己的。
 - 项目位置：`Locations.tsx` 的机器标签显示 `gitMark`（↓落后 ↑未推送 ●未提交），点开是状态和“同步”“存成 WIP 分支”（`api.repoSync` / `repoWip`）。`node.repos` 事件让 `nodesRev` 增加，总览会重拉。
 - Hub 的 CSP 禁止内联脚本和外部资源：不要在 `index.html` 里写 `<script>` 内容，也不要引用其他域名的脚本、样式、字体。
-- 手机布局（≤760px，`src/lib/phone.ts` 的 `PHONE_QUERY` / `usePhone()`，和 `app.css` 的断点一致）走 iOS 26/27 Liquid Glass（决策见 `docs/decisions/0018-phone-liquid-glass.md`）：灰色分组背景（`--chrome`）上放无描边的白卡片，控件是浮在内容上的玻璃（`.glass`，材质变量 `--glass*`，浅色深色各一套）。`.glass` 的材质画在 `::after`、高光描边在 `::before`，元素自己要有定位；不要直接在元素上写 `backdrop-filter`，那样里面 `position: fixed` 的弹层会被困住（`.sheet` 同理，材质也在 `::after`）。圆钮 `.glass-btn`（44px，按下放大），多个操作放进一个 `.glass-group` 胶囊（里面用 `.phone-bar-btn`），带字的胶囊 `.glass-pill`。底部是悬浮的玻璃标签栏（`Shell` 的 `.tabbar`，滑动的 `.tabbar-lens`，工作台往下滚时 `data-bar="min"` 缩成圆，算法是 `gesture.ts` 的 `barAfterScroll`）；设置是第三个标签：手机上 `SettingsModal` 是分组列表（`ui.settings === 'home'`，桌面把 `home` 当第一页），点进去 `.push-in` 推入，标签栏在它上面（`.shell[data-settings]`）。页面顶部是 `PhoneHeader.tsx`（没有底色，只有玻璃按钮：`leading` 放 `BackButton`，`actions` 自动放进玻璃胶囊；大标题滚走后出现渐隐，`fade` 指定渐隐成什么颜色）。聊天在手机上是 `.chat-phone`：顶栏和输入框都浮在时间线上，输入框是一行的玻璃胶囊，高度写进 `--composer-h`。项目弹窗在手机上是推入的全屏页，顶栏后退按钮一层一层退（项目对话 → 任务 / 文件 → 列表 → 关闭），Escape 也一样。弹出层用 `.backdrop` + `.sheet`（手机上是离边 8px、圆角 34px 的玻璃抽屉），不用桌面的 popover。数据和业务组件两端共用，只有页面外壳按 `usePhone()` 分开。
+- 手机布局（≤760px，`src/lib/phone.ts` 的 `PHONE_QUERY` / `usePhone()`，和 `app.css` 的断点一致）走 iOS 26/27 Liquid Glass（决策见 `docs/decisions/0018-phone-liquid-glass.md`）：灰色分组背景（`--chrome`）上放无描边的白卡片，控件是浮在内容上的玻璃（`.glass`，材质变量 `--glass*`，浅色深色各一套）。`.glass` 的材质画在 `::after`、高光描边在 `::before`，元素自己要有定位；不要直接在元素上写 `backdrop-filter`，那样里面 `position: fixed` 的弹层会被困住（`.sheet` 同理，材质也在 `::after`）。圆钮 `.glass-btn`（44px，按下放大），多个操作放进一个 `.glass-group` 胶囊（里面用 `.phone-bar-btn`），带字的胶囊 `.glass-pill`。底部是悬浮的玻璃标签栏（`Shell` 的 `.tabbar`，滑动的 `.tabbar-lens`，标签栏始终展开；键盘打开或聊天输入框聚焦时隐藏）；设置是第三个标签：手机上 `SettingsModal` 是分组列表（`ui.settings === 'home'`，桌面把 `home` 当第一页），点进去 `.push-in` 推入，标签栏在它上面（`.shell[data-settings]`）。页面顶部是 `PhoneHeader.tsx`（没有底色，只有玻璃按钮：`leading` 放 `BackButton`，`actions` 自动放进玻璃胶囊；大标题滚走后出现渐隐，`fade` 指定渐隐成什么颜色）。聊天在手机上是 `.chat-phone`：顶栏和输入框都浮在时间线上，输入框是文字在上、工具和发送在下的玻璃胶囊，高度写进 `--composer-h`。项目弹窗在手机上是推入的全屏页，顶栏后退按钮一层一层退（项目对话 → 任务 / 文件 → 列表 → 关闭），Escape 也一样。弹出层用 `.backdrop` + `.sheet`（手机上是离边 8px、圆角 34px 的玻璃抽屉），不用桌面的 popover。数据和业务组件两端共用，只有页面外壳按 `usePhone()` 分开。
 - 触屏行为在 `src/lib/ios.ts`（`installTouch()`，`main.tsx` 里装上；纯计算在 `gesture.ts`，两者都有测试）：拦掉双指缩放；`visualViewport` 写 `--vv-h` / `--vv-top` / `--kb` 和 `<html class="kb-open">`，`#root` 在触屏上按它定高，所以键盘不会顶起页面（底部固定元素用 `bottom: var(--kb)`）；`.sheet` 往下拖关闭（等同点前面的 `.backdrop`；从输入框、`.xterm`、`[data-no-drag]` 上开始的不算）；主屏 App / WebView（`html[data-standalone]`）里从左边缘右滑返回：点最上层 `[role=dialog]`（`position: fixed` 且可见）里最后一个可见的 `[data-back]`，没有就发 Escape；只想滑走一部分内容时把它标 `data-page`。新增弹层、返回按钮时按这套约定加属性。触屏上界面文字不可选、不弹长按菜单，要能复制的文字加 `.selectable`（`.md`、`pre`、`code`、输入框、终端已经可以）。触屏上所有元素 `overscroll-behavior: none`，不回弹。
+- 设置页里打开的二级弹窗（机器 → agent 管理 → 配置编辑等）：设置页把自己的根 `Sheet` 压平进页面（`SheetPlaceContext` 为 `root`），其中再开的 `Sheet`（`nested`）用 portal 画到 `<body>`，否则会被设置面板的 `overflow-hidden` 裁掉，手机上还会被标签栏盖住；自带根节点的组件（如 `Machines`）要自己把 context 设成 `nested`。手机（≤760px）上 `html, body, .shell` 都是 `overflow: hidden`，页面不滚动，滚动只发生在内容区内部；键盘打开或聊天输入框聚焦时标签栏是 `display: none`（真隐藏，不是滑出屏幕）。
 - 安全区和尺寸：用 `var(--safe-t)` / `var(--safe-b)`（键盘打开时 `--safe-b` 为 0），不要直接写 `env(safe-area-inset-*)`；高度用 `dvh` 不用 `vh`。标签栏占的高度是 `var(--tabbar-space)`，手机页面底部要留出来。全屏弹窗自己留安全区。
 - 在内置浏览器面板里验收时，只改哈希的导航不会重新加载页面；要看新构建，用 `location.reload()`。
 - 对话的上下文：`ContextMeter.tsx` 的 `useThreadContext`（`GET /threads/{id}/context`，按 `chat.contextRev` 和消息数去抖重拉）、标题栏的占用环 `ContextRing` 和面板 `ContextPanel`（摘要查看和修改、缓存命中、立即整理）；时间线里 `covers_up_to` 处的分隔线位置由 `src/lib/context.ts` 的 `dividerAt` 计算。模型页里主管那一行下面是上下文窗口（`context_window`），改模型时不带这个字段，Hub 会保留它。
-- 图片和文件输入：输入框里加了回形针按钮、粘贴（`onPaste`，`filesOf` 只在剪贴板没有文字时才拿文件，从网页复制图文时留给文字）和拖放；文件一添加就 `api.upload`，消息只带附件 id（`ChatView` 的 `pending` 列表，上传中不能发送）。大图（>3 MB 或边长 >2400px）在 `src/lib/attachments.ts` 的 `shrinkImage` 里缩成 JPEG 再传。`MAX_FILES` / `MAX_FILE` 要和 Hub 的 `attach` 保持一致。用户消息的附件由 `Message.tsx` 的 `Attachments` 显示（图片缩略图，其他文件下载条）。模型选择 `ModelSwitch` 现在在输入框的工具行（回形针右边，弹层向上展开），不在标题栏；手机上输入框是 `.composer-tray`（附件）/ `.composer-tools`（工具行）/ 文字 / `.composer-send` 四块，`app.css` 里按网格行排列。
+- 图片和文件输入：输入框里加了回形针按钮、粘贴（`onPaste`，`filesOf` 只在剪贴板没有文字时才拿文件，从网页复制图文时留给文字）和拖放；文件一添加就 `api.upload`，消息只带附件 id（`ChatView` 的 `pending` 列表，上传中不能发送）。大图（>3 MB 或边长 >2400px）在 `src/lib/attachments.ts` 的 `shrinkImage` 里缩成 JPEG 再传。`MAX_FILES` / `MAX_FILE` 要和 Hub 的 `attach` 保持一致。用户消息的附件由 `Message.tsx` 的 `Attachments` 显示（图片缩略图，其他文件下载条）。桌面模型选择 `ModelSwitch` 在输入框工具行（回形针右边，弹层向上展开）；手机上模型选择在顶栏正中（`ModelSwitch placement="header"`，菜单向下展开）。手机输入框是 `.composer-tray`（附件）/ `.composer-input`（文字）/ `.composer-tools` + `.composer-send`（回形针、上下文和发送同排）三行；聚焦时在胶囊右上角外显示 `.kb-hide` 圆形收起键盘按钮，时间线额外留出 46px。`gesture.ts` 的 `scrollAfterResize` 在视口改变时保持贴底或保持视口底部内容，ChatView 用 ResizeObserver 监听时间线高度。
 - 灵活的任务（`docs/decisions/0022`）：任务的 `place`、`review`、`on_fail`、`base_branch` + `base_from` 没有默认值，`TaskDetail` 的表单里“还没定”就留空，派发前由 Hub 检查；`TaskView` 显示“怎么做”（`placeText`、`reviewText`、分支和 `gitStateText`）和等你验收时的“通过 / 要改”（`api.verdict`）。`status.ts` 里做完的任务一律是“已结束”，`git_state` 只出现在 badge 文案（未合并、已合并、PR 已开…）；`userReviewing`（`status_reason` 含“等你验收”）算要你处理；阶段条没有交付阶段，`review: none` 时也没有验收阶段。项目卡上的“N 未合并”是 `ProjectCard.unmerged`。顾问的回答是 `kind: consult` 的消息（`Message.tsx`：左侧色条、`source` 里的 agent 和项目，长回答折叠），顾问和 git 操作的 Run 按 `run.project_id` 归到项目卡（`projectOfRun`），git Run 的说明用 `runs.ts` 的 `gitOpText`。
 - MCP：设置的“MCP”页是 `Mcp.tsx`（`GET /mcp`；服务的添加/编辑/启停/重连/删除、按工具勾选对主管是否可见；主管提议的服务在“等你批准”里，要先填好缺的密钥才能批准）。有服务在 `connecting` 时每 1.5 秒重拉一次。环境变量和请求头的值只写不读（接口只返回名字），编辑时留空表示不改，同名行覆盖，× 删除。添加、编辑、批准会 401 `reauth`，用 `reauthenticate()` 再重试；只切换启用和工具勾选不需要。
 - @ 引用项目：输入框里在行首或空白后键入 `@` 弹出候选（`wb.data.projects` 里激活的项目，`src/lib/mention.ts` 的 `activeProjects` / `filterProjects` 模糊匹配），上下键 / 回车 / Tab / Esc 和鼠标都能选；选中后文字里插入 `@项目名 `，项目 id 记在 `ChatView` 的 `picked`，发送时 `keptMentions` 只保留文字里还在的，放进 `context.mentions: [{project_id, name}]`（`withMentions`）。输入框里的标签是垫在透明 textarea 下面的 `.mention-layer`（只画底色，字和光标仍是 textarea 的，字体、内边距、换行必须和 textarea 一致）；消息气泡里按 `context.mentions` 画成 `.mention-tag`，悬停显示项目名，点击用 `showProject` 打开项目弹窗。

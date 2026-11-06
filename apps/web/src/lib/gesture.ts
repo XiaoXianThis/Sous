@@ -1,5 +1,5 @@
 // Pure math behind the touch gestures in ios.ts: sheet drag-to-dismiss, the
-// edge swipe back, the tab bar that shrinks while scrolling, and the keyboard
+// edge swipe back, timeline resizing, and the keyboard
 // insets. Kept free of the DOM so it can be unit tested.
 
 /** How far a touch must move before it counts as a drag rather than a tap. */
@@ -47,17 +47,11 @@ export function velocityOf(samples: { t: number; v: number }[], now?: number): n
   return dt > 0 ? (b.v - a.v) / dt : 0
 }
 
-/**
- * The tab bar's state after a scroll from `prev` to `y` (scrollTop): it
- * shrinks after scrolling down a little past the top, and comes back on any
- * scroll up of a few pixels or near the top.
- */
-export function barAfterScroll(min: boolean, prev: number, y: number, top = 40): boolean {
-  if (y <= top) return false
-  const d = y - prev
-  if (d > 6) return true
-  if (d < -6) return false
-  return min
+/** Keep the viewport's bottom content in place when its height changes, or stick to the end. */
+export function scrollAfterResize(o: { prevHeight: number; height: number; scrollTop: number; scrollHeight: number; stick: boolean }): number {
+  const max = Math.max(0, o.scrollHeight - o.height)
+  const top = o.stick ? max : o.scrollTop + (o.prevHeight - o.height)
+  return Math.min(max, Math.max(0, top))
 }
 
 export interface ViewportBox {

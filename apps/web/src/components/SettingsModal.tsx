@@ -11,6 +11,7 @@ import Personas from './Personas'
 import PhoneHeader, { BackButton } from './PhoneHeader'
 import Schedules from './Schedules'
 import Settings from './Settings'
+import { SheetPlaceContext } from './Sheet'
 import Usage from './Usage'
 import Versions from './Versions'
 
@@ -86,7 +87,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || document.querySelector('.embed > .backdrop:not(:first-child)')) return
+      if (e.key !== 'Escape' || document.querySelector('[data-nested-sheet]')) return
       // On a phone a settings page goes back to the list first.
       if (phone && uiState.settings !== 'home') {
         ui.state.settings = 'home'
@@ -175,7 +176,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
         {open && (
           <div key={open.key} className="absolute inset-0 overflow-y-auto bg-chrome push-in settings-page" data-page>
             <PhoneHeader title={open.text} leading={<BackButton label="返回设置" onClick={home} />} />
-            <div className="embed px-4 pb-[var(--tabbar-space)]">{page(open.key)}</div>
+            <div className="embed px-4 pb-[var(--tabbar-space)]"><SheetPlaceContext.Provider value="root">{page(open.key)}</SheetPlaceContext.Provider></div>
           </div>
         )}
       </div>
@@ -187,7 +188,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
       {/* Clicking outside does not close settings: only the close button and Escape do. */}
       <div className="backdrop z-[28]" role="presentation"></div>
       <div
-        className="fixed z-[29] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100dvh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:inset-0 max-[760px]:translate-x-0 max-[760px]:translate-y-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
+        className="fixed z-[29] inset-0 m-auto w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100dvh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:m-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
         role="dialog"
         aria-modal="true"
         aria-label="设置"
@@ -226,7 +227,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
           </header>
           <div className="overflow-y-auto px-6 pt-5 pb-10 max-[760px]:px-4 max-[760px]:pt-4 max-[760px]:pb-[calc(24px+var(--safe-b))]">
             <div className="embed max-w-[760px]">
-              {page(current.key)}
+              <SheetPlaceContext.Provider value="root">{page(current.key)}</SheetPlaceContext.Provider>
             </div>
           </div>
         </div>

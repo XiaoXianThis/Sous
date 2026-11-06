@@ -11,7 +11,7 @@ func TestSupervisorPromptHasNoPresets(t *testing.T) {
 	p := Supervisor(Env{ThreadKind: "main"})
 	for _, want := range []string{
 		"讨论还是动手", "拿不准就当讨论", "consult", "project_read", "不要复述",
-		"place", "base_branch", "远端还没有的分支", "不要默认 main", "git_status", "拿不准就问", "memory_save", "task_verdict",
+		"place", "base_branch", "远端还没有的分支", "不要默认 main", "git_status", "拿不准就选用户当前检出的分支", "memory_save", "task_verdict",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("the prompt lacks %q", want)

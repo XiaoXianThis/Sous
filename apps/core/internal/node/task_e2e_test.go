@@ -207,7 +207,7 @@ func TestTaskCoreLoop(t *testing.T) {
 	defer te.startDaemon("write")()
 	ctx := context.Background()
 
-	tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true}))
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestEditingDetailReachesTheRunningAgent(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("write")()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Title: "x", Detail: "旧说明", Dispatch: true}))
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", Title: "x", Detail: "旧说明", Dispatch: true}))
 	var a store.Approval
 	te.waitFor("the agent to ask", func() bool {
 		as, _ := te.log.Store.Approvals(ctx, "pending", "")
@@ -592,7 +592,7 @@ func TestTaskStartsFromRemoteLatest(t *testing.T) {
 	before := git(te.repo, "rev-parse", "HEAD")
 	defer te.startDaemon("write")()
 
-	tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true,
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "Add hello", Detail: "创建 hello.txt", Dispatch: true,
 		BaseBranch: "main", BaseFrom: event.BaseRemote}))
 	if err != nil {
 		t.Fatal(err)
@@ -637,7 +637,7 @@ func TestOverlappingTasksAreReported(t *testing.T) {
 	defer te.startDaemon("write")()
 	ctx := context.Background()
 	mk := func(title string) store.Task {
-		tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: title, Detail: "创建 hello.txt", Dispatch: true}))
+		tk, err := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: title, Detail: "创建 hello.txt", Dispatch: true}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -663,5 +663,19 @@ func TestOverlappingTasksAreReported(t *testing.T) {
 	n, text := notices()
 	if n != 1 || !strings.Contains(text, "hello.txt") || !strings.Contains(text, a.ID) || !strings.Contains(text, b.ID) {
 		t.Fatalf("%d notices: %s", n, text)
+	}
+}
+
+func TestUnsetPermissionModeDispatchesAuto(t *testing.T) {
+	te := newTaskEnv(t)
+	defer te.startDaemon("edit")()
+	tk, err := te.tasks.Create(context.Background(), te.code(task.Input{Title: "默认自动权限", Dispatch: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	te.waitStatus(tk.ID, event.TaskDone)
+	runs := te.runs(tk.ID)
+	if len(runs) != 1 || runs[0].Mode != "auto" {
+		t.Fatalf("runs: %+v", runs)
 	}
 }

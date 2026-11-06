@@ -781,7 +781,7 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 	if purpose == event.PurposeReview {
 		persona = e.reviewerPersona(ctx)
 	}
-	mode := firstNonEmpty(t.PermissionMode, persona.DefaultMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
+	mode := firstNonEmpty(t.PermissionMode, persona.DefaultMode, proj.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeAuto)
 	thread := t.OriginThreadID
 	if thread == "" {
 		thread, _ = e.store().MainThreadID(ctx)

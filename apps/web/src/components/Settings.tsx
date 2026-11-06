@@ -8,7 +8,7 @@ import Sheet from './Sheet'
 
 const modeHelp: Record<string, string> = {
   default: '读文件、在 worktree 里改代码、跑测试直接放行；其他操作（执行命令、安装、push 等）都问你。',
-  auto: '原本要问你的操作先交给审批 agent 判断；它拿不准的、不可逆的，再问你。',
+  auto: '未设置时使用此模式；常规操作自动处理，其余先交审批 agent，只有关键风险或低把握时再问你。',
   open: '全部放行，只记录日志。底线规则仍然生效。',
 }
 const roleText: Record<string, string> = { supervisor: '主管', reviewer: '验收', approver: '审批', inspector: '巡检' }
@@ -86,10 +86,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <label
                   key={k}
                   className={`grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 items-baseline border border-line rounded-[12px] px-2.5 py-2 cursor-pointer ${
-                    s.default_mode === k ? 'border-accent bg-[color-mix(in_srgb,var(--accent)_6%,var(--panel))]' : ''
+                    (s.default_mode || 'auto') === k ? 'border-accent bg-[color-mix(in_srgb,var(--accent)_6%,var(--panel))]' : ''
                   }`}
                 >
-                  <input type="radio" name="mode" value={k} checked={s.default_mode === k} onChange={() => void patch({ default_mode: k as PermissionMode })} />
+                  <input type="radio" name="mode" value={k} checked={(s.default_mode || 'auto') === k} onChange={() => void patch({ default_mode: k as PermissionMode })} />
                   <strong>{v}</strong><span className="text-muted text-[13px]">{modeHelp[k]}</span>
                 </label>
               ))}

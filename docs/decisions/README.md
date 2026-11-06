@@ -35,3 +35,4 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0020](0020-long-thread-context.md) | 长对话的上下文：分段、结构化摘要、查回原文 | Accepted |
 | [0021](0021-mcp-servers.md) | 主管支持 MCP：页面上管理，agent 只能提议、用户批准 | Accepted |
 | [0022](0022-flexible-not-preset.md) | 灵活优先：去掉固定流程，交给主管判断 | Accepted |
+| [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted |

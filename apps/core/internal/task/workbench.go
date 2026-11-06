@@ -438,7 +438,7 @@ func (e *Engine) startSetup(ctx context.Context, in SetupInput, n store.Node, pu
 	if thread == "" {
 		thread, _ = e.store().MainThreadID(ctx)
 	}
-	mode := firstNonEmpty(p.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeDefault)
+	mode := firstNonEmpty(p.DefaultMode, e.setting(ctx, SettingDefaultMode), proto.ModeAuto)
 	title := "clone " + p.Name
 	if purpose == proto.PurposeCreate {
 		title = "新建项目 " + p.Name

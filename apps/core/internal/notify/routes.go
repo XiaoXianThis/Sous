@@ -104,7 +104,7 @@ func (n *Notifier) view(r *http.Request, roles func(context.Context) map[string]
 	st := n.Log.Store
 	mode, _ := st.Setting(ctx, task.SettingDefaultMode)
 	if mode == "" {
-		mode = "default"
+		mode = "auto"
 	}
 	agent, _ := st.Setting(ctx, task.SettingDefaultAgent)
 	subs, _ := st.PushSubscriptions(ctx)

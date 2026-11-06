@@ -5,6 +5,7 @@ import { jobTitle, latestJob } from '../lib/jobs'
 import type { ConfigOption, Node } from '../lib/types'
 import ConfigEditor from './ConfigEditor'
 const JobLog = lazy(() => import('./JobLog'))
+import Icon from './Icon'
 import Sheet from './Sheet'
 
 const catName: Record<string, string> = { model: '模型', thought_level: '思考强度' }
@@ -149,6 +150,8 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
     <ConfigEditor nodeId={node.id} agent={editing.agent} file={editing.file} title={editing.title} onClose={() => setEditing(null)} />
   ) : (
     <Sheet title={`${agent?.title ?? name} · ${node.name}`} onClose={onClose} wide>
+    <div className="relative grid gap-3.5 content-start min-h-[220px]">
+      <div className={`grid gap-3.5 content-start ${node.online ? '' : 'blur-[5px] pointer-events-none select-none'}`} aria-hidden={node.online ? undefined : true}>
       {!agent ? (
         <p className="text-muted text-[13px] m-0">这台机器没有报告这个 agent。</p>
       ) : (
@@ -163,9 +166,7 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
               这台机器缺少 {agent.missing.join('、')}{agent.missing.includes('npx') ? '：需要先安装 Node.js（nodejs.org），sous 通过 npx 启动它的 ACP 适配器' : ''}。
             </p>
           ) : null}
-          {!node.online ? (
-            <p className="text-warm text-[13px] m-0">机器离线，连上之后才能管理。</p>
-          ) : node.admin === 'off' ? (
+          {!node.online ? null : node.admin === 'off' ? (
             <p className="text-warm text-[13px] m-0">这台机器在 node.json 里关闭了远程管理（remote_admin: false），只能在那台电脑上修改。</p>
           ) : node.admin === 'unsupported' ? (
             <p className="text-warm text-[13px] m-0">这台机器上的 sous 版本太旧，不支持远程管理，请先更新 sous。</p>
@@ -281,6 +282,17 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
         </>
       )}
       {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}
+      </div>
+      {!node.online && (
+        <div className="absolute inset-0 z-[2] grid place-items-center p-6 text-center rounded-[14px] bg-[color-mix(in_srgb,var(--panel)_55%,transparent)]" role="status">
+          <div className="grid gap-1.5 justify-items-center">
+            <Icon name="server" size={28} className="text-muted" />
+            <strong className="text-[16px]">机器离线</strong>
+            <span className="text-muted text-[13px]">连上之后才能管理。</span>
+          </div>
+        </div>
+      )}
+    </div>
     </Sheet>
   )
 }

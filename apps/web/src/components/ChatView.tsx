@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import { useChat, useUi, useWb } from '../lib/app'
 import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
 import { usePhone } from '../lib/phone'
+import { scrollAfterResize } from '../lib/gesture'
 import { activeProjects, filterProjects, insertMention, keptMentions, mentionQuery, splitMentions, type MentionQuery } from '../lib/mention'
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
@@ -57,6 +58,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const [picking, setPicking] = useState(false)
   const [pending, setPending] = useState<Pending[]>([])
   const [dragging, setDragging] = useState(false)
+  const [typing, setTyping] = useState(false)
+  const prevHeight = useRef<number | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
@@ -82,6 +85,21 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     const ro = new ResizeObserver(() => {
       section.current?.style.setProperty('--composer-h', `${el.offsetHeight}px`)
       if (stick.current && scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [phone])
+
+  useEffect(() => {
+    const el = scroller.current
+    if (!phone || !el || typeof ResizeObserver === 'undefined') return
+    prevHeight.current = null
+    const ro = new ResizeObserver(() => {
+      const height = el.clientHeight
+      if (prevHeight.current !== null && prevHeight.current !== height) {
+        el.scrollTop = scrollAfterResize({ prevHeight: prevHeight.current, height, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, stick: stick.current })
+      }
+      prevHeight.current = height
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -285,9 +303,9 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const dot = uiState.status === 'online' ? 'bg-ok' : uiState.status === 'offline' ? 'bg-danger' : 'bg-faint'
 
   return (
-    <section ref={section} className={`flex flex-col min-h-0 h-full min-w-0 ${phone ? 'chat-phone' : ''}`} aria-label={label}>
+    <section ref={section} className={`flex flex-col min-h-0 h-full min-w-0 ${phone ? 'chat-phone' : ''}`} aria-label={label} data-typing={phone && typing ? '' : undefined}>
       <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
-        <div className={`relative picker ${phone ? 'shrink-0 max-w-[50%]' : 'min-w-0'}`}>
+        <div className="relative picker min-w-0">
           <button
             className={phone ? 'glass-pill glass max-w-full' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
             onClick={() => setPicking(!picking)}
@@ -320,7 +338,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             </div>
           )}
         </div>
-        <span className="flex-1"></span>
+        {phone ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
           {ctxView && ctxView.segment > 0 && <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />}
           <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
@@ -369,6 +387,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       </div>
 
       <form ref={composer} className="chat-composer px-3 pt-1 pb-[calc(12px+var(--safe-b))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
+        {phone && typing && <button type="button" className="kb-hide glass-btn glass" aria-label="收起键盘"
+          onPointerDown={(e) => e.preventDefault()} onClick={() => input.current?.blur()}><Icon name="chevron" size={18} /></button>}
         {sendError && <p className="text-danger text-[12.5px] m-0 ml-2 flex items-center gap-1" role="alert"><Icon name="alert" size={13} />{sendError}</p>}
         <div
           className={phone
@@ -463,7 +483,13 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               title={touch ? undefined : 'Enter 发送，Shift+Enter 换行，@ 引用项目'}
               onChange={(e) => { setDraft(e.target.value); syncMention() }}
               onSelect={syncMention}
-              onBlur={() => setMq(null)}
+              onFocus={() => {
+                setTyping(true)
+                if (phone && stick.current) requestAnimationFrame(() => {
+                  if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight
+                })
+              }}
+              onBlur={() => { setTyping(false); setMq(null) }}
               onScroll={syncLayer}
               onInput={resize}
               onKeyDown={onKey}
@@ -493,7 +519,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             >
               <Icon name="paperclip" size={17} />
             </button>
-            <ModelSwitch />
+            {!phone && <ModelSwitch />}
             <span className="w-1 flex-none"></span>
             {context ? (
               <span className="inline-flex gap-1 items-center text-[12px] text-muted bg-sunken rounded-[8px] h-7 pl-2 pr-0.5 max-w-full min-w-0" title="sous 会知道你在看这个">

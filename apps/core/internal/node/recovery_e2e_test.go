@@ -212,7 +212,7 @@ func TestInterruptedRunRestartsWithRecoveryNote(t *testing.T) {
 	prompts := filepath.Join(t.TempDir(), "prompts.txt")
 	_, stop := te.startDaemonWith("write", "FAKE_ACP_PROMPTS="+prompts)
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Dispatch: true}))
+	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "Add hello", Dispatch: true}))
 	run := te.firstRun(tk.ID)
 	te.waitFor("the agent to ask", func() bool {
 		as, _ := te.log.Store.Approvals(ctx, "pending", run.ID)

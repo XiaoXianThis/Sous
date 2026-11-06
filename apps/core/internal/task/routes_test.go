@@ -168,7 +168,7 @@ func TestSettingsAndPushEndpoints(t *testing.T) {
 		Roles       map[string]string
 	}
 	c.do("GET", "/api/v1/settings", nil, &s)
-	if s.DefaultMode != "default" || !s.Notify["approval"] || s.Roles["supervisor"] != "deepseek/x" {
+	if s.DefaultMode != "auto" || !s.Notify["approval"] || s.Roles["supervisor"] != "deepseek/x" {
 		t.Fatalf("defaults: %+v", s)
 	}
 	body := map[string]any{"default_mode": "auto", "notify": map[string]bool{"report": false},

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { axisOf, barAfterScroll, rubber, shouldDismiss, velocityOf, viewportVars } from './gesture'
+import { axisOf, scrollAfterResize, rubber, shouldDismiss, velocityOf, viewportVars } from './gesture'
 
 describe('axisOf', () => {
   it('waits until the touch moves past the slop', () => {
@@ -64,19 +64,13 @@ describe('velocityOf', () => {
   })
 })
 
-describe('barAfterScroll', () => {
-  it('stays full near the top', () => {
-    expect(barAfterScroll(true, 100, 20)).toBe(false)
-    expect(barAfterScroll(false, 0, 30)).toBe(false)
-  })
-  it('shrinks scrolling down and comes back scrolling up', () => {
-    expect(barAfterScroll(false, 100, 140)).toBe(true)
-    expect(barAfterScroll(true, 300, 280)).toBe(false)
-  })
-  it('ignores jitter of a few pixels', () => {
-    expect(barAfterScroll(true, 300, 297)).toBe(true)
-    expect(barAfterScroll(false, 300, 304)).toBe(false)
-  })
+describe('scrollAfterResize', () => {
+  const base = { prevHeight: 600, height: 300, scrollTop: 200, scrollHeight: 1800, stick: false }
+  it('sticks to the bottom', () => { expect(scrollAfterResize({ ...base, stick: true })).toBe(1500) })
+  it('moves with a shorter viewport', () => { expect(scrollAfterResize(base)).toBe(500) })
+  it('moves with a taller viewport', () => { expect(scrollAfterResize({ ...base, prevHeight: 300, height: 600, scrollTop: 500 })).toBe(200) })
+  it('clamps to zero', () => { expect(scrollAfterResize({ ...base, height: 900 })).toBe(0) })
+  it('clamps to the maximum', () => { expect(scrollAfterResize({ ...base, scrollTop: 1700 })).toBe(1500) })
 })
 
 describe('viewportVars', () => {

@@ -154,7 +154,7 @@ func TestInPlaceTaskAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: p.ID, Title: "加 hello", Place: event.PlaceInPlace,
+	tk, err := te.tasks.Create(ctx, task.Input{Mode: "default", ThreadID: te.main, ProjectID: p.ID, Title: "加 hello", Place: event.PlaceInPlace,
 		Review: event.ReviewModel, OnFail: event.OnFailAsk, Dispatch: true, Actor: event.ActorSupervisor})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +325,7 @@ func TestPullRequestAndDiscard(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("edit")()
 	ctx := context.Background()
-	a, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Add hello", Dispatch: true, Review: event.ReviewNone}))
+	a, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "Add hello", Dispatch: true, Review: event.ReviewNone}))
 	te.waitStatus(a.ID, event.TaskDone)
 	if _, err := te.tasks.StartGit(ctx, task.GitInput{Op: "pr", TaskID: a.ID}); err == nil {
 		t.Fatal("a pull request without a base")
@@ -345,7 +345,7 @@ func TestPullRequestAndDiscard(t *testing.T) {
 		t.Fatalf("gh: %s", gh)
 	}
 
-	b, _ := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "Try something", Dispatch: true, Review: event.ReviewNone}))
+	b, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "Try something", Dispatch: true, Review: event.ReviewNone}))
 	te.waitStatus(b.ID, event.TaskDone)
 	branch := te.task(b.ID).Branch
 	discard := te.gitOp(task.GitInput{Op: "discard", TaskID: b.ID, ThreadID: te.main})
@@ -408,7 +408,7 @@ func TestInPlaceCommitAndPush(t *testing.T) {
 	git("checkout", "-qb", "feature-x")
 	os.WriteFile(filepath.Join(te.repo, "mine.txt"), []byte("the user's own work\n"), 0o644)
 
-	tk, err := te.tasks.Create(ctx, task.Input{ThreadID: te.main, ProjectID: "p1", Title: "加 hello", Place: event.PlaceInPlace,
+	tk, err := te.tasks.Create(ctx, task.Input{Mode: "default", ThreadID: te.main, ProjectID: "p1", Title: "加 hello", Place: event.PlaceInPlace,
 		Review: event.ReviewNone, Dispatch: true, Actor: event.ActorSupervisor})
 	if err != nil {
 		t.Fatal(err)
@@ -425,6 +425,10 @@ func TestInPlaceCommitAndPush(t *testing.T) {
 	}
 	if st := git("status", "--porcelain"); !strings.Contains(st, "?? mine.txt") {
 		t.Fatalf("the user's file was touched: %s", st)
+	}
+	manual := "default"
+	if _, err := te.tasks.PutProject(ctx, task.ProjectInput{ID: "p1", DefaultMode: &manual}, event.ActorUser); err != nil {
+		t.Fatal(err)
 	}
 	pushed := te.gitOp(task.GitInput{Op: "push", ProjectID: "p1", Branch: "feature-x", ThreadID: te.main})
 	te.waitFor("the push approval", func() bool {

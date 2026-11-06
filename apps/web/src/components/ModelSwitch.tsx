@@ -17,7 +17,7 @@ const label = 'px-2.5 pt-1.5 pb-0.5 text-[11px] text-faint'
  * panel with its thinking effort. Placement, collisions and scroll locking
  * come from Radix. The change is kept on the Hub and applies to the next reply.
  */
-export default function ModelSwitch() {
+export default function ModelSwitch({ placement = 'composer' }: { placement?: 'composer' | 'header' }) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<ModelsView | null>(null)
   const [error, setError] = useState('')
@@ -44,9 +44,9 @@ export default function ModelSwitch() {
       <Menu.Trigger asChild>
         <button
           type="button"
-          className={`flex items-center gap-1 h-8 px-2 rounded-[9px] border-0 bg-transparent text-[12px] hover:bg-hover max-w-[200px] max-[760px]:max-w-[150px] min-w-0 ${sup?.model ? 'text-muted' : 'text-warm'}`}
+          className={`${placement === 'header' ? 'glass-pill glass max-w-[44vw] min-w-0' : 'flex items-center gap-1 h-8 px-2 rounded-[9px] border-0 bg-transparent text-[12px] hover:bg-hover max-w-[200px] max-[760px]:max-w-[150px] min-w-0'} ${sup?.model ? 'text-muted' : 'text-warm'}`}
           aria-label={`主管的模型：${name}`}
-          data-tip="主管用的模型"
+          data-tip={placement === 'header' ? undefined : '主管用的模型'}
         >
           <Icon name="cpu" size={14} />
           <span className="overflow-hidden text-ellipsis whitespace-nowrap font-mono">{name}</span>
@@ -54,7 +54,7 @@ export default function ModelSwitch() {
         </button>
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content side="top" align="start" sideOffset={4} collisionPadding={8}
+        <Menu.Content side={placement === 'header' ? 'bottom' : 'top'} align={placement === 'header' ? 'center' : 'start'} sideOffset={4} collisionPadding={8}
           className={`${panel} w-[260px] max-w-[calc(100vw-16px)] max-h-[min(420px,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto`}>
           {view && view.providers.length === 0 && <p className="m-0 p-2 text-[13px] text-muted">还没有模型供应商。</p>}
           {view?.providers.map((pr) => (
