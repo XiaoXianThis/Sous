@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { wb } from '../lib/app'
 import { oneLine, tail } from '../lib/live'
 import { looks } from '../lib/status'
 import { runMeta, type CardAgent } from '../lib/workbench'
+import { ApprovalStrip } from './ApprovalCard'
 import { Who } from './Avatar'
 import Icon from './Icon'
 
@@ -15,15 +17,22 @@ export default function AgentCard({ agent, onOpen }: { agent: CardAgent; onOpen:
   const look = looks[agent.look]
   const label = `${agent.title}，${look.text}，${agent.persona?.name ?? '未分配'}，${meta.agentTitle}`
   const working = agent.look === 'running' || agent.look === 'review'
+  // A pending approval that waits for a person takes the output summary's
+  // place (same height) and goes once answered; the review agent's are not
+  // shown. The chat does not draw approvals.
+  const [answered, setAnswered] = useState<string[]>([])
+  const asking = [...(wb.state.inbox?.approvals ?? []), ...(wb.state.data?.approvals ?? [])]
+    .find((a) => a.run_id === run.id && a.review === 'user' && (a.status ?? 'pending') === 'pending' && !answered.includes(a.id))
 
   return (
-    <button
-      className={`relative grid gap-2 w-full text-left border-0 rounded-[16px] p-3 min-w-0 overflow-hidden transition-colors tone-${look.tone} bg-[color-mix(in_srgb,currentColor_6%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_16%,transparent)] hover:bg-[color-mix(in_srgb,currentColor_10%,var(--panel))]`}
-      aria-label={label}
-      onClick={onOpen}
+    <div
+      className={`relative grid gap-2 w-full text-left rounded-[16px] p-3 min-w-0 overflow-hidden transition-colors tone-${look.tone} bg-[color-mix(in_srgb,currentColor_6%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_16%,transparent)] hover:bg-[color-mix(in_srgb,currentColor_10%,var(--panel))]`}
+      data-testid="agent-card"
     >
-      {working && <span className="absolute inset-x-0 top-0 h-[2px] shimmer" aria-hidden="true"></span>}
-      <span className="flex items-center gap-2.5 min-w-0">
+      {/* The whole card opens the run; the approval's buttons sit above it. */}
+      <button type="button" className="absolute inset-0 w-full h-full border-0 bg-transparent p-0 rounded-[16px] cursor-pointer" aria-label={label} onClick={onOpen}></button>
+      {working && <span className="absolute inset-x-0 top-0 h-[2px] shimmer pointer-events-none" aria-hidden="true"></span>}
+      <span className="relative flex items-center gap-2.5 min-w-0 pointer-events-none" aria-hidden="true">
         <Who persona={agent.persona} agent={run.agent || 'sous'} size={32} />
         <span className="grid min-w-0 flex-1 leading-tight">
           <span className="text-[14px] font-semibold text-ink overflow-hidden text-ellipsis whitespace-nowrap">{agent.title}</span>
@@ -45,7 +54,16 @@ export default function AgentCard({ agent, onOpen }: { agent: CardAgent; onOpen:
           <Icon name={look.icon} size={13} stroke={2.2} />
         </span>
       </span>
-      <span className="grid auto-rows-[18px] h-[36px] overflow-hidden content-start rounded-[10px] bg-[color-mix(in_srgb,var(--sunken)_70%,transparent)] px-2 py-0 text-[11.5px] font-mono text-muted">
+      {asking ? (
+        <ApprovalStrip
+          approval={asking}
+          size="slot"
+          onOpen={onOpen}
+          onDecided={() => setAnswered((l) => [...l, asking.id])}
+          className="relative w-full"
+        />
+      ) : (
+      <span className="relative pointer-events-none grid auto-rows-[18px] h-[36px] overflow-hidden content-start rounded-[10px] bg-[color-mix(in_srgb,var(--sunken)_70%,transparent)] px-2 py-0 text-[11.5px] font-mono text-muted">
         {acts.length === 0 ? (
           <span className="flex items-center gap-1.5 min-w-0 leading-[36px] h-[36px] text-faint">
             <span className="typing-dot w-1 h-1 rounded-full bg-current"></span>
@@ -72,6 +90,7 @@ export default function AgentCard({ agent, onOpen }: { agent: CardAgent; onOpen:
           ))
         )}
       </span>
-    </button>
+      )}
+    </div>
   )
 }

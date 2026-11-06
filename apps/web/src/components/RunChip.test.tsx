@@ -1,6 +1,5 @@
-// A Run chip in the chat turns into the approval when one waits for a person,
-// at the same place, and is a plain chip again otherwise; approvals the review
-// agent is still judging are not drawn.
+// A Run chip in the chat never draws the approval (it is answered on the
+// workbench's task card); it only says the run waits for you.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -44,19 +43,18 @@ afterEach(() => {
 })
 
 describe('RunChip approvals', () => {
-  it('turns into the approval while a person must answer', async () => {
+  it('stays a chip that says it waits while a person must answer', async () => {
     await render(view([approval('user')]))
-    expect(strip()).not.toBeNull()
-    expect(strip()!.textContent).toContain('写入 hello.txt')
-    expect(strip()!.textContent).toContain('允许')
-  })
-
-  it('stays a plain chip while the review agent judges, and once answered', async () => {
-    await render(view([approval('ai')]))
-    expect(strip()).toBeNull()
-    await render(view([approval('user', 'decided')]))
     expect(strip()).toBeNull()
     expect(el.textContent).toContain('写个文件')
+    expect(el.textContent).toContain('等你审批')
+  })
+
+  it('does not say it waits while the review agent judges, or once answered', async () => {
+    await render(view([approval('ai')]))
+    expect(el.textContent).not.toContain('等你审批')
+    await render(view([approval('user', 'decided')]))
+    expect(el.textContent).not.toContain('等你审批')
   })
 
   it('offers allow once and reject once as the quick answers', () => {

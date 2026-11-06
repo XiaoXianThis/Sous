@@ -40,8 +40,9 @@ export function quickOptions(a: Pick<Approval, 'options'>) {
 }
 
 /**
- * A pending approval drawn inside a task item (the chat's Run chip, a task
- * row), in place of its usual content and at the same height. The body opens
+ * A pending approval drawn inside a task item (a running task's card on the
+ * workbench, in place of its output summary; a task row), at the height of
+ * what it replaces. The body opens
  * the task's details (full card with the command and all options); the two
  * buttons answer right here. Only approvals that wait for a person get here:
  * ones the review agent is still judging are not shown at all.
@@ -51,7 +52,9 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
   onOpen?: () => void
   /** Called once the answer is accepted, before the list catches up. */
   onDecided?: () => void
-  size?: 'chip' | 'row'
+  /** chip: two lines; row: a 48px task row; slot: the 36px output summary
+   *  of a running task's card. */
+  size?: 'chip' | 'row' | 'slot'
   className?: string
 }) {
   const [busy, setBusy] = useState('')
@@ -59,6 +62,8 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
   const title = approvalTitle(approval.title)
   const { allow, reject } = quickOptions(approval)
   const chip = size === 'chip'
+  const slot = size === 'slot'
+  const twoLines = chip || slot
 
   async function decide(optionId: string) {
     setBusy(optionId)
@@ -74,7 +79,10 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
 
   return (
     <div
-      className={`flex items-center gap-2 min-w-0 overflow-hidden bg-[color-mix(in_srgb,var(--warm)_9%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warm)_35%,transparent)] ${chip ? 'rounded-[16px] py-1.5 pr-1.5 pl-1.5' : 'rounded-[12px] px-2 min-h-[48px]'} ${className}`}
+      className={`flex items-center gap-2 min-w-0 overflow-hidden ${slot
+        // Looks like the output summary it replaces: same ground, no outline.
+        ? 'bg-[color-mix(in_srgb,var(--sunken)_70%,transparent)] rounded-[10px] h-[36px] pl-1.5 pr-1'
+        : `bg-[color-mix(in_srgb,var(--warm)_9%,var(--panel))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warm)_35%,transparent)] ${chip ? 'rounded-[16px] py-1.5 pr-1.5 pl-1.5' : 'rounded-[12px] px-2 min-h-[48px]'}`} ${className}`}
       role="group"
       aria-label={`等你审批：${title}`}
       data-testid="approval-strip"
@@ -91,8 +99,8 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
         </span>
         <span className="grid min-w-0 leading-tight">
           <span className="text-[12.5px] font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{title}</span>
-          {chip ? (
-            <span className={`text-[11px] overflow-hidden text-ellipsis whitespace-nowrap ${error ? 'text-danger' : 'text-warm'}`}>
+          {twoLines ? (
+            <span className={`${slot ? 'text-[10.5px]' : 'text-[11px]'} overflow-hidden text-ellipsis whitespace-nowrap ${error ? 'text-danger' : 'text-warm'}`}>
               {error || ['等你审批', approval.category ? kindLabel(approval) : ''].filter(Boolean).join(' · ')}
             </span>
           ) : error ? (
@@ -103,7 +111,7 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
       {reject && (
         <button
           type="button"
-          className="icon-btn w-7 h-7 flex-none hover:!text-danger"
+          className={`icon-btn flex-none hover:!text-danger ${slot ? 'w-6 h-6' : 'w-7 h-7'}`}
           aria-label={optionText[reject.kind]?.text ?? reject.name}
           data-tip={optionText[reject.kind]?.text ?? reject.name}
           disabled={!!busy}
@@ -115,7 +123,7 @@ export function ApprovalStrip({ approval, onOpen, onDecided, size = 'chip', clas
       {allow && (
         <button
           type="button"
-          className="btn small flex-none !min-h-7 !py-0 !px-2.5"
+          className={`btn small flex-none !py-0 !px-2.5 ${slot ? '!min-h-6 !h-6 !text-[12px]' : '!min-h-7'}`}
           disabled={!!busy}
           onClick={() => void decide(allow.option_id)}
           title={optionText[allow.kind]?.tip ?? allow.name}
