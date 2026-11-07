@@ -29,6 +29,9 @@
 //	       end with {"pass": …} (FAKE_ACP_VERDICT=fail fails). The answer
 //	       says which prompt of the session it is, and whether the session
 //	       was loaded.
+//	ask    start the "sous" MCP server the session was given, report
+//	       progress, ask_supervisor a question, write the answer to
+//	       answer.txt, report_result and end the turn (decision 0025)
 //
 // FAKE_ACP_LOAD=1 advertises loadSession and accepts session/load; a prompt
 // in a loaded session writes hello.txt and ends the turn at once.
@@ -36,7 +39,8 @@
 // FAKE_ACP_OPTIONS=1 reports configOptions (model: fast / smart in two
 // groups, effort: low / medium / high) and accepts
 // session/set_config_option, which is also logged to FAKE_ACP_PROMPTS as
-// "set <id>=<value>".
+// "set <id>=<value>". FAKE_ACP_OPTION_IDS="<model id>,<effort id>" renames
+// the two options, as agents name them differently.
 package acptest
 
 import (
@@ -44,12 +48,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
 )
 
 const envFake = "SOUS_FAKE_ACP_AGENT"
@@ -60,8 +66,22 @@ func Command(mode, dir string) acp.Command {
 	return acp.Command{Path: exe, Args: []string{"-test.run=^$"}, Dir: dir, Env: []string{envFake + "=1", "FAKE_ACP_MODE=" + mode}}
 }
 
+// EnvSousMCP makes the test binary act as `sous mcp` when started with
+// "mcp" (RunIfFake). A daemon inside a test starts its own executable with
+// "mcp" by default, so setting this variable in the test is enough.
+const EnvSousMCP = "SOUS_FAKE_SOUS_MCP"
+
 // RunIfFake turns the process into the fake agent when started by Command.
 func RunIfFake() {
+	if os.Getenv(EnvSousMCP) == "1" {
+		// Only the process started as "<test binary> mcp …": the fake
+		// agent inherits the variable too.
+		for i, a := range os.Args {
+			if a == "mcp" {
+				os.Exit(sousmcp.Main(os.Args[i+1:]))
+			}
+		}
+	}
 	if os.Getenv(envFake) != "1" {
 		return
 	}
@@ -113,6 +133,7 @@ func runFake(mode string) {
 		cancelled = make(chan struct{}, 1)
 		loaded    bool
 		prompts   int
+		servers   []acp.MCPServer // the session's MCP servers (mode ask)
 		canLoad   = os.Getenv("FAKE_ACP_LOAD") == "1"
 		// FAKE_ACP_OPTIONS=1: report a model and a reasoning level.
 		withOptions = os.Getenv("FAKE_ACP_OPTIONS") == "1"
@@ -186,6 +207,21 @@ func runFake(mode string) {
 				fmt.Fprintf(&b, "\n{\"pass\": %v, \"reason\": \"%s\"}", pass, map[bool]string{true: "测试都通过了", false: "缺少测试"}[pass])
 			}
 			chunk(sid, b.String())
+			result(id, map[string]string{"stopReason": "end_turn"})
+			return
+		}
+		if mode == "ask" {
+			mu.Lock()
+			list := servers
+			mu.Unlock()
+			answer, err := askThroughSous(list)
+			if err != nil {
+				chunk(sid, "没能用 sous 的工具："+err.Error())
+				result(id, map[string]string{"stopReason": "end_turn"})
+				return
+			}
+			os.WriteFile(filepath.Join(cwd, "answer.txt"), []byte(answer+"\n"), 0o644)
+			chunk(sid, "按主管的回答写了 answer.txt："+answer)
 			result(id, map[string]string{"stopReason": "end_turn"})
 			return
 		}
@@ -334,9 +370,15 @@ func runFake(mode string) {
 				send(msg{ID: m.ID, Error: &acp.Error{Code: acp.CodeAuthRequired, Message: "Authentication required"}})
 				continue
 			}
-			var p struct{ Cwd string }
+			var p struct {
+				Cwd        string
+				McpServers []acp.MCPServer `json:"mcpServers"`
+			}
 			json.Unmarshal(m.Params, &p)
 			cwd = p.Cwd
+			mu.Lock()
+			servers = p.McpServers
+			mu.Unlock()
 			res := map[string]any{"sessionId": "fake-session", "modes": map[string]any{
 				"currentModeId": "auto", "availableModes": []map[string]string{{"id": "default", "name": "Ask"}, {"id": "auto", "name": "Auto"}}}}
 			if withOptions {
@@ -350,9 +392,9 @@ func runFake(mode string) {
 			json.Unmarshal(m.Params, &p)
 			mu.Lock()
 			switch p.ConfigID {
-			case "model":
+			case optionIDs()[0]:
 				optModel = p.Value
-			case "effort":
+			case optionIDs()[1]:
 				optEffort = p.Value
 			}
 			opts := configOptions(optModel, optEffort)
@@ -408,15 +450,106 @@ func runFake(mode string) {
 	}
 }
 
+// optionIDs are the ids of the model and effort options.
+func optionIDs() [2]string {
+	if v := os.Getenv("FAKE_ACP_OPTION_IDS"); v != "" {
+		if a, b, ok := strings.Cut(v, ","); ok {
+			return [2]string{a, b}
+		}
+	}
+	return [2]string{"model", "effort"}
+}
+
 func configOptions(model, effort string) []map[string]any {
+	ids := optionIDs()
 	return []map[string]any{
-		{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model, "options": []map[string]any{
+		{"id": ids[0], "name": "Model", "category": "model", "type": "select", "currentValue": model, "options": []map[string]any{
 			{"group": "quick", "name": "Quick", "options": []map[string]string{{"value": "fast", "name": "Fast"}}},
 			{"group": "deep", "name": "Deep", "options": []map[string]string{{"value": "smart", "name": "Smart", "description": "slower"}}},
 		}},
-		{"id": "effort", "name": "Reasoning", "category": "thought_level", "type": "select", "currentValue": effort, "options": []map[string]string{
+		{"id": ids[1], "name": "Reasoning", "category": "thought_level", "type": "select", "currentValue": effort, "options": []map[string]string{
 			{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"}, {"value": "high", "name": "High"},
 		}},
 		{"id": "fancy", "name": "Toggle", "type": "boolean", "currentValue": true},
 	}
+}
+
+// askThroughSous plays an agent using sous's MCP server: it starts the
+// server named "sous", reports progress, asks the supervisor a question,
+// hands in a result and returns the answer.
+func askThroughSous(list []acp.MCPServer) (string, error) {
+	var srv *acp.MCPServer
+	for i := range list {
+		if list[i].Name == "sous" {
+			srv = &list[i]
+		}
+	}
+	if srv == nil {
+		return "", fmt.Errorf("session has no sous MCP server")
+	}
+	cmd := exec.Command(srv.Command, srv.Args...)
+	cmd.Env = os.Environ()
+	for _, e := range srv.Env {
+		cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
+	}
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	defer func() { stdin.Close(); cmd.Wait() }()
+	rd := bufio.NewScanner(stdout)
+	rd.Buffer(make([]byte, 64*1024), 1<<20)
+	id := 0
+	call := func(method string, params any) (json.RawMessage, error) {
+		id++
+		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		stdin.Write(append(raw, '\n'))
+		if !rd.Scan() {
+			return nil, fmt.Errorf("sous mcp closed")
+		}
+		var m msg
+		if err := json.Unmarshal(rd.Bytes(), &m); err != nil {
+			return nil, err
+		}
+		if m.Error != nil {
+			return nil, m.Error
+		}
+		return m.Result, nil
+	}
+	tool := func(name string, args map[string]string) (string, error) {
+		raw, err := call("tools/call", map[string]any{"name": name, "arguments": args})
+		if err != nil {
+			return "", err
+		}
+		var r struct {
+			Content []struct{ Text string } `json:"content"`
+			IsError bool                    `json:"isError"`
+		}
+		json.Unmarshal(raw, &r)
+		text := ""
+		if len(r.Content) > 0 {
+			text = r.Content[0].Text
+		}
+		if r.IsError {
+			return "", fmt.Errorf("%s: %s", name, text)
+		}
+		return text, nil
+	}
+	if _, err := call("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "fake", "version": "1"}}); err != nil {
+		return "", err
+	}
+	stdin.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n"))
+	if _, err := tool("report_progress", map[string]string{"text": "看完了代码，准备改端口"}); err != nil {
+		return "", err
+	}
+	answer, err := tool("ask_supervisor", map[string]string{"question": "端口用 8080 还是 3000？我倾向 8080。"})
+	if err != nil {
+		return "", err
+	}
+	if _, err := tool("report_result", map[string]string{"done": "按回答写了 answer.txt", "verified": "没有验证", "decide": "无"}); err != nil {
+		return "", err
+	}
+	return answer, nil
 }

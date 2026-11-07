@@ -66,6 +66,8 @@ describe('stages', () => {
   })
   it('leaves out the review stage when there is none', () => {
     expect(stages(t('running', { review: 'none' })).map((s) => s.text)).toEqual(['计划', '编码'])
+    // Decision 0024: a task nobody asked to review has no review stage.
+    expect(stages(t('running', { review: '' })).map((s) => s.text)).toEqual(['计划', '编码'])
   })
   it('has fewer stages for other kinds', () => {
     // An ops task has a health check stage only when it deploys a commit.

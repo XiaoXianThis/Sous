@@ -55,6 +55,11 @@ type SchedulePayload struct {
 const (
 	TriggerCron     = "cron"
 	TriggerFollowup = "followup"
+	// TriggerTask: a task moved (done, failed, blocked, waiting for a
+	// review or a machine) or a sub-agent asked something; the supervisor
+	// decides whether to carry on. The supervisor batches these for a
+	// moment so a burst of news is one turn.
+	TriggerTask = "task"
 )
 
 type TriggerPayload struct {

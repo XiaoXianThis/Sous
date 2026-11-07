@@ -119,12 +119,58 @@ func TestRouteRoles(t *testing.T) {
 	// Only a server has the project: it is used.
 	nodes[1].Running = 0
 	c, err = Route(Request{Place: event.PlaceWorktree, ProjectNodes: pn[:1], Prefer: "dev"}, nodes)
-	if err != nil || c.NodeID != "srv" {
+	if err != nil || c.NodeID != "srv" || c.Note != "项目不在任何开发机上，派到了服务器 服务器" {
 		t.Fatalf("project only on the server: %+v %v", c, err)
+	}
+	// An ops task for a project only on the dev machine still runs there
+	// (many roads lead to Rome), and says so (decision 0025).
+	c, err = Route(Request{Place: event.PlaceInPlace, ProjectNodes: pn[1:], Prefer: "server"}, nodes)
+	if err != nil || c.NodeID != "mac" || c.Note != "项目不在任何服务器上，派到了开发机 mac" {
+		t.Fatalf("ops task, project only on the dev machine: %+v %v", c, err)
+	}
+	if c, _ := Route(Request{Place: event.PlaceInPlace, ProjectNodes: pn, Prefer: "server"}, nodes); c.Note != "" {
+		t.Fatalf("the preferred machine needs no note: %+v", c)
 	}
 	// Naming a machine wins over the preference.
 	c, err = Route(Request{Place: event.PlaceWorktree, ProjectNodes: pn, NodePref: "srv", Prefer: "dev"}, nodes)
 	if err != nil || c.NodeID != "srv" {
 		t.Fatalf("named machine: %+v %v", c, err)
+	}
+}
+
+// Decision 0024: with no agent named, a machine uses its own default, then
+// the global default, then any usable agent; disabled agents are never
+// picked, even when named.
+func TestMachineDefaultsAndDisabledAgents(t *testing.T) {
+	mac := Node{ID: "mac", Name: "Mac", Online: true, Agents: []proto.AgentInfo{
+		{Name: "claude", Installed: true}, {Name: "codex", Installed: true, Default: true}, {Name: "kiro", Installed: true, Disabled: true},
+	}}
+	pc := Node{ID: "pc", Name: "PC", Online: true, Agents: []proto.AgentInfo{
+		{Name: "claude", Installed: true}, {Name: "opencode", Installed: true},
+	}}
+	pick := func(n Node, agent, fallback string) (Choice, error) {
+		return Route(Request{Place: event.PlaceScratch, NodePref: n.ID, Agent: agent, Fallback: fallback}, []Node{mac, pc})
+	}
+	if c, err := pick(mac, "", "opencode"); err != nil || c.Agent != "codex" {
+		t.Fatalf("the machine's default wins over the global one: %+v %v", c, err)
+	}
+	if c, err := pick(pc, "", "opencode"); err != nil || c.Agent != "opencode" {
+		t.Fatalf("without a machine default the global one is used: %+v %v", c, err)
+	}
+	if c, err := pick(pc, "", "codex"); err != nil || c.Agent != "claude" {
+		t.Fatalf("a global default the machine lacks falls back to any agent: %+v %v", c, err)
+	}
+	if c, err := pick(mac, "claude", "opencode"); err != nil || c.Agent != "claude" {
+		t.Fatalf("a named agent wins: %+v %v", c, err)
+	}
+	if _, err := pick(mac, "kiro", ""); err == nil || !strings.Contains(err.Error(), "停用") {
+		t.Fatalf("a disabled agent was used: %v", err)
+	}
+	only := Node{ID: "x", Name: "X", Online: true, Agents: []proto.AgentInfo{{Name: "kiro", Installed: true, Disabled: true}}}
+	if _, err := Route(Request{Place: event.PlaceScratch}, []Node{only}); err == nil {
+		t.Fatal("a machine with only a disabled agent took the run")
+	}
+	if Usable(mac.Agents, "kiro") || !Usable(mac.Agents, "codex") || Usable(mac.Agents, "gemini") {
+		t.Fatal("Usable")
 	}
 }

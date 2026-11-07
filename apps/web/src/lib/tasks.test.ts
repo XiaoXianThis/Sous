@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentChoices, agentUnavailable, approvalTitle, nodeLabel, optionText } from './tasks'
+import { agentChoices, agentUnavailable, approvalTitle, machinesFor, nodeLabel, optionText } from './tasks'
 
 describe('agentChoices', () => {
   it('offers the known agents before any machine reports', () => {
@@ -20,6 +20,13 @@ describe('availability in the task form (end-to-end review 4.10)', () => {
     expect(agentUnavailable('kiro', [mac, win], '')).toBe('装了它的机器现在都不在线')
     expect(agentUnavailable('claude', [mac, win], 'win')).toBe('Win 上没有装这个 agent')
     expect(agentUnavailable('', [mac], 'mac')).toBe('')
+  })
+  it('leaves out agents node.json turns off (decision 0024)', () => {
+    const box = { id: 'box', name: 'Box', online: true, role: 'dev', agents: [{ name: 'claude', installed: true, disabled: true }, { name: 'gemini', installed: true, custom: true }] } as any
+    expect(agentUnavailable('claude', [box], 'box')).toBe('Box 上停用了这个 agent')
+    expect(agentChoices([box])).toContain('gemini')
+    expect(machinesFor('claude', [mac, box]).map((n) => n.id)).toEqual(['mac'])
+    expect(machinesFor('kiro', [win]).map((n) => n.id)).toEqual(['win'])
   })
   it('labels servers and offline machines', () => {
     expect(nodeLabel(mac, 'worktree').text).toBe('Mac')

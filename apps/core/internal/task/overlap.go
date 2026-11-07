@@ -109,10 +109,15 @@ func (e *Engine) checkOverlap(ctx context.Context, t store.Task, r store.Run) {
 // followup wakes the supervisor with a note only it reads (a trigger in the
 // task's thread, else the main thread), once per key.
 func (e *Engine) followup(ctx context.Context, t store.Task, key, title, content string) {
+	e.fire(ctx, t.OriginThreadID, event.TriggerFollowup, key, title, content)
+}
+
+// fire appends a trigger for the supervisor of a thread (the main thread
+// when empty), once per key.
+func (e *Engine) fire(ctx context.Context, thread, kind, key, title, content string) {
 	if at, err := e.store().TriggerFiredAt(ctx, key); err != nil || at > 0 {
 		return
 	}
-	thread := t.OriginThreadID
 	if thread == "" {
 		var err error
 		if thread, err = e.store().MainThreadID(ctx); err != nil {
@@ -120,10 +125,26 @@ func (e *Engine) followup(ctx context.Context, t store.Task, key, title, content
 		}
 	}
 	ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
-		Kind: event.TriggerFollowup, Key: key, MessageID: ids.New(), Title: title, Content: content,
+		Kind: kind, Key: key, MessageID: ids.New(), Title: title, Content: content,
 		At: time.Now().UnixMilli(),
 	})
 	if _, err := e.Log.Append(ctx, ev); err != nil {
-		slog.Error("task: follow-up", "key", key, "err", err)
+		slog.Error("task: trigger", "key", key, "err", err)
 	}
+}
+
+// tell is a task trigger whose content already says what to do.
+func (e *Engine) tell(ctx context.Context, t store.Task, key, title, content string) {
+	e.fire(ctx, t.OriginThreadID, event.TriggerTask, key, title, content)
+}
+
+// wakeNote ends every task trigger: what the supervisor is to do with it.
+const wakeNote = "\n\n（这是 sous 的自动通知，不是用户发的消息；用户已经看到了上面的汇报。判断要不要接着推进：" +
+	"有该做的下一步就直接做（派发、返工、换 agent 或机器、git 操作、部署）；需要用户拿主意时用 notify 简短提醒一次；" +
+	"没有要做的事时调用 stay_silent，不要重复汇报的内容。）"
+
+// wake tells the supervisor about a task's news (decision 0025): the
+// report the user just got, or why the task stopped.
+func (e *Engine) wake(ctx context.Context, t store.Task, key, title, content string) {
+	e.fire(ctx, t.OriginThreadID, event.TriggerTask, key, title, content+wakeNote)
 }

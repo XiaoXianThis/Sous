@@ -207,7 +207,7 @@ export default function TaskView({ id }: { id: string }) {
           <div className="flex items-center gap-x-3.5 text-[12.5px] text-muted whitespace-nowrap overflow-x-auto [scrollbar-width:none] min-w-0" aria-label="任务信息">
             <span className={`inline-flex items-center gap-1 font-semibold tone-${info.tone}`}><span className="sr-only">状态</span><span className="inline-flex items-center gap-1"><Icon name={info.icon} size={13} stroke={2.2} />{info.text}</span></span>
             <StageBar stages={stages(task)} inline />
-            <span className="inline-flex items-center gap-1" title={`岗位 · ${kindText[task.kind]}任务`}><span className="sr-only">岗位</span><span className="inline-flex items-center gap-1"><Icon name={kindIcon[task.kind] ?? 'user'} size={13} />{a.title}</span></span>
+            <span className="inline-flex items-center gap-1" title={`预设 · ${kindText[task.kind]}任务`}><span className="sr-only">预设</span><span className="inline-flex items-center gap-1"><Icon name={kindIcon[task.kind] ?? 'user'} size={13} />{a.title}</span></span>
             {whoAgent && (
               <span className="inline-flex items-center gap-1" title={task.last_agent ? '最近一次执行的 agent 和机器' : '指定的 agent 和机器'}>
                 <span className="sr-only">agent</span><span className="inline-flex items-center gap-1"><Icon name="terminal" size={13} />{agentTitle(whoAgent)}{whoNode ? ` · ${nodeName(whoNode)}` : ''}</span>

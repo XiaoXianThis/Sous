@@ -47,23 +47,28 @@ func TestSeedAndPersonas(t *testing.T) {
 	e, log := engine(t)
 	ctx := context.Background()
 	ps, _ := log.Store.Personas(ctx)
-	if len(ps) != len(task.BuiltinPersonas) || ps[0].Name != "后端" || !ps[0].Builtin {
+	// Decision 0024: the only built-in preset is the reviewer.
+	if len(ps) != 1 || ps[0].ID != "reviewer" || ps[0].Name != "验收" || !ps[0].Builtin {
 		t.Fatalf("personas: %+v", ps)
 	}
-	// Deleting a built-in persona is not undone by the next start.
-	if err := e.DeletePersona(ctx, "assistant", event.ActorUser); err != nil {
+	// Deleting a built-in preset is not undone by the next start.
+	if err := e.DeletePersona(ctx, "reviewer", event.ActorUser); err != nil {
 		t.Fatal(err)
 	}
 	e.Seed(ctx)
-	if ps, _ = log.Store.Personas(ctx); len(ps) != len(task.BuiltinPersonas)-1 {
+	if ps, _ = log.Store.Personas(ctx); len(ps) != 0 {
 		t.Fatalf("after reseed: %d", len(ps))
+	}
+	ops, err := e.PutPersona(ctx, task.PersonaInput{Name: "后端", Agent: "codex", Options: map[string]string{"model": "gpt-6.1-terra"}, Brief: "快速"}, event.ActorUser)
+	if err != nil || ops.Glyph != "后" {
+		t.Fatalf("preset %+v %v", ops, err)
 	}
 	if _, err := log.Store.Project(ctx, "misc"); err != nil {
 		t.Fatal("misc project missing")
 	}
 	// A task without a project belongs to misc; a persona is checked.
-	tk, err := e.Create(ctx, task.Input{Title: "查磁盘", Persona: "ops", Place: event.PlaceScratch, Actor: event.ActorUser})
-	if err != nil || tk.ProjectID != "misc" || tk.Kind != "general" || tk.PersonaID != "ops" || tk.Place != "scratch" {
+	tk, err := e.Create(ctx, task.Input{Title: "查磁盘", Persona: ops.ID, Place: event.PlaceScratch, Actor: event.ActorUser})
+	if err != nil || tk.ProjectID != "misc" || tk.Kind != "general" || tk.PersonaID != ops.ID || tk.Place != "scratch" || tk.Review != "none" {
 		t.Fatalf("task %+v %v", tk, err)
 	}
 	if _, err := e.Create(ctx, task.Input{Title: "x", Persona: "nobody", Actor: event.ActorUser}); err == nil {
@@ -80,6 +85,10 @@ func TestSeedAndPersonas(t *testing.T) {
 func TestProjectTools(t *testing.T) {
 	e, log := engine(t)
 	ctx := context.Background()
+	fe, err := e.PutPersona(ctx, task.PersonaInput{Name: "前端"}, event.ActorUser)
+	if err != nil {
+		t.Fatal(err)
+	}
 	log.Append(ctx,
 		event.New(event.NodePaired, event.ActorUser, "", event.NodePayload{NodeID: "srv", Name: "服务器"}),
 		event.New(event.NodeRole, event.ActorSystem, "", event.NodeRolePayload{NodeID: "srv", Role: "server"}),
@@ -96,7 +105,7 @@ func TestProjectTools(t *testing.T) {
 		t.Fatalf("%s %v", out, err)
 	}
 	p, _ := e.Log.Store.ProjectByKey(ctx, "github.com/me/blog")
-	if p.DefaultPersona != "frontend" || p.Deploy == nil || p.Deploy.NodeID != "srv" || !p.Deploy.AutoOnMerge || p.Deploy.Branch != "release" {
+	if p.DefaultPersona != fe.ID || p.Deploy == nil || p.Deploy.NodeID != "srv" || !p.Deploy.AutoOnMerge || p.Deploy.Branch != "release" {
 		t.Fatalf("project %+v", p)
 	}
 	// The same repository cannot be registered twice; a dev machine is no deploy target.
@@ -122,21 +131,36 @@ func TestProjectTools(t *testing.T) {
 	}
 	// The supervisor's environment lists personas and the deploy target.
 	env := strings.Join(e.Environment(ctx, ""), "\n")
-	if !strings.Contains(env, "岗位 前端") || !strings.Contains(env, "部署到 服务器:/srv/blog") || !strings.Contains(env, "release 有新提交时自动部署") {
+	if !strings.Contains(env, "预设 前端") || !strings.Contains(env, "部署到 服务器:/srv/blog") || !strings.Contains(env, "release 有新提交时自动部署") {
 		t.Fatalf("environment:\n%s", env)
 	}
 	if strings.Contains(env, "默认使用 wokspace") {
 		t.Fatalf("the environment still presets a structure:\n%s", env)
 	}
-	// task_create takes a persona by name and an ops kind.
-	out, err = call(t, e, "task_create", map[string]any{"title": "部署", "detail": "d", "project": "blog", "kind": "ops", "persona": "运维",
-		"place": "in_place", "review": "none", "dispatch": false})
-	if err != nil || !strings.Contains(out, "部署") {
+	// task_create takes a preset by name, a model over it and an ops kind;
+	// without review it is not reviewed (decision 0024).
+	ops, _ := e.PutPersona(ctx, task.PersonaInput{Name: "运维", Agent: "claude"}, event.ActorUser)
+	out, err = call(t, e, "task_create", map[string]any{"title": "部署", "detail": "d", "project": "blog", "kind": "ops", "preset": "运维",
+		"model": "opus-5.5", "effort": "high", "place": "in_place", "dispatch": false})
+	if err != nil || !strings.Contains(out, "部署") || !strings.Contains(out, "模型 opus-5.5") {
 		t.Fatalf("%s %v", out, err)
 	}
 	ts, _ := e.Log.Store.Tasks(ctx, store.TaskFilter{ProjectID: p.ID})
-	if len(ts) != 1 || ts[0].Kind != "ops" || ts[0].PersonaID != "ops" || ts[0].Place != "in_place" || ts[0].Review != "none" {
+	if len(ts) != 1 || ts[0].Kind != "ops" || ts[0].PersonaID != ops.ID || ts[0].Place != "in_place" || ts[0].Review != "none" ||
+		ts[0].Options["model"] != "opus-5.5" || ts[0].Options["effort"] != "high" {
 		t.Fatalf("tasks %+v", ts)
+	}
+	// task_update changes one setting and keeps the other; "" goes back
+	// to the preset's.
+	if _, err := call(t, e, "task_update", map[string]any{"id": ts[0].ID, "model": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if tk, _ := e.Log.Store.Task(ctx, ts[0].ID); tk.Options["model"] != "" || tk.Options["effort"] != "high" {
+		t.Fatalf("options after update: %+v", tk.Options)
+	}
+	// The environment says where a preset's agent can run.
+	if env := strings.Join(e.Environment(ctx, ""), "\n"); !strings.Contains(env, "预设 运维") || !strings.Contains(env, "现在没有电脑能用它") {
+		t.Fatalf("environment:\n%s", env)
 	}
 	if got := e.DescribeContext(ctx, event.MessageContext{ProjectID: p.ID}); !strings.Contains(got, "blog") {
 		t.Fatalf("context: %s", got)
@@ -261,7 +285,7 @@ func TestProjectChatScope(t *testing.T) {
 func TestToolsNameTheirChoices(t *testing.T) {
 	e, _ := engine(t)
 	required := map[string][]string{
-		"task_create":    {"place", "review"},
+		"task_create":    {"place"}, // decision 0024: review is optional, none unless asked
 		"git_merge":      {"task", "into"},
 		"git_push":       {"branch"},
 		"git_pr":         {"task", "base"},
@@ -299,5 +323,33 @@ func TestToolsNameTheirChoices(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("no tool %s", name)
 		}
+	}
+}
+
+// machine_look is a glance: a few per turn, then the supervisor is told
+// to hand the rest to a task (decision 0024).
+func TestMachineLookIsLimitedPerTurn(t *testing.T) {
+	e, _ := engine(t)
+	var look tool.Tool
+	for _, tl := range e.Tools() {
+		if tl.Spec().Name == "machine_look" {
+			look = tl
+		}
+	}
+	if look == nil {
+		t.Fatal("no machine_look")
+	}
+	turn := tool.WithTurn(context.Background(), tool.Turn{ThreadID: "th", ReplyTo: 7})
+	for i := 0; i < 4; i++ {
+		if _, err := look.Call(turn, json.RawMessage(`{"command":"df -h"}`)); err == nil || strings.Contains(err.Error(), "这一轮已经看了") {
+			t.Fatalf("look %d: %v", i, err)
+		}
+	}
+	if _, err := look.Call(turn, json.RawMessage(`{"command":"df -h"}`)); err == nil || !strings.Contains(err.Error(), "这一轮已经看了") {
+		t.Fatalf("the fifth look: %v", err)
+	}
+	next := tool.WithTurn(context.Background(), tool.Turn{ThreadID: "th", ReplyTo: 8})
+	if _, err := look.Call(next, json.RawMessage(`{"command":"df -h"}`)); err == nil || strings.Contains(err.Error(), "这一轮已经看了") {
+		t.Fatalf("a new turn starts over: %v", err)
 	}
 }

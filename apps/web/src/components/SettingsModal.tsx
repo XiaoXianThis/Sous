@@ -19,7 +19,7 @@ import Versions from './Versions'
 const tabs = [
   { key: 'machines', text: '机器', icon: 'laptop', group: 0 },
   { key: 'models', text: '模型', icon: 'cpu', group: 0 },
-  { key: 'personas', text: '岗位', icon: 'users', group: 0 },
+  { key: 'personas', text: '预设', icon: 'users', group: 0 },
   { key: 'mcp', text: 'MCP', icon: 'bolt', group: 0 },
   { key: 'schedules', text: '定时任务', icon: 'calendar', group: 1 },
   { key: 'memories', text: '记忆', icon: 'brain', group: 1 },

@@ -108,6 +108,11 @@ export interface AgentInfo {
   defaults?: Record<string, string>
   configs?: AgentConfigFile[]
   launch_override?: boolean
+  /** From node.json (decision 0024): turned off on this machine, the
+   *  machine's default agent, added in custom_agents. */
+  disabled?: boolean
+  default?: boolean
+  custom?: boolean
   /** The install or login running for it now. */
   job?: JobStarted
 }
@@ -325,6 +330,8 @@ export interface Task {
   /** Who did the latest work run, and on which machine (end-to-end review 4.4). */
   last_agent?: string
   last_node?: string
+  /** The task's own session settings over its preset's (decision 0024). */
+  options?: { model?: string; effort?: string }
 }
 
 export type TaskPlace = 'worktree' | 'in_place' | 'scratch'

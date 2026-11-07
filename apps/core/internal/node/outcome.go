@@ -158,13 +158,23 @@ func mask(s string) string {
 	return s
 }
 
+// interpreters run the script file named by their first argument.
+var interpreters = map[string]bool{
+	"node": true, "python": true, "python3": true, "deno": true, "bun": true, "ruby": true, "perl": true,
+	"tsx": true, "ts-node": true, "php": true, "pwsh": true, "powershell": true,
+}
+
+// scriptTempDir is where agents keep scratch scripts (tests replace it).
+var scriptTempDir = os.TempDir
+
 // scriptBytes bounds the script shown with an approval.
 const scriptBytes = 4096
 
 // scriptPreview is the beginning of the script a command runs, when it runs
 // one from the working directory (./deploy.sh, bash scripts/x.sh): the user
 // and the approver see what will run, not only its name (end-to-end review
-// 4.7). Only files inside workdir are read, and only text.
+// 4.7). Only files inside workdir or the temporary directory are read
+// (decision 0024), and only text.
 func scriptPreview(cmd, workdir string) string {
 	if workdir == "" {
 		return ""
@@ -175,7 +185,7 @@ func scriptPreview(cmd, workdir string) string {
 	}
 	path := ""
 	switch base := filepath.Base(f[0]); {
-	case base == "sh" || base == "bash" || base == "zsh" || base == "dash" || base == "fish":
+	case base == "sh" || base == "bash" || base == "zsh" || base == "dash" || base == "fish" || interpreters[base]:
 		for _, a := range f[1:] {
 			if !strings.HasPrefix(a, "-") {
 				path = a
@@ -198,11 +208,19 @@ func scriptPreview(cmd, workdir string) string {
 	if err != nil {
 		return ""
 	}
-	root, err := filepath.EvalSymlinks(workdir)
-	if err != nil {
-		root = workdir
+	// The working directory, or the system's temporary directory where
+	// agents keep their own scratch scripts.
+	inside := false
+	for _, dir := range []string{workdir, scriptTempDir()} {
+		root, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			root = dir
+		}
+		if rel, err := filepath.Rel(root, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			inside = true
+		}
 	}
-	if rel, err := filepath.Rel(root, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !inside {
 		return ""
 	}
 	fi, err := os.Stat(real)

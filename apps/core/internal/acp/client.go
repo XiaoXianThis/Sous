@@ -175,6 +175,8 @@ type Client struct {
 	waitOnce sync.Once
 	waitErr  error
 	exited   chan struct{}
+
+	mcp []MCPServer // given to new and loaded sessions
 }
 
 // stderrKeep bounds the agent's stderr kept for error messages.
@@ -328,11 +330,35 @@ func parseUpdate(raw json.RawMessage) Update {
 	return out
 }
 
+// MCPServer is a stdio MCP server the agent starts for a session.
+type MCPServer struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+	Env     []EnvVar `json:"env"`
+}
+
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// SetMCPServers sets the MCP servers given to the sessions opened or
+// loaded after it (decision 0025: sous's own tools for sub-agents).
+func (c *Client) SetMCPServers(s []MCPServer) { c.mcp = s }
+
+func (c *Client) mcpServers() []MCPServer {
+	if c.mcp == nil {
+		return []MCPServer{}
+	}
+	return c.mcp
+}
+
 // NewSession opens a session in cwd. If the agent asks for authentication,
 // it authenticates with the agent's first method and tries once more.
 func (c *Client) NewSession(ctx context.Context, cwd string) (Session, error) {
 	var res sessionResult
-	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
+	params := map[string]any{"cwd": cwd, "mcpServers": c.mcpServers()}
 	err := c.conn.Call(ctx, "session/new", params, &res)
 	if IsAuthRequired(err) && len(c.Init.AuthMethods) > 0 {
 		authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -357,7 +383,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (Session, error) {
 // session/update notifications before it answers.
 func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) (Session, error) {
 	var res sessionResult
-	err := c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": []any{}}, &res)
+	err := c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": c.mcpServers()}, &res)
 	if IsAuthRequired(err) && len(c.Init.AuthMethods) > 0 {
 		authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		aerr := c.conn.Call(authCtx, "authenticate", map[string]string{"methodId": c.Init.AuthMethods[0].ID}, nil)
@@ -365,7 +391,7 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) (Sessio
 		if aerr != nil {
 			return Session{}, fmt.Errorf("%w: %v", ErrNotLoggedIn, aerr)
 		}
-		err = c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": []any{}}, &res)
+		err = c.conn.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": c.mcpServers()}, &res)
 	}
 	if err != nil {
 		return Session{}, c.withStderr(fmt.Errorf("session/load: %w", err))

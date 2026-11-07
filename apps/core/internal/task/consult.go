@@ -43,6 +43,10 @@ type ConsultInput struct {
 	NodeID    string
 	ThreadID  string
 	ReplyTo   int64
+	// Agent and Options (model, effort) pick who answers a new session
+	// (decision 0024); a session going on keeps its own.
+	Agent   string
+	Options map[string]string
 }
 
 // ConsultAnswer is what the consultant said.
@@ -163,11 +167,13 @@ func (e *Engine) consultRun(ctx context.Context, p store.Project, cur store.Run,
 	for _, n := range nodes {
 		rn = append(rn, router.Node{ID: n.ID, Name: n.Name, Online: e.Nodes.Online(n.ID), Agents: parseAgents(n.Agents), Role: n.Role})
 	}
-	agent := firstNonEmpty(p.DefaultAgent, e.setting(ctx, SettingDefaultAgent))
+	agent := p.DefaultAgent
 	if has {
 		agent = firstNonEmpty(cur.Agent, agent)
 	}
-	c, err := router.Route(router.Request{Place: event.PlaceInPlace, ProjectNodes: p.Nodes, NodePref: in.NodeID, Agent: agent, Prefer: proto.RoleDev}, rn)
+	agent = firstNonEmpty(in.Agent, agent)
+	cr.Options = cleanOptions(in.Options)
+	c, err := router.Route(router.Request{Place: event.PlaceInPlace, ProjectNodes: p.Nodes, NodePref: in.NodeID, Agent: agent, Fallback: e.setting(ctx, SettingDefaultAgent), Prefer: proto.RoleDev}, rn)
 	if err != nil {
 		return cr, fmt.Errorf("%w: 找不到能看这个项目的机器：%s", ErrConflict, strings.TrimPrefix(err.Error(), router.ErrNoMachine.Error()+": "))
 	}

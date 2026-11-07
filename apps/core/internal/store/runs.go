@@ -107,10 +107,10 @@ func projectRun(w *Writer, ev event.Event) error {
 			gitOp = string(raw)
 		}
 		if err := exec(`INSERT INTO runs(id, thread_id, task_id, node_id, agent, kind, repo_path, prompt, status, purpose, permission_mode, branch, base_branch, title, force, recovery_note, created_at, last_event, options, persona, setup,
-			base_from, git, project_id, resume_session)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			base_from, git, project_id, resume_session, continue_prompt)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.RunID, ev.ThreadID, ev.TaskID, p.NodeID, p.Agent, p.Kind, p.RepoPath, p.Prompt, event.RunStatusQueued, purpose, mode, p.Branch, p.BaseBranch, p.Title, p.Force, p.RecoveryNote, ev.TS, ev.TS, opts, p.Persona, setup,
-			p.BaseFrom, gitOp, p.ProjectID, p.ResumeSession); err != nil {
+			p.BaseFrom, gitOp, p.ProjectID, p.ResumeSession, p.ContinuePrompt); err != nil {
 			return err
 		}
 		if ev.TaskID != "" && (purpose == event.PurposeWork || purpose == event.PurposeRebase) {
@@ -363,14 +363,15 @@ type Run struct {
 	Persona string            `json:"persona,omitempty"`
 	Setup   *proto.Setup      `json:"setup,omitempty"`
 	// Decision 0022.
-	BaseFrom      string           `json:"base_from,omitempty"`
-	BaseCommit    string           `json:"base_commit,omitempty"`
-	Git           *proto.GitOp     `json:"git,omitempty"`
-	GitResult     *proto.GitResult `json:"git_result,omitempty"`
-	ProjectID     string           `json:"project_id,omitempty"`
-	Session       string           `json:"session,omitempty"`
-	ResumeSession string           `json:"resume_session,omitempty"`
-	ConsultClosed bool             `json:"consult_closed,omitempty"`
+	BaseFrom       string           `json:"base_from,omitempty"`
+	BaseCommit     string           `json:"base_commit,omitempty"`
+	Git            *proto.GitOp     `json:"git,omitempty"`
+	GitResult      *proto.GitResult `json:"git_result,omitempty"`
+	ProjectID      string           `json:"project_id,omitempty"`
+	Session        string           `json:"session,omitempty"`
+	ResumeSession  string           `json:"resume_session,omitempty"`
+	ContinuePrompt string           `json:"continue_prompt,omitempty"`
+	ConsultClosed  bool             `json:"consult_closed,omitempty"`
 	// How the run ended beyond its status (proto.RunEnded).
 	Outcome   string   `json:"outcome,omitempty"`
 	ErrorKind string   `json:"error_kind,omitempty"`
@@ -379,7 +380,7 @@ type Run struct {
 
 const runCols = `id, thread_id, task_id, purpose, permission_mode, base_branch, pr_url, conflict, title, force, node_id, agent, kind, repo_path, prompt, status, workdir, branch, summary, diffstat, error, created_at, started_at, ended_at,
 	paused, pause_reason, archived, recovery_note, last_event, options, persona, setup,
-	base_from, base_commit, git, git_result, project_id, session, resume_session, consult_closed, outcome, error_kind, refused`
+	base_from, base_commit, git, git_result, project_id, session, resume_session, consult_closed, outcome, error_kind, refused, continue_prompt`
 
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	defer rows.Close()
@@ -391,7 +392,7 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 			&r.Workdir, &r.Branch, &r.Summary, &r.DiffStat, &r.Error, &r.CreatedAt, &r.StartedAt, &r.EndedAt,
 			&r.Paused, &r.PauseReason, &r.Archived, &r.RecoveryNote, &r.LastEvent, &opts, &r.Persona, &setup,
 			&r.BaseFrom, &r.BaseCommit, &gitOp, &gitResult, &r.ProjectID, &r.Session, &r.ResumeSession, &r.ConsultClosed,
-			&r.Outcome, &r.ErrorKind, &refused); err != nil {
+			&r.Outcome, &r.ErrorKind, &refused, &r.ContinuePrompt); err != nil {
 			return nil, err
 		}
 		if gitOp != "" {

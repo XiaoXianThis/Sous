@@ -43,7 +43,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
   const [kind, setKind] = useState<Task['kind'] | ''>('')
   // Decision 0022: no defaults; a task gets these before it is dispatched.
   const [place, setPlace] = useState<Task['place']>('')
-  const [review, setReview] = useState<Task['review']>('')
+  const [review, setReview] = useState<Task['review']>('none')
   const [onFail, setOnFail] = useState<Task['on_fail']>('')
   const [baseBranch, setBaseBranch] = useState('')
   const [baseFrom, setBaseFrom] = useState<Task['base_from']>('')
@@ -91,7 +91,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
     setPersona(t.persona_id)
     setKind(t.kind)
     setPlace(t.place ?? '')
-    setReview(t.review ?? '')
+    setReview(t.review || 'none')
     setOnFail(t.on_fail ?? '')
     setBaseBranch(t.base_branch ?? '')
     setBaseFrom(t.base_from ?? '')
@@ -194,8 +194,8 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
               说明（交给 agent 的完整任务说明）
               <textarea className={`${inputCls} resize-y leading-[1.5]`} value={detail} onChange={(e) => setDetail(e.currentTarget.value)} rows={5}></textarea>
             </label>
-            <div className="grid gap-1.5 text-[13px] text-muted" role="radiogroup" aria-label="岗位">
-              岗位
+            <div className="grid gap-1.5 text-[13px] text-muted" role="radiogroup" aria-label="预设">
+              预设
               <div className="flex gap-1.5 flex-wrap">
                 {[{ id: '', name: '默认', glyph: '', color: 'gray' as const, agent: '' }, ...personas].map((p) => (
                   <button
@@ -287,18 +287,16 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
               <label className="grid gap-1 text-[13px] text-muted">
                 验收
                 <select className={inputCls} value={review} onChange={(e) => setReview(e.currentTarget.value as Task['review'])}>
-                  <option value="">还没定</option>
                   <option value="none">不验收</option>
                   <option value="model">验收模型看 diff</option>
-                  <option value="agent">审查岗位跑测试</option>
+                  <option value="agent">验收 agent 跑测试</option>
                   <option value="user">我来验收</option>
                 </select>
               </label>
               {review && review !== 'none' && (
                 <label className="grid gap-1 text-[13px] text-muted">
                   不通过时
-                  <select className={inputCls} value={onFail} onChange={(e) => setOnFail(e.currentTarget.value as Task['on_fail'])}>
-                    <option value="">还没定</option>
+                  <select className={inputCls} value={onFail || 'rework'} onChange={(e) => setOnFail(e.currentTarget.value as Task['on_fail'])}>
                     <option value="rework">照意见返工</option>
                     <option value="ask">停下来商量</option>
                   </select>

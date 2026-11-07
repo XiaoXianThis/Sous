@@ -25,7 +25,7 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0010](0010-policy-is-a-safety-net.md) | 权限策略是安全网，执行隔离放到第二期 | Accepted |
 | [0011](0011-supervisor-owns-tasks.md) | 第一期由主管自己维护任务，不单独设置 extractor | Accepted |
 | [0012](0012-remote-agent-admin.md) | 从页面远程管理机器上的 agent，只跑内置的命令和文件 | Accepted |
-| [0013](0013-personas.md) | 人员就是岗位档案，不是有记忆的拟人员工 | Accepted |
+| [0013](0013-personas.md) | 人员就是岗位档案，不是有记忆的拟人员工 | Superseded by 0024（岗位改成预设） |
 | [0014](0014-server-role-and-ops-tasks.md) | 服务器作为机器接入，部署和维护走运维任务 | Accepted（部署触发被 0022 取代） |
 | [0015](0015-project-shells-and-hardening.md) | 页面上的项目终端，以及配套的安全收紧 | Accepted |
 | [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted |
@@ -35,4 +35,6 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0020](0020-long-thread-context.md) | 长对话的上下文：分段、结构化摘要、查回原文 | Accepted |
 | [0021](0021-mcp-servers.md) | 主管支持 MCP：页面上管理，agent 只能提议、用户批准 | Accepted |
 | [0022](0022-flexible-not-preset.md) | 灵活优先：去掉固定流程，交给主管判断 | Accepted |
-| [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted |
+| [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted（“验收默认由 AI 判断”被 0024 取代） |
+| [0024](0024-presets-machine-agents-and-a-lighter-supervisor.md) | 预设、每台电脑的 agent，以及更顺手的主管 | Accepted |
+| [0025](0025-supervisor-loop.md) | 主管的闭环：任务进展叫醒主管、结构化结果、子 agent 能问能报、路由只是偏好 | Accepted |

@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -107,6 +110,14 @@ func (d *Daemon) apply(cfg Config) {
 func EffectiveSpecs(base []agents.Spec, cfg Config) []agents.Spec {
 	specs := make([]agents.Spec, len(base))
 	copy(specs, base)
+	for _, c := range cfg.CustomAgents {
+		if err := validCustom(c, specs); err != nil {
+			slog.Warn("daemon: skipping a custom agent in node.json", "name", c.Name, "err", err)
+			continue
+		}
+		specs = append(specs, agents.Spec{Name: c.Name, Title: firstNonEmpty(c.Title, c.Name), Binary: c.Command[0],
+			Launch: append([]string(nil), c.Command...), Custom: true})
+	}
 	for i, s := range specs {
 		if cmd, ok := cfg.Agents[s.Name]; ok && len(cmd) > 0 {
 			specs[i].Launch = cmd
@@ -120,6 +131,22 @@ func EffectiveSpecs(base []agents.Spec, cfg Config) []agents.Spec {
 		}
 	}
 	return specs
+}
+
+var customName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// validCustom checks a custom agent from node.json.
+func validCustom(c CustomAgent, have []agents.Spec) error {
+	if !customName.MatchString(c.Name) {
+		return fmt.Errorf("name must be lowercase letters, digits and -")
+	}
+	if _, dup := agents.Find(have, c.Name); dup {
+		return fmt.Errorf("an agent named %q already exists", c.Name)
+	}
+	if len(c.Command) == 0 || strings.TrimSpace(c.Command[0]) == "" {
+		return fmt.Errorf("command is empty")
+	}
+	return nil
 }
 
 func (d *Daemon) conf() Config {
@@ -192,7 +219,7 @@ func (d *Daemon) session(ctx context.Context) error {
 	host, _ := os.Hostname()
 	if err := writeFrame(ctx, ws, proto.New(proto.THello, proto.Hello{
 		Version: version.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Hostname: host,
-		Caps: []string{proto.CapAdmin}, Admin: cfg.AdminEnabled(),
+		Caps: []string{proto.CapAdmin}, Admin: cfg.AdminEnabled(), Addrs: ownAddrs(),
 	})); err != nil {
 		return err
 	}
@@ -520,4 +547,24 @@ func (d *Daemon) stopAll(keep bool) {
 	case <-time.After(stopAllWait):
 		slog.Warn("daemon: agents did not exit in time")
 	}
+}
+
+// ownAddrs lists the machine's IP addresses, for the Hub to recognize it.
+func ownAddrs() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok || ipn.IP.IsLoopback() || ipn.IP.IsLinkLocalUnicast() || ipn.IP.IsMulticast() {
+			continue
+		}
+		out = append(out, ipn.IP.String())
+		if len(out) == 16 {
+			break
+		}
+	}
+	return out
 }

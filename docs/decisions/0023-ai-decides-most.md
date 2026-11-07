@@ -1,6 +1,6 @@
 # 0023 AI 代理用户决定大多数事项
 
-- Status: Accepted
+- Status: Accepted（“验收默认由 AI 判断”被 0024 取代：默认不验收）
 - Date: 2026-11-06
 
 ## Context

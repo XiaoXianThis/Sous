@@ -202,6 +202,8 @@ type CreateRun struct {
 	Git           *proto.GitOp // git runs
 	ProjectID     string       // consult runs
 	ResumeSession string       // an agent session to load
+	// ContinuePrompt replaces Prompt when ResumeSession loads (0025).
+	ContinuePrompt string
 }
 
 // Create queues a run and dispatches it if its machine is connected.
@@ -246,7 +248,7 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 		NodeID: r.NodeID, Agent: r.Agent, Kind: kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.PermissionMode,
 		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force, RecoveryNote: r.RecoveryNote,
 		Options: r.Options, Persona: r.Persona, Setup: r.Setup,
-		BaseFrom: r.BaseFrom, Git: r.Git, ProjectID: r.ProjectID, ResumeSession: r.ResumeSession,
+		BaseFrom: r.BaseFrom, Git: r.Git, ProjectID: r.ProjectID, ResumeSession: r.ResumeSession, ContinuePrompt: r.ContinuePrompt,
 	})
 	ev.RunID = r.RunID
 	if ev.RunID == "" {

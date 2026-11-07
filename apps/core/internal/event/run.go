@@ -66,6 +66,9 @@ type RunQueuedPayload struct {
 	Git           *proto.GitOp `json:"git,omitempty"`
 	ProjectID     string       `json:"project_id,omitempty"`
 	ResumeSession string       `json:"resume_session,omitempty"`
+	// ContinuePrompt replaces Prompt when ResumeSession loads (decision
+	// 0025): the agent remembers the task, so it gets only what is new.
+	ContinuePrompt string `json:"continue_prompt,omitempty"`
 }
 
 type RunStartedPayload struct {

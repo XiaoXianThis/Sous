@@ -277,6 +277,9 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
                 ))}
               </ul>
               {agent.launch_override && <p className="text-muted text-[13px] m-0">node.json 覆盖了它的启动命令（agents 字段）。</p>}
+              {agent.default && <p className="text-muted text-[13px] m-0">这是这台电脑的默认 agent（node.json 的 default_agent）：任务、预设和项目都没指定 agent 时用它。</p>}
+              {agent.disabled && <p className="text-muted text-[13px] m-0">node.json 的 disabled_agents 停用了它：这台电脑不会用它执行任务。</p>}
+              {agent.custom && <p className="text-muted text-[13px] m-0">它是 node.json 的 custom_agents 里添加的 agent；启动命令只能在这台电脑上改。</p>}
             </section>
           ) : null}
         </>

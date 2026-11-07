@@ -38,6 +38,9 @@ type nodeConn struct {
 	// node.json allows it.
 	canAdmin bool
 	adminOn  bool
+	// addrs are the machine's own addresses and where it connects from:
+	// hints for peerNote.
+	addrs []string
 
 	mu         sync.Mutex
 	dispatched map[string]bool
@@ -90,6 +93,7 @@ func (h *Hub) ServeNode(w http.ResponseWriter, r *http.Request) {
 		c.canAdmin = c.canAdmin || cp == proto.CapAdmin
 	}
 	c.adminOn = c.canAdmin && hello.Admin
+	c.addrs = append(hello.Addrs, remoteIP(r))
 
 	h.mu.Lock()
 	if old := h.conns[node.ID]; old != nil {
@@ -230,7 +234,7 @@ func (c *nodeConn) dispatch(r store.Run) {
 		RunID: r.ID, Agent: r.Agent, Kind: r.Kind, RepoPath: r.RepoPath, Prompt: r.Prompt, PermissionMode: r.Mode,
 		TaskID: r.TaskID, Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force,
 		RecoveryNote: r.RecoveryNote, Options: r.Options, Persona: r.Persona, Setup: r.Setup,
-		BaseFrom: r.BaseFrom, Git: r.Git, ResumeSession: r.ResumeSession,
+		BaseFrom: r.BaseFrom, Git: r.Git, ResumeSession: r.ResumeSession, ContinuePrompt: r.ContinuePrompt,
 	}))
 }
 
@@ -424,6 +428,17 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		}
 		return c.updateResult(ctx, f, p)
 
+	case proto.TRunAsk:
+		var p proto.RunAsk
+		if err := f.Decode(&p); err != nil {
+			return err
+		}
+		ref, err := c.refOf(ctx, p.RunID)
+		if err != nil {
+			return err
+		}
+		return c.store(ctx, f, c.hub.askTrigger(ctx, ref, p))
+
 	case proto.TApprovalRequest:
 		var p proto.ApprovalRequest
 		if err := f.Decode(&p); err != nil {
@@ -437,8 +452,12 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		for i, o := range p.Options {
 			opts[i] = event.ApprovalOption{OptionID: o.OptionID, Name: o.Name, Kind: o.Kind}
 		}
+		detail := p.Detail
+		if note := c.hub.peerNote(ctx, c.nodeID, p.Title+"\n"+p.Detail); note != "" {
+			detail = strings.TrimSpace(detail + "\n\n" + note)
+		}
 		ev := event.New(event.ApprovalRequested, event.ActorSystem, "", event.ApprovalRequestedPayload{
-			ApprovalID: p.ApprovalID, Title: p.Title, ToolKind: p.ToolKind, Detail: p.Detail, Options: opts,
+			ApprovalID: p.ApprovalID, Title: p.Title, ToolKind: p.ToolKind, Detail: detail, Options: opts,
 			Category: p.Category, Review: p.Review,
 		})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))

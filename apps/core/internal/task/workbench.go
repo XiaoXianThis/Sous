@@ -24,18 +24,15 @@ import (
 // deleting one is not undone at the next start.
 const settingSeeded = "personas_seeded"
 
-// BuiltinPersonas are created on the first start.
+// reviewerID is the preset that reviews tasks (review: agent).
+const reviewerID = "reviewer"
+
+// BuiltinPersonas are created on the first start. Decision 0024: presets
+// are the user's own picks of agent and model, so the only built-in one is
+// the reviewer that review: agent needs.
 var BuiltinPersonas = []event.PersonaPayload{
-	{PersonaID: "backend", Name: "后端", Glyph: "后", Color: "purple", Kinds: []string{event.TaskKindCode},
-		Brief: "你负责后端和基础设施代码：接口、数据、性能和测试。改动要有测试，跑通现有测试再结束。"},
-	{PersonaID: "frontend", Name: "前端", Glyph: "前", Color: "teal", Kinds: []string{event.TaskKindCode},
-		Brief: "你负责前端界面：组件、样式、交互和可访问性。注意窄屏和深色模式，改完跑一遍构建和测试。"},
-	{PersonaID: "reviewer", Name: "审查", Glyph: "审", Color: "coral", Kinds: []string{event.TaskKindCode, event.TaskKindGeneral},
-		Brief: "你负责审查和排查问题：先读懂现状再动手，给出有依据的结论；只做必要的最小改动。"},
-	{PersonaID: "ops", Name: "运维", Glyph: "运", Color: "amber", Kinds: []string{event.TaskKindOps, event.TaskKindGeneral},
-		Brief: "你负责部署和维护服务器：按项目的部署脚本执行，每一步都确认结果；不确定时停下来说明，不要冒险。"},
-	{PersonaID: "assistant", Name: "助理", Glyph: "助", Color: "gray", Kinds: []string{event.TaskKindGeneral},
-		Brief: "你负责一般事务：查资料、整理文件、处理数据。说清楚做了什么、结果在哪里。"},
+	{PersonaID: reviewerID, Name: "验收", Glyph: "验", Color: "coral", Kinds: []string{event.TaskKindCode, event.TaskKindGeneral},
+		Brief: "你负责验收：先读懂任务要求和改动，再跑测试和构建确认；只下有依据的结论。"},
 }
 
 // Seed makes sure the built-in "misc" project exists, and creates the
@@ -90,7 +87,7 @@ var personaColors = map[string]bool{"purple": true, "teal": true, "coral": true,
 func (e *Engine) PutPersona(ctx context.Context, in PersonaInput, actor string) (store.Persona, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
-		return store.Persona{}, fmt.Errorf("%w: 岗位需要名字", ErrInvalid)
+		return store.Persona{}, fmt.Errorf("%w: 预设需要名字", ErrInvalid)
 	}
 	if in.Glyph = strings.TrimSpace(in.Glyph); in.Glyph == "" {
 		in.Glyph = string([]rune(in.Name)[:1])
@@ -116,7 +113,7 @@ func (e *Engine) PutPersona(ctx context.Context, in PersonaInput, actor string) 
 	ps, _ := e.store().Personas(ctx)
 	for _, p := range ps {
 		if p.ID != in.ID && strings.EqualFold(p.Name, in.Name) {
-			return store.Persona{}, fmt.Errorf("%w: 已经有叫「%s」的岗位", ErrConflict, in.Name)
+			return store.Persona{}, fmt.Errorf("%w: 已经有叫「%s」的预设", ErrConflict, in.Name)
 		}
 		if p.ID == in.ID {
 			builtin = p.Builtin
@@ -148,7 +145,7 @@ func (e *Engine) DeletePersona(ctx context.Context, id, actor string) error {
 	open, _ := e.store().Tasks(ctx, store.TaskFilter{Statuses: openStatuses})
 	for _, t := range open {
 		if t.PersonaID == id {
-			return fmt.Errorf("%w: 任务「%s」还在用这个岗位", ErrConflict, t.Title)
+			return fmt.Errorf("%w: 任务「%s」还在用这个预设", ErrConflict, t.Title)
 		}
 	}
 	_, err := e.Log.Append(ctx, event.New(event.PersonaDeleted, actor, "", event.PersonaPayload{PersonaID: id}))
@@ -166,7 +163,7 @@ func (e *Engine) findPersona(ctx context.Context, ref string) (store.Persona, er
 			return p, nil
 		}
 	}
-	return store.Persona{}, fmt.Errorf("%w: 没有叫 %q 的岗位；可用的岗位见环境说明", ErrInvalid, ref)
+	return store.Persona{}, fmt.Errorf("%w: 没有叫 %q 的预设；可用的预设见环境说明", ErrInvalid, ref)
 }
 
 // ProjectInput creates or changes a project. Nil fields keep their value
@@ -218,7 +215,7 @@ func (e *Engine) PutProject(ctx context.Context, in ProjectInput, actor string) 
 	}
 	if p.DefaultPersona != "" {
 		if _, err := e.store().Persona(ctx, p.DefaultPersona); err != nil {
-			return store.Project{}, fmt.Errorf("%w: 岗位 %s 不存在", ErrInvalid, p.DefaultPersona)
+			return store.Project{}, fmt.Errorf("%w: 预设 %s 不存在", ErrInvalid, p.DefaultPersona)
 		}
 	}
 	ps, _ := e.store().Projects(ctx)

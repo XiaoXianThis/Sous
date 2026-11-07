@@ -39,6 +39,9 @@ type Request struct {
 	NodePref     string // a machine the task names
 	Sticky       string // the machine that holds the task's branch or snapshot
 	Agent        string
+	// Fallback is the global default agent: used on a machine whose own
+	// default is unset or unusable, when Agent is empty (decision 0024).
+	Fallback string
 	// Prefer is the machine role tried first (dev / server). It is a
 	// preference: machines of the other role are used only when the
 	// candidates have none of the preferred role. Naming a machine wins.
@@ -52,6 +55,9 @@ type Choice struct {
 	NodeID string
 	Agent  string
 	Path   string // the project's directory on that machine (worktree, in_place)
+	// Note says when the choice is not the preferred kind of machine, so
+	// the supervisor knows which road was taken (decision 0025).
+	Note string
 }
 
 // Route picks the machine and agent for a task's next run.
@@ -84,6 +90,7 @@ func Route(req Request, nodes []Node) (Choice, error) {
 		}
 	}
 	explicit := req.Sticky != "" || req.NodePref != ""
+	fallback := "" // the preferred role nobody had
 	if needsDir && len(pn) == 0 && !(explicit && req.Path != "") {
 		return Choice{}, fmt.Errorf("%w: %s需要一个登记了机器和目录的项目", ErrNoMachine, placeName[req.Place])
 	}
@@ -104,6 +111,7 @@ func Route(req Request, nodes []Node) (Choice, error) {
 			order = pref
 		} else {
 			order = rest
+			fallback = roleName[req.Prefer]
 		}
 	}
 
@@ -134,7 +142,7 @@ func Route(req Request, nodes []Node) (Choice, error) {
 			reasons = append(reasons, n.Name+" 正忙")
 			continue
 		}
-		agent, why := pickAgent(n, req.Agent)
+		agent, why := pickAgent(n, req.Agent, req.Fallback)
 		if agent == "" {
 			reasons = append(reasons, n.Name+why)
 			continue
@@ -142,10 +150,20 @@ func Route(req Request, nodes []Node) (Choice, error) {
 		if !needsDir {
 			path = ""
 		}
-		return Choice{NodeID: id, Agent: agent, Path: path}, nil
+		c := Choice{NodeID: id, Agent: agent, Path: path}
+		if fallback != "" {
+			why := "没有可用的" + fallback
+			if len(pn) > 0 {
+				why = "项目不在任何" + fallback + "上"
+			}
+			c.Note = fmt.Sprintf("%s，派到了%s %s", why, roleName[roleOf(n)], n.Name)
+		}
+		return c, nil
 	}
 	return Choice{}, fmt.Errorf("%w: %s", ErrNoMachine, strings.Join(reasons, "；"))
 }
+
+var roleName = map[string]string{"dev": "开发机", "server": "服务器"}
 
 func roleOf(n Node) string {
 	if n.Role == "server" {
@@ -156,7 +174,7 @@ func roleOf(n Node) string {
 
 var placeName = map[string]string{event.PlaceWorktree: "在 worktree 里做的任务", event.PlaceInPlace: "就地执行的任务"}
 
-func pickAgent(n Node, want string) (string, string) {
+func pickAgent(n Node, want, fallback string) (string, string) {
 	usable := func(name string) (bool, string) {
 		for _, a := range n.Agents {
 			if a.Name != name {
@@ -164,6 +182,9 @@ func pickAgent(n Node, want string) (string, string) {
 			}
 			if !a.Installed {
 				return false, " 没有安装 " + name
+			}
+			if a.Disabled {
+				return false, " 上停用了 " + name
 			}
 			if a.LoggedIn != nil && !*a.LoggedIn {
 				return false, " 上的 " + name + " 没有登录"
@@ -179,21 +200,41 @@ func pickAgent(n Node, want string) (string, string) {
 		}
 		return "", why
 	}
+	// The machine's own default, then the global one, then any usable agent.
+	for _, a := range n.Agents {
+		if a.Default {
+			if ok, _ := usable(a.Name); ok {
+				return a.Name, ""
+			}
+		}
+	}
+	if fallback != "" {
+		if ok, _ := usable(fallback); ok {
+			return fallback, ""
+		}
+	}
 	for _, name := range DefaultAgents {
 		if ok, _ := usable(name); ok {
 			return name, ""
 		}
 	}
-	// Agents beyond the built-in list (tests, overrides).
+	// Agents beyond the built-in list (custom agents, tests).
 	for _, a := range n.Agents {
 		if ok, _ := usable(a.Name); ok {
 			return a.Name, ""
 		}
 	}
 	for _, a := range n.Agents {
-		if a.Installed {
+		if a.Installed && !a.Disabled {
 			return "", " 上的 agent 都没有登录"
 		}
 	}
-	return "", " 没有安装编程 agent"
+	return "", " 没有可用的编程 agent（没装或都停用了）"
+}
+
+// Usable reports whether a machine's agent list can run the agent now:
+// installed, enabled and not known to be logged out.
+func Usable(agents []proto.AgentInfo, name string) bool {
+	ok, _ := pickAgent(Node{Agents: agents}, name, "")
+	return ok != ""
 }

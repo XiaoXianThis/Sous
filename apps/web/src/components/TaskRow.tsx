@@ -64,7 +64,7 @@ export default function TaskRow({ task, onOpen, selected = false }: { task: Card
       onClick={onOpen}
     >
       <span className={`flex-1 min-w-0 text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap ${selected ? 'text-ink font-semibold' : closed ? 'text-faint' : 'text-muted'}`}>{task.task.title}</span>
-      <span className="text-[11.5px] text-faint whitespace-nowrap flex-none max-w-[30%] overflow-hidden text-ellipsis" title={[meta?.model ? `模型 ${meta.model}` : agent ? '执行的 agent' : '岗位默认的 agent', node?.name].filter(Boolean).join(' · ')}>{shownAgent ? agentTitle(shownAgent) : '未分配'}</span>
+      <span className="text-[11.5px] text-faint whitespace-nowrap flex-none max-w-[30%] overflow-hidden text-ellipsis" title={[meta?.model ? `模型 ${meta.model}` : agent ? '执行的 agent' : '预设或默认的 agent', node?.name].filter(Boolean).join(' · ')}>{shownAgent ? agentTitle(shownAgent) : '未分配'}</span>
       <span className={`inline-flex items-center gap-1 text-[11.5px] whitespace-nowrap flex-none opacity-85 ${closed ? 'text-faint' : `tone-${look?.tone ?? info.tone}`}`} title={look ? `运行${look.text}` : undefined}>
         {look && <Icon name={look.icon} size={11} stroke={2.2} className={task.runLook === 'running' ? 'stage-current' : ''} />}{stateText}
       </span>

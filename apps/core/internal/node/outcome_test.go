@@ -77,9 +77,21 @@ func TestToolOutputMasksSecrets(t *testing.T) {
 }
 
 // The approval of a script shows the script, and only scripts inside the
-// working directory (end-to-end review 4.7).
+// working directory (end-to-end review 4.7) or the temporary directory,
+// also when an interpreter runs it (decision 0024).
 func TestScriptPreview(t *testing.T) {
 	dir := t.TempDir()
+	tmp := t.TempDir()
+	defer func(f func() string) { scriptTempDir = f }(scriptTempDir)
+	scriptTempDir = func() string { return tmp }
+	os.WriteFile(filepath.Join(tmp, "check.mjs"), []byte("console.log('checking')\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "tool.py"), []byte("print('tool')\n"), 0o644)
+	if got := scriptPreview("node "+filepath.Join(tmp, "check.mjs"), dir); !strings.Contains(got, "checking") {
+		t.Fatalf("a script in the temporary directory: %q", got)
+	}
+	if got := scriptPreview("python3 -u tool.py --x", dir); !strings.Contains(got, "print('tool')") {
+		t.Fatalf("a python script: %q", got)
+	}
 	os.WriteFile(filepath.Join(dir, "deploy.sh"), []byte("#!/bin/sh\ngit pull\nexport TOKEN=abc123secretvalue\nsystemctl restart app\n"), 0o755)
 	outside := filepath.Join(t.TempDir(), "evil.sh")
 	os.WriteFile(outside, []byte("rm -rf /\n"), 0o755)

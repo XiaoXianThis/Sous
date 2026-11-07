@@ -234,6 +234,9 @@ export default function Machines({ onClose }: { onClose: () => void }) {
                       <tr key={a.name}>
                         <td className={`py-1.5 pr-3 ${a.installed ? 'font-medium' : 'text-muted'}`}>
                           <span className={`inline-flex items-center gap-2 whitespace-nowrap ${a.installed ? '' : 'grayscale opacity-60'}`}><AgentIcon name={a.name} size={22} />{a.title}</span>
+                          {a.default && <span className="pill tone-accent ml-1.5" title="这台电脑的默认 agent（node.json 的 default_agent）">默认</span>}
+                          {a.disabled && <span className="pill ml-1.5" title="node.json 的 disabled_agents 停用了它，这台电脑不会用它">已停用</span>}
+                          {a.custom && <span className="pill ml-1.5" title="node.json 的 custom_agents 里添加的">自定义</span>}
                         </td>
                         <td className="py-1.5 pr-3 text-muted max-[760px]:hidden">{a.installed ? (a.version ?? '') : ''}{summary(a) ? ` ${summary(a)}` : ''}</td>
                         <td className="py-1.5 pr-3">

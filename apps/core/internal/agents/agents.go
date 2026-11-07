@@ -59,6 +59,8 @@ type Spec struct {
 	Configs []proto.AgentConfigFile
 	// KeyEnv are environment variables that log the agent in with an API key.
 	KeyEnv []string
+	// Custom marks an agent from node.json's custom_agents.
+	Custom bool
 }
 
 var (
@@ -247,7 +249,7 @@ func Detect(ctx context.Context, specs []Spec) []proto.AgentInfo {
 
 func detect(ctx context.Context, s Spec) proto.AgentInfo {
 	info := proto.AgentInfo{Name: s.Name, Title: s.Title, Transport: "acp", Note: s.Note,
-		KeyEnv: s.KeyEnv, Configs: s.Configs}
+		KeyEnv: s.KeyEnv, Configs: s.Configs, Custom: s.Custom}
 	if r, ok := pick(s.Install); ok {
 		info.Install = r.String()
 	}

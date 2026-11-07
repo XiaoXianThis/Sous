@@ -539,6 +539,9 @@ func classifyBase(cmd, workdir string) (Category, string) {
 		return EditWorktree, ""
 	}
 
+	if len(args) == 1 && (sub == "--version" || sub == "-V") && !strings.Contains(cmd, ">") {
+		return Read, "" // a tool's version
+	}
 	switch name {
 	case "sudo", "su", "doas", "runas":
 		return Irreversible, cmd
@@ -748,6 +751,9 @@ var readOnly = map[string]bool{
 	"ps": true, "top": true, "true": true, "false": true, "test": true, "[": true, "basename": true, "dirname": true,
 	"realpath": true, "readlink": true, "sha256sum": true, "shasum": true, "md5": true, "md5sum": true, "Get-ChildItem": true,
 	"Get-Content": true, "dir": true, "sed": true,
+	// Looking at the machine (decision 0024: the supervisor's machine_look).
+	"uptime": true, "free": true, "vm_stat": true, "sw_vers": true, "id": true, "lsof": true, "netstat": true, "ss": true,
+	"nproc": true, "arch": true, "nvidia-smi": true,
 }
 
 // safeTools build, test and check code inside the worktree.

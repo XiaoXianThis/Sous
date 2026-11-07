@@ -70,10 +70,11 @@ func projectTask(w *Writer, ev event.Event) error {
 			handoff = string(raw)
 		}
 		if err := exec(`INSERT INTO tasks(id, parent_id, origin_thread_id, kind, title, detail, status, priority, project_id,
-			agent_pref, node_pref, permission_mode, persona_id, created_at, updated_at, place, review, on_fail, base_branch, base_from, handoff, deploy_commit)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			agent_pref, node_pref, permission_mode, persona_id, created_at, updated_at, place, review, on_fail, base_branch, base_from, handoff, deploy_commit, options)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.TaskID, p.ParentID, ev.ThreadID, p.Kind, p.Title, p.Detail, p.Status, p.Priority, p.ProjectID,
-			p.AgentPref, p.NodePref, p.PermissionMode, p.PersonaID, ev.TS, ev.TS, p.Place, p.Review, p.OnFail, p.BaseBranch, p.BaseFrom, handoff, p.DeployCommit); err != nil {
+			p.AgentPref, p.NodePref, p.PermissionMode, p.PersonaID, ev.TS, ev.TS, p.Place, p.Review, p.OnFail, p.BaseBranch, p.BaseFrom, handoff, p.DeployCommit,
+			optionsJSON(p.Options)); err != nil {
 			return err
 		}
 		return setDeps(w, ev.TaskID, p.DependsOn)
@@ -130,6 +131,9 @@ func projectTask(w *Writer, ev event.Event) error {
 		}
 		if p.BaseFrom != nil {
 			add("base_from", *p.BaseFrom)
+		}
+		if p.Options != nil {
+			add("options", optionsJSON(*p.Options))
 		}
 		args = append(args, ev.TaskID)
 		if err := exec(`UPDATE tasks SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
@@ -279,21 +283,33 @@ type Task struct {
 	// where: what a finished task shows (end-to-end review 4.4).
 	LastAgent string `json:"last_agent,omitempty"`
 	LastNode  string `json:"last_node,omitempty"`
+	// Options are the session settings the task asks for ("model",
+	// "effort"), over its preset's.
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// optionsJSON stores a task's session settings; "" when there are none.
+func optionsJSON(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	raw, _ := json.Marshal(m)
+	return string(raw)
 }
 
 const taskCols = `id, parent_id, origin_thread_id, kind, title, detail, status, status_reason, priority, project_id,
 	agent_pref, node_pref, permission_mode, branch, base_branch, pr_url, review_note, next, dismissed, created_at, updated_at, persona_id,
-	place, review, on_fail, base_from, base_commit, git_state, handoff, deploy_commit, last_agent, last_node`
+	place, review, on_fail, base_from, base_commit, git_state, handoff, deploy_commit, last_agent, last_node, options`
 
 func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 	out := []Task{}
 	for rows.Next() {
 		var t Task
-		var handoff string
+		var handoff, options string
 		if err := rows.Scan(&t.ID, &t.ParentID, &t.OriginThreadID, &t.Kind, &t.Title, &t.Detail, &t.Status, &t.StatusReason,
 			&t.Priority, &t.ProjectID, &t.AgentPref, &t.NodePref, &t.PermissionMode, &t.Branch, &t.BaseBranch, &t.PRURL,
 			&t.ReviewNote, &t.Next, &t.Dismissed, &t.CreatedAt, &t.UpdatedAt, &t.PersonaID,
-			&t.Place, &t.Review, &t.OnFail, &t.BaseFrom, &t.BaseCommit, &t.GitState, &handoff, &t.DeployCommit, &t.LastAgent, &t.LastNode); err != nil {
+			&t.Place, &t.Review, &t.OnFail, &t.BaseFrom, &t.BaseCommit, &t.GitState, &handoff, &t.DeployCommit, &t.LastAgent, &t.LastNode, &options); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -302,6 +318,9 @@ func (s *Store) scanTasks(ctx context.Context, rows *sql.Rows) ([]Task, error) {
 			if json.Unmarshal([]byte(handoff), t.Handoff) != nil {
 				t.Handoff = nil
 			}
+		}
+		if options != "" {
+			json.Unmarshal([]byte(options), &t.Options)
 		}
 		t.DependsOn = []string{}
 		out = append(out, t)

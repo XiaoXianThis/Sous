@@ -194,6 +194,10 @@ func (a *admin) mergeNodeConfig(content []byte) (Config, error) {
 	}
 	next.HubURL, next.NodeID, next.Token, next.RemoteAdmin = cur.HubURL, cur.NodeID, cur.Token, cur.RemoteAdmin
 	next.RemoteShell = cur.RemoteShell
+	// Custom agents decide what this machine runs: only a local edit
+	// changes them (decision 0024, as 0012 keeps commands off requests).
+	next.CustomAgents = cur.CustomAgents
+	next.SousMCP = cur.SousMCP
 	// From the Hub, safety settings only tighten: a server stays a server
 	// (as setRole), the floor rules cannot be turned off or replaced, and
 	// extra rules can be added but not removed. Loosening them takes an

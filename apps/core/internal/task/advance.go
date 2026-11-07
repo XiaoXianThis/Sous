@@ -160,7 +160,7 @@ func (e *Engine) refusedNothingDone(ctx context.Context, t store.Task, r store.R
 	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
 		return err
 	}
-	e.followup(ctx, t, "refused:"+r.ID, "任务的操作被拒绝",
+	e.tell(ctx, t, "refused:"+r.ID, "任务的操作被拒绝",
 		fmt.Sprintf("任务 %s「%s」执行中这些操作被拒绝了：%s。agent 没有留下改动就停了，所以没有算作完成。它说：%s\n\n"+
 			"拒绝可能就是用户不想这么做：不要直接重试，先问用户想怎么办（换个做法、取消任务，还是允许后重试）。（这是 sous 的自动提醒，不是用户发的消息。）",
 			t.ID, t.Title, strings.Join(r.Refused, "；"), truncate(firstNonEmpty(r.Summary, "（什么也没说）"), 200)))
@@ -179,7 +179,7 @@ func (e *Engine) noAction(ctx context.Context, t store.Task, r store.Run) error 
 	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
 		return err
 	}
-	e.followup(ctx, t, "no-action:"+r.ID, "任务没有实际执行",
+	e.tell(ctx, t, "no-action:"+r.ID, "任务没有实际执行",
 		fmt.Sprintf("任务 %s「%s」的 agent（%s）没调用任何工具、没有改动就结束了这一轮，所以没有算作完成。它说：%s\n\n"+
 			"判断怎么继续：如果是 agent 的额度、登录或服务出了问题，换一个 agent 或机器重试（task_dispatch）；如果它其实是在等更清楚的说明，补充说明后重试；需要用户决定时用 notify 简短提醒一次。（这是 sous 的自动提醒，不是用户发的消息。）",
 			t.ID, t.Title, firstNonEmpty(r.Agent, "agent"), firstNonEmpty(said, "（什么也没说）")))
@@ -234,7 +234,7 @@ func (e *Engine) askUserReview(ctx context.Context, t store.Task, r store.Run, n
 		text += "\n\n改动：" + r.DiffStat
 	}
 	if r.Summary != "" {
-		text += "\n\n" + truncate(r.Summary, 800)
+		text += "\n\n" + summaryText(r.Summary, 800)
 	}
 	e.report(ctx, t, text)
 	return nil
@@ -404,11 +404,11 @@ func (e *Engine) afterReviewRun(ctx context.Context, t store.Task, r store.Run) 
 	case event.RunStatusCancelled:
 		return e.transition(ctx, t, event.TaskPlanned, "验收被取消："+firstNonEmpty(r.Error, "已取消"), "", event.ActorSystem)
 	default:
-		return e.reviewFallback(ctx, t, r, work, "审查岗位没能完成验收（"+truncate(firstNonEmpty(r.Error, r.Summary, "原因不明"), 200)+"），等你验收")
+		return e.reviewFallback(ctx, t, r, work, "验收 agent 没能完成验收（"+truncate(firstNonEmpty(r.Error, r.Summary, "原因不明"), 200)+"），等你验收")
 	}
 	verdict, ok := parseVerdict(r.Summary)
 	if !ok {
-		return e.reviewFallback(ctx, t, r, work, "审查岗位没有给出明确结论，等你验收")
+		return e.reviewFallback(ctx, t, r, work, "验收 agent 没有给出明确结论，等你验收")
 	}
 	return e.applyVerdict(ctx, t, work, verdict, event.ActorReviewer, false)
 }
@@ -480,7 +480,7 @@ func (e *Engine) applyVerdict(ctx context.Context, t store.Task, work store.Run,
 		e.report(ctx, t, fmt.Sprintf("任务「%s」受阻：%s\n\n需要你看一下改动，决定怎么继续。", t.Title, reason))
 		return nil
 	}
-	if byUser || (t.OnFail == event.OnFailRework && len(work.Refused) == 0) {
+	if byUser || (t.OnFail != event.OnFailAsk && len(work.Refused) == 0) { // decision 0024: rework unless told to stop
 		return e.queueNext(ctx, t, event.PurposeWork)
 	}
 	reason := "验收没有通过：" + v.Reason
@@ -494,7 +494,7 @@ func (e *Engine) applyVerdict(ctx context.Context, t store.Task, work store.Run,
 	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
 		return err
 	}
-	e.followup(ctx, t, "review-failed:"+work.ID, "任务验收没有通过",
+	e.tell(ctx, t, "review-failed:"+work.ID, "任务验收没有通过",
 		fmt.Sprintf("任务 %s「%s」验收没有通过：%s\n\n"+hint+"判断怎么继续：让它照着意见返工（task_dispatch），换一个 agent 或岗位，或者问用户。"+
 			"需要用户决定时用 notify 简短提醒一次；能自己推进就直接做。（这是 sous 的自动提醒，不是用户发的消息。）", t.ID, t.Title, v.Reason))
 	return nil
@@ -604,8 +604,11 @@ func (e *Engine) doneReport(ctx context.Context, t store.Task, work store.Run) s
 			b.WriteString("\n\n项目没有配置健康检查，部署结果没有经过验证；可以在项目设置里加一条健康检查命令。")
 		}
 	}
-	if note := firstNonEmpty(t.ReviewNote, work.Summary); note != "" {
-		fmt.Fprintf(&b, "\n\n%s", truncate(note, 800))
+	if t.ReviewNote != "" {
+		fmt.Fprintf(&b, "\n\n验收意见：%s", truncate(t.ReviewNote, 400))
+	}
+	if work.Summary != "" {
+		fmt.Fprintf(&b, "\n\n%s", summaryText(work.Summary, 800))
 	} else if t.Kind == event.TaskKindOps {
 		b.WriteString("\n\nagent 没有写总结")
 	}
@@ -629,12 +632,24 @@ func (e *Engine) post(ctx context.Context, t store.Task, text string, notify boo
 	if thread == "" {
 		thread, _ = e.store().MainThreadID(ctx)
 	}
+	msgID := ids.New()
 	ev := event.New(event.MessageAssistant, event.ActorSupervisor, thread,
-		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindReport, Notify: notify})
+		event.MessagePayload{MessageID: msgID, Content: text, Kind: event.KindReport, Notify: notify})
 	ev.TaskID = t.ID
 	if _, err := e.Log.Append(ctx, ev); err != nil {
 		slog.Error("task: post report", "task", t.ID, "err", err)
+		return
 	}
+	// The supervisor only wakes for input; a report is news it should act
+	// on, so it gets a trigger pointing at it (decision 0025).
+	t.OriginThreadID = thread
+	what := "一个任务有新的汇报，在上面。"
+	if t.ID != "" {
+		if cur, err := e.store().Task(ctx, t.ID); err == nil {
+			what = fmt.Sprintf("任务「%s」（id %s）现在%s，汇报在上面。", cur.Title, cur.ID, statusName[cur.Status])
+		}
+	}
+	e.wake(ctx, t, "report:"+msgID, "任务有新进展", "【任务进展】"+what)
 }
 
 // worktreeDone reports whether nothing needs a task's worktree any more:
@@ -714,7 +729,7 @@ func (e *Engine) reviewPrompt(ctx context.Context, t store.Task) string {
 	work := e.lastRun(ctx, t.ID, event.PurposeWork)
 	var b strings.Builder
 	if p := e.reviewerPersona(ctx); strings.TrimSpace(p.Brief) != "" {
-		fmt.Fprintf(&b, "【你的岗位：%s】%s\n\n", p.Name, strings.TrimSpace(p.Brief))
+		fmt.Fprintf(&b, "【%s】%s\n\n", p.Name, strings.TrimSpace(p.Brief))
 	}
 	fmt.Fprintf(&b, "请验收这个任务做得对不对：\n\n任务：%s\n", t.Title)
 	if t.Detail != "" {

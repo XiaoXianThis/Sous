@@ -9,6 +9,7 @@
 //	sous service install|uninstall|start|stop|restart|status
 //	sous unpair                               forget the pairing on this machine
 //	sous version
+//	sous mcp --home DIR --run ID --token T    sous's tools for a sub-agent (started by the agent, not by hand)
 //
 // --home DIR (or SOUS_HOME) changes where sous keeps its files (default ~/.sous).
 package main
@@ -32,6 +33,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ipc"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/watchdog"
@@ -66,6 +68,13 @@ func run(args []string) error {
 		return errors.New("missing command")
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "mcp" {
+		// Its stdout is the MCP stream: nothing else may write to it.
+		if code := sousmcp.Main(rest); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	home := fs.String("home", "", "directory for sous files")
 	name := fs.String("name", "", "machine name shown in sous (pair)")

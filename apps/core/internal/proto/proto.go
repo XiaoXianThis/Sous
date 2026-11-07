@@ -42,6 +42,7 @@ const (
 	// TRunTurn reports one finished turn of a long-lived run (a project
 	// consultant, decision 0022). Reliable.
 	TRunTurn = "run.turn"
+	TRunAsk  = "run.ask" // node → Hub: an agent asks the supervisor (0025)
 )
 
 // Frame is one message. Frames from the node that must not be lost carry a
@@ -77,6 +78,9 @@ type Hello struct {
 	Caps []string `json:"caps,omitempty"`
 	// Admin is false when node.json turned remote administration off.
 	Admin bool `json:"admin,omitempty"`
+	// Addrs are the machine's own IP addresses (not loopback or
+	// link-local): the Hub recognizes an ssh to a connected machine by them.
+	Addrs []string `json:"addrs,omitempty"`
 }
 
 type Welcome struct {
@@ -96,6 +100,12 @@ type AgentInfo struct {
 	// LoggedIn is nil when the node cannot tell.
 	LoggedIn *bool  `json:"logged_in,omitempty"`
 	Note     string `json:"note,omitempty"`
+	// Decision 0024, from node.json: Disabled agents are not used on this
+	// machine; Default is the machine's default agent; Custom marks an
+	// agent added in custom_agents.
+	Disabled bool `json:"disabled,omitempty"`
+	Default  bool `json:"default,omitempty"`
+	Custom   bool `json:"custom,omitempty"`
 
 	// Remote administration (nodes with CapAdmin).
 	// Install, Upgrade, Login and Logout are the commands sous would run;
@@ -179,6 +189,9 @@ type RunStart struct {
 	BaseFrom      string `json:"base_from,omitempty"`
 	Git           *GitOp `json:"git,omitempty"`
 	ResumeSession string `json:"resume_session,omitempty"`
+	// ContinuePrompt is sent instead of Prompt when ResumeSession loads: a
+	// rework or retry that goes on in the task's earlier session (0025).
+	ContinuePrompt string `json:"continue_prompt,omitempty"`
 }
 
 // Run purposes.
@@ -191,6 +204,14 @@ const (
 	PurposeGit     = "git"     // one git operation, fixed commands, no agent
 	PurposeConsult = "consult" // a project's read-only consultant, idle between questions
 )
+
+// RunAsk is a question a run's agent asks the supervisor (decision 0025,
+// node → Hub). The answer comes back as a run.message.
+type RunAsk struct {
+	RunID    string `json:"run_id"`
+	Seq      int    `json:"seq"`
+	Question string `json:"question"`
+}
 
 // RunTurn is one finished turn of a long-lived run.
 type RunTurn struct {

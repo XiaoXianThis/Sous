@@ -24,6 +24,10 @@ type Config struct {
 	Token  string `json:"token"`
 	// Concurrency bounds how many runs execute at once (default 2).
 	Concurrency int `json:"concurrency,omitempty"`
+	// SousMCP overrides how sous's own MCP server for sub-agents starts
+	// (decision 0025; default: this executable with "mcp"); ["off"] turns
+	// it off. It decides what runs here, so only this file sets it.
+	SousMCP []string `json:"sous_mcp,omitempty"`
 	// Agents overrides how an agent's ACP server starts, by agent name:
 	// {"claude": ["/path/to/claude-agent-acp"]}.
 	Agents map[string][]string `json:"agents,omitempty"`
@@ -58,6 +62,34 @@ type Config struct {
 	// Workspaces are the directories searched for git repositories; new
 	// projects are cloned or created in the first one. "~/" is expanded.
 	Workspaces []string `json:"workspaces,omitempty"`
+	// DefaultAgent is this machine's default agent: used when neither the
+	// task, its preset nor its project names one (decision 0024).
+	DefaultAgent string `json:"default_agent,omitempty"`
+	// DisabledAgents are agents this machine does not run, installed or not.
+	DisabledAgents []string `json:"disabled_agents,omitempty"`
+	// CustomAgents are more ACP agents. They decide what the machine runs,
+	// so only an edit on this machine changes them; the Hub cannot.
+	CustomAgents []CustomAgent `json:"custom_agents,omitempty"`
+}
+
+// CustomAgent is an ACP agent beyond the built-in ones.
+type CustomAgent struct {
+	// Name is how sous refers to it: lowercase letters, digits and "-",
+	// different from the built-in agents.
+	Name  string `json:"name"`
+	Title string `json:"title,omitempty"`
+	// Command starts its ACP server; the first element is looked up on PATH.
+	Command []string `json:"command"`
+}
+
+// AgentDisabled reports whether node.json turns the agent off.
+func (c Config) AgentDisabled(name string) bool {
+	for _, n := range c.DisabledAgents {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // RoleName is the machine's role, dev unless set to server.

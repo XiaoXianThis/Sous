@@ -122,6 +122,9 @@ type TaskFields struct {
 	OnFail     *string `json:"on_fail,omitempty"`
 	BaseBranch *string `json:"base_branch,omitempty"`
 	BaseFrom   *string `json:"base_from,omitempty"`
+	// Options are the session settings the task asks for ("model",
+	// "effort"), over its preset's; an empty map clears them.
+	Options *map[string]string `json:"options,omitempty"`
 }
 
 type TaskCreatedPayload struct {
@@ -144,6 +147,9 @@ type TaskCreatedPayload struct {
 	BaseBranch string   `json:"base_branch,omitempty"`
 	BaseFrom   string   `json:"base_from,omitempty"`
 	Handoff    *Handoff `json:"handoff,omitempty"`
+	// Options are the session settings the task asks for ("model",
+	// "effort"), over its preset's.
+	Options map[string]string `json:"options,omitempty"`
 	// DeployCommit is the deploy branch's commit an automatic deploy is for.
 	DeployCommit string `json:"deploy_commit,omitempty"`
 }

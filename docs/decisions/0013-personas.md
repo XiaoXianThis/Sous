@@ -1,6 +1,6 @@
 # 0013 人员就是岗位档案，不是有记忆的拟人员工
 
-- Status: Accepted
+- Status: Superseded by 0024（岗位改成“agent + 模型 + 定位”的预设，定位不再拼进提示词）
 - Date: 2026-11-04
 
 ## Context

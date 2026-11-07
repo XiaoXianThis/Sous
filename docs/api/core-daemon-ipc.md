@@ -26,6 +26,10 @@
 | `logs.tail` | `{lines}` | `{lines: [...]}`：daemon 最近的日志（最多 1000 行） |
 | `update.check` | — | `{current, latest, notes_url, newer}` |
 | `update.apply` | `{version?}` | `{ok, version}`；安装完成后 daemon 自动重启 |
+| `run.progress` | `{run_id, token, text}` | `{text}`：`sous mcp` 的 `report_progress`，在 Run 上记一条“进度：…”状态 |
+| `run.ask` | `{run_id, token, text}` | `{text}`：`ask_supervisor`。发 `run.ask` 帧给 Hub，等下一条追加指令作为回答（最多 20 分钟，等不到时返回“按你的判断继续”）；一个 Run 最多问 3 次，同时只能有一个问题 |
+| `run.result` | `{run_id, token, done, changed?, verified, left?, decide?}` | `{text}`：`report_result`。Run 的总结里没有“## 结果”一节时，结束时按它补上 |
 
 - 对话、审批类的方法由 daemon 用设备令牌调用 Hub 的 `/api/v1/device/` 接口（见 `core-hub-http.md`）。设备令牌只代表“这台机器”，代办范围限于读线程、发消息、事件流和审批；设置、机器、任务管理等需要 Passkey 登录的操作不能通过 IPC 完成。
+- `run.*` 三个方法给 `sous mcp` 用（决策 0025）：daemon 给每个工作 Run 的 agent 会话配一个 stdio MCP 服务 `sous mcp --home <home> --run <id> --token <随机令牌>`（node.json 的 `sous_mcp` 可以换启动命令，`["off"]` 关掉；这个字段只能在本机改）。令牌只在这个 Run 存在时有效，错了或 Run 已结束都返回“这个任务的执行已经结束了”。
 - 错误以 JSON-RPC 的 `error`（`code: -32000`，`message` 是中文说明）返回。

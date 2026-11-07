@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ipc"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 )
@@ -74,6 +75,10 @@ func (d *Daemon) hub(ctx context.Context, method, path string, body, out any) er
 }
 
 func (d *Daemon) ipcCall(ctx context.Context, method string, params json.RawMessage, notify func(string, any) error, logs *LogRing) (any, error) {
+	switch method {
+	case sousmcp.MethodProgress, sousmcp.MethodAsk, sousmcp.MethodResult:
+		return d.sousCall(ctx, method, params)
+	}
 	var p struct {
 		ThreadID string `json:"thread_id"`
 		Title    string `json:"title"`

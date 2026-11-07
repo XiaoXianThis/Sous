@@ -112,6 +112,7 @@ const (
 	// Decision 0022.
 	OpGitStatus   = "git.status"   // {root} -> GitStatus
 	OpProjectGrep = "project.grep" // {root, rel, pattern} -> GrepResult
+	OpLook        = "machine.look" // {dir, command} -> LookResult
 )
 
 type WorkspacesArgs struct {
@@ -215,6 +216,21 @@ type GrepArgs struct {
 	Root    string `json:"root"`
 	Rel     string `json:"rel,omitempty"`
 	Pattern string `json:"pattern"`
+}
+
+// LookArgs runs one read-only command on a machine for the supervisor
+// (decision 0024): Dir is where it runs (empty: the home directory).
+type LookArgs struct {
+	Dir     string `json:"dir,omitempty"`
+	Command string `json:"command"`
+}
+
+// LookResult is what the command printed (stdout and stderr together).
+type LookResult struct {
+	Output    string `json:"output"`
+	ExitCode  int    `json:"exit_code"`
+	Truncated bool   `json:"truncated,omitempty"`
+	TimedOut  bool   `json:"timed_out,omitempty"`
 }
 
 type GrepMatch struct {

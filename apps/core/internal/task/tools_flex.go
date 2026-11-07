@@ -24,8 +24,8 @@ type reviewTool struct{ e *Engine }
 func (reviewTool) Spec() provider.ToolSpec {
 	return provider.ToolSpec{
 		Name: "task_review",
-		Description: "让一个已经做完的任务（再）验收一次，比如用户说“跑一遍测试给我看”“让审查岗位看看”。" +
-			"by：model 由验收模型看 diff；agent 由审查岗位在目录里只读地跑测试检查；user 交给用户。结果会自动汇报。",
+		Description: "让一个已经做完的任务（再）验收一次，比如用户说“跑一遍测试给我看”“让 agent 跑测试验一下”。" +
+			"by：model 由验收模型看 diff；agent 由验收 agent 在目录里只读地跑测试检查；user 交给用户。结果会自动汇报。",
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"task":{"type":"string","description":"任务 id"},
 			"by":{"type":"string","enum":["model","agent","user"]}
@@ -262,15 +262,18 @@ func (consultTool) Spec() provider.ToolSpec {
 			"project":{"type":"string","description":"项目名或 id；项目对话里可以不填"},
 			"question":{"type":"string","description":"要问顾问的问题，写清楚背景和想知道什么（它看不到这段对话）"},
 			"new_topic":{"type":"boolean"},
-			"machine":{"type":"string","description":"指定在哪台机器上看；一般不填"}
+			"machine":{"type":"string","description":"指定在哪台机器上看；一般不填"},
+			"agent":{"type":"string","description":"用哪个 agent 当顾问；只在开始新会话时生效，一般不填"},
+			"model":{"type":"string","description":"顾问用的模型；只在开始新会话时生效，一般不填"},
+			"effort":{"type":"string","description":"顾问的思考强度；只在开始新会话时生效"}
 		},"required":["question"]}`),
 	}
 }
 
 func (t consultTool) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
-		Project, Question, Machine string
-		NewTopic                   bool `json:"new_topic"`
+		Project, Question, Machine, Agent, Model, Effort string
+		NewTopic                                         bool `json:"new_topic"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
@@ -281,7 +284,7 @@ func (t consultTool) Call(ctx context.Context, raw json.RawMessage) (string, err
 	}
 	turn := tool.TurnFrom(ctx)
 	ans, err := t.e.Consult(ctx, ConsultInput{ProjectID: p.ID, Question: a.Question, NewTopic: a.NewTopic, NodeID: node,
-		ThreadID: turn.ThreadID, ReplyTo: turn.ReplyTo})
+		ThreadID: turn.ThreadID, ReplyTo: turn.ReplyTo, Agent: a.Agent, Options: map[string]string{"model": a.Model, "effort": a.Effort}})
 	if err != nil {
 		return "", err
 	}

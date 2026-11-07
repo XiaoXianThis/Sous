@@ -192,7 +192,8 @@ func TestOpsTaskOnServer(t *testing.T) {
 		t.Fatal("ops tasks are not reviewed")
 	}
 	log, _ := os.ReadFile(prompts)
-	if !strings.Contains(string(log), "set model=smart") || !strings.Contains(string(log), "【你的岗位：部署员】按脚本部署") ||
+	// Decision 0024: a preset's description is for the supervisor, not the agent.
+	if !strings.Contains(string(log), "set model=smart") || strings.Contains(string(log), "按脚本部署") ||
 		!strings.Contains(string(log), "./deploy.sh") {
 		t.Fatalf("agent saw: %s", log)
 	}
@@ -264,7 +265,7 @@ func TestDeployOnNewCommits(t *testing.T) {
 	te.tasks.CheckDeploys(ctx)
 	te.tasks.CheckDeploys(ctx)
 	ops := opsTasks(te)
-	if len(ops) != 1 || ops[0].DeployCommit != head || ops[0].Place != event.PlaceInPlace || ops[0].Review != event.ReviewNone || ops[0].PersonaID != "ops" {
+	if len(ops) != 1 || ops[0].DeployCommit != head || ops[0].Place != event.PlaceInPlace || ops[0].Review != event.ReviewNone || ops[0].PersonaID != "" { // no ops preset: the machine decides (0024)
 		t.Fatalf("ops tasks: %+v", ops)
 	}
 	if r := te.task(ops[0].ID).StatusReason; !strings.Contains(r, "离线") {
@@ -291,4 +292,38 @@ func opsTasks(te *taskEnv) []store.Task {
 		}
 	}
 	return ops
+}
+
+// Decision 0025: a project can be cloned onto a server with a workspace when
+// the machine is named, so the supervisor can deploy on the server itself;
+// a server is never picked when no machine is named.
+func TestCloneOntoServer(t *testing.T) {
+	te := newTaskEnv(t)
+	ctx := context.Background()
+	ws := t.TempDir()
+	te.setConfig(func(c *node.Config) { c.Role = "server"; c.Workspaces = []string{ws} })
+	defer te.startDaemon("write")()
+	te.waitFor("the server role", func() bool {
+		n, _ := te.log.Store.Node(ctx, te.cfg.NodeID)
+		return n.Role == "server" && len(n.Workspaces) == 1
+	})
+	name, origin := "deployed", te.origin
+	p, err := te.tasks.PutProject(ctx, task.ProjectInput{Name: &name, RepoURL: &origin}, event.ActorUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := te.tasks.CloneProject(ctx, task.SetupInput{ProjectID: p.ID, Actor: event.ActorUser}); err == nil {
+		t.Fatal("a server was picked without being named")
+	}
+	run, err := te.tasks.CloneProject(ctx, task.SetupInput{ProjectID: p.ID, NodeID: te.cfg.NodeID, Actor: event.ActorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := te.ended(run.ID); r.Status != event.RunStatusSucceeded {
+		t.Fatalf("clone run: %+v", r)
+	}
+	te.waitFor("the project's place on the server", func() bool {
+		got, _ := te.log.Store.Project(ctx, p.ID)
+		return len(got.Nodes) == 1 && got.Nodes[0].NodeID == te.cfg.NodeID && got.Nodes[0].Path == filepath.Join(ws, "origin")
+	})
 }

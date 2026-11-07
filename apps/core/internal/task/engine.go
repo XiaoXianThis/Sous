@@ -14,6 +14,7 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -259,7 +260,10 @@ type Input struct {
 	Agent     string
 	Node      string
 	Mode      string // default / auto / open; empty: the project's or the global default
-	Persona   string // persona id; empty: the project's default persona, if any
+	Persona   string // preset (persona) id; empty: the project's default, if any
+	// Options are the task's own session settings ("model", "effort"),
+	// over its preset's (decision 0024).
+	Options   map[string]string
 	DependsOn []string
 	Dispatch  bool // start right away (or queue)
 	Actor     string
@@ -291,6 +295,15 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	if err := validAttrs(in.Place, in.Review, in.OnFail, in.BaseFrom); err != nil {
 		return store.Task{}, err
 	}
+	// Decision 0024: a task is not reviewed unless someone asks for it, and
+	// a failed review is reworked unless someone says to stop.
+	if in.Review == "" {
+		in.Review = event.ReviewNone
+	}
+	if in.Review != event.ReviewNone && in.OnFail == "" {
+		in.OnFail = event.OnFailRework
+	}
+	in.Options = cleanOptions(in.Options)
 	if in.ProjectID == "" {
 		if _, err := e.store().Project(ctx, projectkey.MiscID); err == nil {
 			in.ProjectID = projectkey.MiscID // every task belongs to a project
@@ -298,7 +311,7 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	}
 	if in.Persona != "" {
 		if _, err := e.store().Persona(ctx, in.Persona); err != nil {
-			return store.Task{}, fmt.Errorf("%w: 岗位 %s 不存在", ErrInvalid, in.Persona)
+			return store.Task{}, fmt.Errorf("%w: 预设 %s 不存在", ErrInvalid, in.Persona)
 		}
 	}
 	if err := validMode(in.Mode); err != nil {
@@ -350,7 +363,7 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		ParentID: in.ParentID, Kind: in.Kind, Title: in.Title, Detail: strings.TrimSpace(in.Detail), Priority: in.Priority,
 		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, PersonaID: in.Persona, DependsOn: in.DependsOn, Status: status,
 		Place: in.Place, Review: in.Review, OnFail: in.OnFail, BaseBranch: strings.TrimSpace(in.BaseBranch), BaseFrom: in.BaseFrom,
-		Handoff: handoff, DeployCommit: in.DeployCommit,
+		Handoff: handoff, DeployCommit: in.DeployCommit, Options: in.Options,
 	})
 	ev.TaskID = ids.New()
 	if archived {
@@ -412,11 +425,6 @@ func (e *Engine) ready(ctx context.Context, t store.Task) error {
 	if t.Place == "" {
 		missing = append(missing, "在哪儿做（place）")
 	}
-	if t.Review == "" {
-		missing = append(missing, "怎么验收（review）")
-	} else if t.Review != event.ReviewNone && t.OnFail == "" {
-		missing = append(missing, "验收不通过怎么办（on_fail）")
-	}
 	if t.Place == event.PlaceWorktree && t.Branch == "" && (t.BaseBranch == "" || t.BaseFrom == "") {
 		missing = append(missing, "从哪个分支开始（base_branch 和 base_from）")
 	}
@@ -465,6 +473,17 @@ func (e *Engine) Update(ctx context.Context, id string, f event.TaskFields, acto
 	if err := validAttrs(deref(f.Place), deref(f.Review), deref(f.OnFail), deref(f.BaseFrom)); err != nil {
 		return store.Task{}, err
 	}
+	if f.Review != nil && *f.Review != event.ReviewNone && *f.Review != "" && f.OnFail == nil && t.OnFail == "" {
+		rework := event.OnFailRework
+		f.OnFail = &rework
+	}
+	if f.Options != nil {
+		m := cleanOptions(*f.Options)
+		if m == nil {
+			m = map[string]string{}
+		}
+		f.Options = &m
+	}
 	if (f.Place != nil || f.BaseBranch != nil || f.BaseFrom != nil) && t.Branch != "" && active(t.Status) {
 		return store.Task{}, fmt.Errorf("%w: 任务正在执行，不能改它在哪儿做或从哪儿开始", ErrConflict)
 	}
@@ -475,7 +494,7 @@ func (e *Engine) Update(ctx context.Context, id string, f event.TaskFields, acto
 	}
 	if f.PersonaID != nil && *f.PersonaID != "" {
 		if _, err := e.store().Persona(ctx, *f.PersonaID); err != nil {
-			return store.Task{}, fmt.Errorf("%w: 岗位 %s 不存在", ErrInvalid, *f.PersonaID)
+			return store.Task{}, fmt.Errorf("%w: 预设 %s 不存在", ErrInvalid, *f.PersonaID)
 		}
 	}
 	if f.SetDeps || len(f.DependsOn) > 0 {
@@ -668,7 +687,13 @@ func (e *Engine) tryStart(ctx context.Context, id string) (bool, error) {
 		case event.TaskDone:
 			continue
 		case event.TaskCancelled, event.TaskFailed:
-			return false, e.transition(ctx, t, event.TaskBlocked, fmt.Sprintf("依赖的任务「%s」%s", dep.Title, statusName[dep.Status]), "", event.ActorSystem)
+			reason := fmt.Sprintf("依赖的任务「%s」%s", dep.Title, statusName[dep.Status])
+			if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
+				return false, err
+			}
+			e.wake(ctx, t, "dep:"+t.ID+":"+dep.ID+":"+dep.Status, "任务受阻",
+				fmt.Sprintf("【任务受阻】任务 %s「%s」等的任务 %s「%s」%s，所以没有开始。可以改它的依赖（task_update）、先处理那个任务，或者取消。", t.ID, t.Title, dep.ID, dep.Title, statusName[dep.Status]))
+			return false, nil
 		}
 		return false, e.transition(ctx, t, event.TaskQueued, fmt.Sprintf("等待任务「%s」完成", dep.Title), "", event.ActorSystem, waiting(event.WaitingDeps, next))
 	}
@@ -677,8 +702,16 @@ func (e *Engine) tryStart(ctx context.Context, id string) (bool, error) {
 	if errors.Is(err, router.ErrNoMachine) {
 		reason := "等待机器：" + strings.TrimPrefix(err.Error(), router.ErrNoMachine.Error()+": ")
 		first := !strings.HasPrefix(t.StatusReason, "等待机器")
-		return false, e.transition(ctx, t, event.TaskQueued, reason, "", event.ActorSystem, waiting(event.WaitingMachine, next),
-			func(p *event.TaskStatusPayload) { p.Notify = first })
+		if err := e.transition(ctx, t, event.TaskQueued, reason, "", event.ActorSystem, waiting(event.WaitingMachine, next),
+			func(p *event.TaskStatusPayload) { p.Notify = first }); err != nil {
+			return false, err
+		}
+		if t.StatusReason != reason {
+			e.wake(ctx, t, fmt.Sprintf("machine:%s:%x", t.ID, sha256.Sum256([]byte(reason)))[:80], "任务在等机器",
+				fmt.Sprintf("【任务在等机器】任务 %s「%s」现在派不出去：%s。机器上线后会自动开始；如果原因不会自己消失（没有登记目录、agent 没装或没登录），"+
+					"换一条路：指定别的机器（task_dispatch 的 machine）、把项目放到那台机器上（project_clone）、换 agent，或者问用户。", t.ID, t.Title, strings.TrimPrefix(reason, "等待机器：")))
+		}
+		return false, nil
 	} else if err != nil {
 		return false, err
 	}
@@ -742,7 +775,10 @@ func (e *Engine) route(ctx context.Context, t store.Task, purpose string) (route
 	}
 	req := router.Request{Place: t.Place, ProjectNodes: proj.Nodes, NodePref: t.NodePref, Prefer: proto.RoleDev}
 	persona := e.personaOf(ctx, t, proj)
-	req.Agent = firstNonEmpty(t.AgentPref, persona.Agent, proj.DefaultAgent, e.setting(ctx, SettingDefaultAgent))
+	// Decision 0024: the task, its preset and its project name an agent;
+	// otherwise each machine's own default, then the global one.
+	req.Agent = firstNonEmpty(t.AgentPref, persona.Agent, proj.DefaultAgent)
+	req.Fallback = e.setting(ctx, SettingDefaultAgent)
 	if t.Kind == event.TaskKindOps && t.Place == event.PlaceInPlace {
 		req.Prefer = proto.RoleServer
 		if d := proj.Deploy; d != nil && d.NodeID != "" && (t.NodePref == "" || t.NodePref == d.NodeID) {
@@ -791,16 +827,19 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 		PermissionMode: mode, Branch: t.Branch, BaseBranch: t.BaseBranch, BaseFrom: t.BaseFrom, Title: t.Title,
 		Persona: persona.Name, Options: persona.Options,
 	}
+	if purpose != event.PurposeReview {
+		cr.Options = mergeOptions(persona.Options, t.Options)
+	}
 	switch t.Place {
 	case event.PlaceInPlace:
 		cr.Kind = proto.KindInPlace
 	case event.PlaceScratch:
 		cr.RepoPath = ""
 	}
-	reason := ""
+	reason := c.Note
 	if purpose == event.PurposeReview {
 		cr.Prompt = e.reviewPrompt(ctx, t)
-		reason = "审查岗位正在验收"
+		reason = "验收 agent 正在验收"
 	} else {
 		cr.Prompt = e.workPrompt(ctx, t, proj, persona, c.Path != "" && t.Place == event.PlaceWorktree)
 		if h := t.Handoff; h != nil && e.countRuns(ctx, t.ID, event.PurposeWork) == 0 {
@@ -808,6 +847,12 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 			if h.Note != "" {
 				cr.Prompt = "【之前的讨论】这个任务来自和你（项目顾问）的讨论。讨论里你说过：\n" + h.Note + "\n\n" + cr.Prompt
 			}
+		} else if prev := e.lastRun(ctx, t.ID, event.PurposeWork); prev.Session != "" && prev.NodeID == c.NodeID && prev.Agent == c.Agent {
+			// A rework or retry on the same machine and agent goes on in the
+			// earlier session (0025); the full prompt stays for when it
+			// cannot be loaded.
+			cr.ResumeSession = prev.Session
+			cr.ContinuePrompt = continuePrompt(t, prev)
 		}
 	}
 	if prev := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase); prev.Status == event.RunStatusInterrupted && purpose == event.PurposeWork {
@@ -816,15 +861,44 @@ func (e *Engine) startRun(ctx context.Context, t store.Task, purpose string, c r
 	if _, err := e.Nodes.Create(ctx, cr); err != nil {
 		return err
 	}
+	if c.Note != "" && purpose == event.PurposeWork {
+		e.wake(ctx, t, "fallback:"+t.ID+":"+c.NodeID, "任务派到了别的机器",
+			fmt.Sprintf("【任务派到了别的机器】任务 %s「%s」%s。这也可以是一条路；如果用户要的是在别的机器上做（比如直接在服务器上部署），"+
+				"可以停掉它（run_cancel）换一条路：把项目放到那台机器上（project_clone）、指定机器（task_dispatch 的 machine），或者问用户。", t.ID, t.Title, c.Note))
+	}
 	// While running, next records what the run is for: the stage it is in.
 	return e.transition(ctx, t, event.TaskRunning, reason, "", event.ActorSystem, waiting("", purpose))
 }
 
-func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Project, persona store.Persona, inRepo bool) string {
+// continuePrompt is what a run that goes on in the task's earlier session
+// gets: what changed since, not the whole task again.
+func continuePrompt(t store.Task, prev store.Run) string {
 	var b strings.Builder
-	if brief := strings.TrimSpace(persona.Brief); brief != "" {
-		fmt.Fprintf(&b, "【你的岗位：%s】%s\n\n", persona.Name, brief)
+	b.WriteString("继续这个任务。你在这个会话里做过它，之前的过程你都记得，工作目录里保留着之前的改动；先看一下 git status，在此基础上继续。\n")
+	switch prev.Status {
+	case event.RunStatusFailed, event.RunStatusInterrupted, event.RunStatusCancelled:
+		if why := firstNonEmpty(prev.Error, prev.Status); why != "" {
+			fmt.Fprintf(&b, "\n上一轮没有完成：%s\n", truncate(why, 400))
+		}
 	}
+	if t.ReviewNote != "" {
+		fmt.Fprintf(&b, "\n上一轮的结果没有通过验收，原因：%s\n照着这个意见修改。\n", t.ReviewNote)
+	}
+	if len(prev.Refused) > 0 {
+		fmt.Fprintf(&b, "\n上一轮这些操作被拒绝了：%s。不要原样再试，换一种做法；做不到就在结果里说明。\n", strings.Join(prev.Refused, "；"))
+	}
+	fmt.Fprintf(&b, "\n现在的任务说明（可能有更新，以它为准）：\n任务：%s\n", t.Title)
+	if t.Detail != "" {
+		b.WriteString(t.Detail + "\n")
+	}
+	b.WriteString(resultPrompt)
+	return b.String()
+}
+
+func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Project, persona store.Persona, inRepo bool) string {
+	// Decision 0024: a preset's description says what it is for, to the
+	// supervisor; the agent gets the task and the project's notes.
+	var b strings.Builder
 	fmt.Fprintf(&b, "任务：%s\n", t.Title)
 	if t.Detail != "" {
 		b.WriteString("\n" + t.Detail + "\n")
@@ -853,7 +927,7 @@ func (e *Engine) workPrompt(ctx context.Context, t store.Task, proj store.Projec
 		fmt.Fprintf(&b, "\n这是第 %d 次尝试。上一次的结果没有通过验收，原因：%s\n"+
 			"工作目录里保留着之前的改动；先看一下 git status 和 git log，在此基础上修改。\n", n+1, t.ReviewNote)
 	}
-	b.WriteString("\n完成后用几句话总结你改了什么、怎么验证的。")
+	b.WriteString(resultPrompt)
 	return b.String()
 }
 
@@ -883,6 +957,41 @@ func (e *Engine) countRuns(ctx context.Context, taskID, purpose string) int {
 func (e *Engine) setting(ctx context.Context, key string) string {
 	v, _ := e.store().Setting(ctx, key)
 	return v
+}
+
+// sessionKeys are the task-level session settings: the node maps them to
+// the agent's own option by category (model, thought level).
+var sessionKeys = map[string]bool{"model": true, "effort": true}
+
+// cleanOptions keeps the known, non-empty session settings.
+func cleanOptions(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		if v = strings.TrimSpace(v); v != "" && sessionKeys[k] {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// mergeOptions lays a task's settings over its preset's. A task's "model"
+// replaces the preset's model option whatever the preset calls it, which
+// the node sorts out (it knows the categories); here the task's keys win.
+func mergeOptions(preset, task map[string]string) map[string]string {
+	if len(task) == 0 {
+		return preset
+	}
+	out := map[string]string{}
+	for k, v := range preset {
+		out[k] = v
+	}
+	for k, v := range task {
+		out[k] = v
+	}
+	return out
 }
 
 func firstNonEmpty(vs ...string) string {
@@ -933,7 +1042,7 @@ func opsPrompt(proj store.Project) string {
 // reviewerPersona is the persona that reviews tasks: the built-in reviewer
 // while it exists, else none.
 func (e *Engine) reviewerPersona(ctx context.Context) store.Persona {
-	if p, err := e.store().Persona(ctx, "reviewer"); err == nil {
+	if p, err := e.store().Persona(ctx, reviewerID); err == nil {
 		return p
 	}
 	return store.Persona{}

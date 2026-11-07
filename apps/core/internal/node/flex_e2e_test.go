@@ -112,7 +112,7 @@ func TestAgentReview(t *testing.T) {
 		t.Fatalf("task: %+v", done)
 	}
 	runs := te.runs(tk.ID)
-	if len(runs) != 2 || runs[1].Purpose != event.PurposeReview || runs[1].Persona != "审查" || runs[1].Workdir != runs[0].Workdir {
+	if len(runs) != 2 || runs[1].Purpose != event.PurposeReview || runs[1].Persona != "验收" || runs[1].Workdir != runs[0].Workdir {
 		t.Fatalf("runs: %+v", runs)
 	}
 	if len(te.reviewer.requests()) != 0 {

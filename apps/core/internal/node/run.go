@@ -95,6 +95,8 @@ type run struct {
 	idle bool
 	// slot: the run holds one of the machine's slots (d.sem).
 	slot bool
+	// sous: the run's side of sous's MCP server (decision 0025).
+	sous sousState
 }
 
 func newRun(d *Daemon, s proto.RunStart) *run {
@@ -129,6 +131,9 @@ func (r *run) end(status, stopReason, summary, diffstat string, err error) {
 	}
 	r.mu.Lock()
 	e.Refused = append([]string(nil), r.refusedAll...)
+	if r.canLoad && r.spec.Purpose == proto.PurposeWork {
+		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
+	}
 	r.mu.Unlock()
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
 	r.d.forget(r.spec.RunID)
@@ -171,6 +176,10 @@ func (r *run) execute() {
 	spec, ok := r.d.findSpec(r.spec.Agent)
 	if !ok {
 		r.end("failed", "", "", "", fmt.Errorf("这台机器不认识 agent %q", r.spec.Agent))
+		return
+	}
+	if r.d.conf().AgentDisabled(spec.Name) {
+		r.end("failed", "", "", "", fmt.Errorf("这台机器在 node.json 里停用了 %s（disabled_agents）", spec.Title))
 		return
 	}
 
@@ -273,6 +282,9 @@ func (r *run) endWith(e proto.RunEnded) {
 	e.RunID = r.spec.RunID
 	r.mu.Lock()
 	e.Refused = append([]string(nil), r.refusedAll...)
+	if e.SessionID == "" && r.canLoad && r.spec.Purpose == proto.PurposeWork {
+		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
+	}
 	r.mu.Unlock()
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
 	r.d.forget(r.spec.RunID)
@@ -363,6 +375,7 @@ func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, ac
 	if err != nil {
 		return nil, acp.Session{}, fmt.Errorf("启动 %s 失败：%w", spec.Title, err)
 	}
+	client.SetMCPServers(r.d.sousServers(r))
 	if want := r.spec.ResumeSession; r.resumed == nil && want != "" {
 		// A consultant that went idle, or a task that grew out of a
 		// discussion: go on in the agent's earlier session when it can.
@@ -662,6 +675,14 @@ func (r *run) firstPrompt(ws workspace.Prepared) string {
 	var b strings.Builder
 	if r.spec.RecoveryNote != "" {
 		b.WriteString(r.spec.RecoveryNote + "\n\n")
+	}
+	r.mu.Lock()
+	continued := r.continued
+	r.mu.Unlock()
+	if continued && r.spec.ContinuePrompt != "" {
+		// The agent remembers the task and its earlier rounds (0025).
+		b.WriteString(r.spec.ContinuePrompt)
+		return b.String()
 	}
 	b.WriteString(r.spec.Prompt)
 	switch {
@@ -983,6 +1004,20 @@ func (r *run) followUp(text, messageID string) {
 			return
 		}
 		r.seen[messageID] = true
+	}
+	r.mu.Unlock()
+	if r.answerAsk(text) {
+		// The agent asked the supervisor and waits in the tool call: the
+		// message is the answer (decision 0025).
+		r.mu.Lock()
+		if messageID != "" {
+			r.delivered = append(r.delivered, messageID)
+		}
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Lock()
+	if messageID != "" {
 		r.followIDs = append(r.followIDs, messageID)
 	}
 	r.followUps = append(r.followUps, text)
@@ -1047,7 +1082,20 @@ func (r *run) stopReasonText() string {
 func (r *run) summary() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return truncate(strings.TrimSpace(r.turnText.String()), summaryRunes)
+	s := tail(strings.TrimSpace(r.turnText.String()), summaryRunes)
+	if c := r.sous.result; c != nil && !strings.Contains(s, "## 结果") {
+		s = strings.TrimSpace(s + "\n\n" + resultSection(c))
+	}
+	return s
+}
+
+// tail keeps the last n runes: an agent closes its turn with the summary
+// and the "## 结果" section the Hub reads (decision 0025).
+func tail(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return "…" + string(r[len(r)-n:])
+	}
+	return s
 }
 
 func (r *run) sendDiff(diff string) {

@@ -1,6 +1,8 @@
 /** What a `kind: trigger` message says, split for display. */
 export interface TriggerView {
-  kind: 'schedule' | 'followup' | 'other'
+  kind: 'schedule' | 'followup' | 'task' | 'other'
+  /** For task news: its kind, as the hub heads it (任务进展, agent 的问题, …). */
+  label?: string
   /** One short line: the schedule's title, or the follow-up's first clause. */
   title: string
   /** The rest, for the expanded view (without the bracketed head). */
@@ -9,8 +11,10 @@ export interface TriggerView {
 
 const schedule = /^【定时任务「([^」]*)」(（[^）]*）)?】\n?/
 const followup = /^【跟进】/
+// Task news that wakes the supervisor (decision 0025).
+const taskNews = /^【(任务进展|任务受阻|任务在等机器|任务派到了别的机器|agent 的问题)】/
 // The hub appends a note meant for the model; the user does not need it.
-const modelNote = /\n*（这是(用户设定的定时任务| sous 的自动跟进)[\s\S]*）\s*$/
+const modelNote = /\n*（这是(用户设定的定时任务| sous 的自动(跟进|通知|提醒))[\s\S]*）\s*$/
 
 /**
  * Parses a trigger message: 【定时任务「标题」（手动触发）】\n提示词, or
@@ -20,6 +24,11 @@ export function triggerView(content: string): TriggerView {
   const s = schedule.exec(content)
   if (s) {
     return { kind: 'schedule', title: s[1] + (s[2] ?? ''), body: content.slice(s[0].length).replace(modelNote, '').trim() }
+  }
+  const n = taskNews.exec(content)
+  if (n) {
+    const body = content.slice(n[0].length).replace(modelNote, '').trim()
+    return { kind: 'task', label: n[1], title: firstClause(body).replace(/（id [^）]*）/g, ''), body }
   }
   if (followup.test(content)) {
     const body = content.replace(followup, '').replace(modelNote, '').trim()

@@ -22,9 +22,23 @@ import (
 )
 
 const (
-	// MaxSteps bounds the model calls of one turn, so a tool loop cannot run away.
-	MaxSteps = 12
+	// MaxSteps bounds the model calls of one turn, so a tool loop cannot run
+	// away. The last step is asked to report instead of calling tools.
+	MaxSteps = 50
+	// maxSameCall is how often one turn may make the very same tool call
+	// (name and arguments); later copies are refused, not run.
+	maxSameCall = 2
+	// MaxAutoTurns bounds the turns a thread runs on triggers alone (task
+	// news, follow-ups) since the user last wrote: past it the supervisor
+	// stops carrying on by itself and tells the user once (decision 0025).
+	MaxAutoTurns = 8
+	// DefaultTaskBatch is how long task news waits for more before the
+	// supervisor takes it up, so a burst is one turn.
+	DefaultTaskBatch = 20 * time.Second
 )
+
+// wrapUpNote is added to the results before the last step of a turn.
+const wrapUpNote = "\n\n【sous】这一轮调用工具的次数快到上限了。不要再调用工具：用几句话告诉用户做到了哪一步、还剩什么；用户说“继续”你就接着做。"
 
 type Options struct {
 	Log      *eventlog.Log
@@ -49,6 +63,9 @@ type Options struct {
 	// Attachments holds the files users send; without it the model only
 	// hears that a file was attached.
 	Attachments *attach.Store
+	// TaskBatch is how long task triggers wait before a turn; 0 means
+	// DefaultTaskBatch, negative means no wait.
+	TaskBatch time.Duration
 }
 
 type Supervisor struct {
@@ -60,6 +77,7 @@ type Supervisor struct {
 	queues   map[string]chan struct{}
 	ops      map[string][]func() // run by a thread's worker after its turn
 	failures map[string]int      // failed compactions in a row, by thread
+	batches  map[string]bool     // threads with task news waiting to be taken up
 }
 
 func New(opt Options) *Supervisor {
@@ -69,7 +87,10 @@ func New(opt Options) *Supervisor {
 	if opt.Tools == nil {
 		opt.Tools = tool.NewRegistry()
 	}
-	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}}
+	if opt.TaskBatch == 0 {
+		opt.TaskBatch = DefaultTaskBatch
+	}
+	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}}
 }
 
 // Start subscribes to stored events. Turns run until ctx is cancelled; Wait
@@ -80,7 +101,34 @@ func (s *Supervisor) Start(ctx context.Context) {
 		// A trigger is input nobody typed: a schedule came due, or the Hub
 		// wants something followed up. It is stored as a user message.
 		if (ev.Type == event.MessageUser || ev.Type == event.TriggerFired) && ev.ThreadID != "" {
+			if ev.Type == event.TriggerFired && s.opt.TaskBatch > 0 {
+				var p event.TriggerPayload
+				if ev.Decode(&p) == nil && p.Kind == event.TriggerTask {
+					s.later(ev.ThreadID)
+					return
+				}
+			}
 			s.signal(ev.ThreadID)
+		}
+	})
+}
+
+// later signals a thread after TaskBatch, once for all the task news that
+// arrives meanwhile. A user message in between starts the turn earlier,
+// and that turn sees the news too.
+func (s *Supervisor) later(threadID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.batches[threadID] {
+		return
+	}
+	s.batches[threadID] = true
+	time.AfterFunc(s.opt.TaskBatch, func() {
+		s.mu.Lock()
+		delete(s.batches, threadID)
+		s.mu.Unlock()
+		if s.ctx.Err() == nil {
+			s.signal(threadID)
 		}
 	})
 }
@@ -180,6 +228,15 @@ func (s *Supervisor) turn(threadID string) {
 	if upTo == 0 {
 		return // every user message already has a reply
 	}
+	if streak, auto := autoStreak(history); auto && streak >= MaxAutoTurns {
+		// Carrying on by itself this long without the user: stop here, so
+		// tasks and triggers cannot keep each other going (decision 0025).
+		s.reply(threadID, ids.New(), upTo, event.KindSilent, fmt.Sprintf("没有用户参与时已经连续自动推进了 %d 轮，暂停自动推进", streak), nil)
+		if streak == MaxAutoTurns {
+			s.notice(ctx, fmt.Sprintf("我已经连续自动推进了 %d 轮（任务的进展和跟进），先停下来，等你看一下再继续。", streak))
+		}
+		return
+	}
 
 	mainID, _ := st.MainThreadID(ctx)
 	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: upTo})
@@ -218,6 +275,7 @@ func (s *Supervisor) turn(threadID string) {
 			event.DeltaPayload{MessageID: messageID, Delta: d.Text + d.Thinking, Thinking: d.Text == ""}))
 	}
 
+	seen := map[string]int{} // tool calls made this turn
 	for step := 0; step < MaxSteps; step++ {
 		if len(texts) > 0 {
 			emit(provider.Delta{Text: "\n\n"})
@@ -259,16 +317,29 @@ func (s *Supervisor) turn(threadID string) {
 			s.reply(threadID, messageID, upTo, event.KindStep, strings.Join(texts, "\n\n"), nil)
 			messageID, texts = ids.New(), nil
 		}
+		if step == MaxSteps-1 {
+			break // the last step was asked to report and still called tools
+		}
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
 		for _, c := range calls {
 			var r provider.ToolResult
-			if c.Name == silentSpec.Name {
+			key := c.Name + "\x00" + string(c.Args)
+			seen[key]++
+			switch {
+			case c.Name == silentSpec.Name:
 				r = provider.ToolResult{CallID: c.ID, Content: "stay_silent 只能单独调用；本轮已经发言，请直接回复。", IsError: true}
-			} else {
+			case seen[key] > maxSameCall:
+				r = provider.ToolResult{CallID: c.ID, IsError: true,
+					Content: "这一轮已经用完全相同的参数调用过它了，结果不会变。换个办法，或者根据已有的结果回答。"}
+			default:
 				r = s.opt.Tools.Call(ctx, c)
 			}
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
+		}
+		if step == MaxSteps-2 && len(results.Parts) > 0 {
+			last := results.Parts[len(results.Parts)-1].ToolResult
+			last.Content += wrapUpNote
 		}
 		req.Messages = append(req.Messages, results)
 		req.CacheAt = append(req.CacheAt[:0:0], req.CacheAt...)
@@ -299,6 +370,41 @@ func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text
 	}
 	if _, err := s.opt.Log.Append(s.ctx, event.New(event.MessageAssistant, event.ActorSupervisor, threadID, p)); err != nil {
 		slog.Error("supervisor: store reply", "thread", threadID, "err", err)
+	}
+}
+
+// autoStreak counts the turns answered since the user last wrote, and
+// reports whether all the input waiting now is triggers.
+func autoStreak(msgs []store.Message) (int, bool) {
+	var human int64
+	for _, m := range msgs {
+		if m.Role == "user" && m.Kind != event.KindTrigger {
+			human = m.Seq
+		}
+	}
+	turns := map[int64]bool{}
+	var answered int64
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.ReplyTo > 0 && m.Kind != event.KindStep && m.Kind != event.KindConsult {
+			if m.ReplyTo > human {
+				turns[m.ReplyTo] = true
+			}
+			answered = max(answered, m.ReplyTo)
+		}
+	}
+	return len(turns), human <= answered
+}
+
+// notice posts a note to the main thread that pushes to the user's devices.
+func (s *Supervisor) notice(ctx context.Context, text string) {
+	main, err := s.opt.Log.Store.MainThreadID(ctx)
+	if err != nil {
+		return
+	}
+	ev := event.New(event.MessageAssistant, event.ActorSupervisor, main,
+		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindNotice, Notify: true})
+	if _, err := s.opt.Log.Append(ctx, ev); err != nil {
+		slog.Error("supervisor: notice", "err", err)
 	}
 }
 

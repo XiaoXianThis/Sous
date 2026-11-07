@@ -72,6 +72,17 @@ func (h *Hub) Grep(ctx context.Context, nodeID string, args proto.GrepArgs) (pro
 	return res, err
 }
 
+// Look runs one read-only command on a machine (decision 0024).
+func (h *Hub) Look(ctx context.Context, nodeID string, args proto.LookArgs) (proto.LookResult, error) {
+	raw, err := h.Request(ctx, nodeID, proto.OpLook, args, time.Minute)
+	if err != nil {
+		return proto.LookResult{}, err
+	}
+	var res proto.LookResult
+	err = json.Unmarshal(raw, &res)
+	return res, err
+}
+
 // ProjectFile reads one file of a project directory on a machine.
 func (h *Hub) ProjectFile(ctx context.Context, nodeID string, args proto.ProjectArgs) (proto.ProjectFile, error) {
 	raw, err := h.Request(ctx, nodeID, proto.OpProjectRead, args, time.Minute)

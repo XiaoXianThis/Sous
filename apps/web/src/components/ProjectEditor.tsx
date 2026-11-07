@@ -121,7 +121,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
         </label>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5">
           <label className="grid gap-1 text-[13px] text-muted">
-            默认岗位
+            默认预设
             <select
               className="border border-line bg-page rounded-[10px] px-2.5 py-1.5 text-ink min-w-0"
               value={persona}

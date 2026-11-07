@@ -454,6 +454,13 @@ UPDATE tasks SET
 	last_agent = COALESCE((SELECT r.agent FROM runs r WHERE r.task_id = tasks.id AND r.purpose IN ('work', 'rebase') ORDER BY r.created_at DESC LIMIT 1), ''),
 	last_node = COALESCE((SELECT r.node_id FROM runs r WHERE r.task_id = tasks.id AND r.purpose IN ('work', 'rebase') ORDER BY r.created_at DESC LIMIT 1), '');
 `,
+	// Decision 0024: a task's own session settings (model, effort).
+	`ALTER TABLE tasks ADD COLUMN options TEXT NOT NULL DEFAULT '';
+`,
+	// Decision 0025: the short prompt of a run that goes on in the task's
+	// earlier agent session.
+	`ALTER TABLE runs ADD COLUMN continue_prompt TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

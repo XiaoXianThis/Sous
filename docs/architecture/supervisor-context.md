@@ -16,6 +16,23 @@ flowchart LR
 - 已回答的消息超过 4000 字时，只发开头和结尾各 1500 字，中间提示用 `thread_read` 看全文。
 - `provider.Request.CacheAt` 标出 Anthropic 的缓存断点（段首块、上一轮的末尾、请求末尾），系统提示总是缓存；其他供应商按前缀自动缓存，忽略这个字段。
 
+## 谁叫醒主管
+
+主管的一轮由对话里的输入开始：用户消息，或者 `trigger.fired`（存成 `kind: trigger` 的用户消息）。触发来自定时任务、跟进扫描（`trigger`），以及任务引擎（决策 [0025](../decisions/0025-supervisor-loop.md)）：
+
+```mermaid
+flowchart LR
+  A["子 agent<br/>（sous mcp：进度 / 提问 / 结果）"] -- run.ask --> H["Hub"]
+  E["任务引擎<br/>汇报、受阻、等机器、换了机器"] -- "trigger kind task" --> W["对话的 worker"]
+  H -- "trigger kind task" --> W
+  W -- "等 20 秒合并" --> S["主管的一轮"]
+  S -- "run_message / task_* / notify / stay_silent" --> E
+```
+
+- kind `task` 的触发先等 `TaskBatch`（20 秒）再开一轮，期间的进展合在一起；用户消息照常立刻开始。
+- 用户上次说话之后，只靠触发开的回合最多 `MaxAutoTurns`（8）轮，之后静默回复，并在主线提醒用户一次。
+- 汇报本身是给用户看的助手消息，主管在历史里看得到；触发只是一句指向它的话，加上“接着推进、notify 还是 stay_silent”的说明。
+
 ## 分段和整理
 
 ```mermaid

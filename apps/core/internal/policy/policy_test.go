@@ -216,3 +216,18 @@ func containsAll(s string, parts ...string) bool {
 	}
 	return true
 }
+
+// Decision 0024: looking at the machine is reading.
+func TestLookingIsReading(t *testing.T) {
+	p, _ := New(Config{})
+	for _, cmd := range []string{"node --version", "python3 -V", "uptime", "free -m", "lsof -i :8080", "netstat -an | grep LISTEN", "sw_vers"} {
+		if c, _ := p.Classify(Request{ToolKind: "execute", Title: cmd, Workdir: "/w"}); c != Read {
+			t.Errorf("%s: %s", cmd, c)
+		}
+	}
+	for _, cmd := range []string{"node --version > /etc/x", "node x.js", "kill 1"} {
+		if c, _ := p.Classify(Request{ToolKind: "execute", Title: cmd, Workdir: "/w"}); c == Read {
+			t.Errorf("%s is not reading", cmd)
+		}
+	}
+}

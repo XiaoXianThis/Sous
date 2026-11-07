@@ -32,18 +32,25 @@ export const knownAgents = ['claude', 'codex', 'cursor', 'opencode', 'kiro']
 
 /** Agents to offer in a picker: the known ones, plus any a machine reports. */
 export function agentChoices(nodes: Node[]): string[] {
-  const reported = nodes.flatMap((n) => (n.agents ?? []).filter((a) => a.installed).map((a) => a.name))
+  const reported = nodes.flatMap((n) => (n.agents ?? []).filter((a) => a.installed && !a.disabled).map((a) => a.name))
   return [...new Set([...knownAgents, ...reported])]
 }
 
 /** Why an agent cannot run a task on the chosen machine (or on any online
  *  machine when none is chosen); '' when it can (end-to-end review 4.10). */
+/** The machines that can run an agent now: installed, enabled, logged in
+ *  as far as anyone knows (decision 0024). */
+export function machinesFor(agent: string, nodes: Node[]): Node[] {
+  return nodes.filter((n) => (n.agents ?? []).some((a) => a.name === agent && a.installed && !a.disabled && a.logged_in !== false))
+}
+
 export function agentUnavailable(agent: string, nodes: Node[], nodeId: string): string {
   if (!agent) return ''
-  const has = (n: Node) => (n.agents ?? []).some((a) => a.name === agent && a.installed)
+  const has = (n: Node) => (n.agents ?? []).some((a) => a.name === agent && a.installed && !a.disabled)
   if (nodeId) {
     const n = nodes.find((x) => x.id === nodeId)
     if (!n) return ''
+    if ((n.agents ?? []).some((a) => a.name === agent && a.disabled)) return `${n.name} 上停用了这个 agent`
     return has(n) ? '' : `${n.name} 上没有装这个 agent`
   }
   if (nodes.some((n) => n.online && has(n))) return ''

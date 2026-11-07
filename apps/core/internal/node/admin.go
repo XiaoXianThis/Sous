@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +74,8 @@ func (a *admin) describe(infos []proto.AgentInfo) []proto.AgentInfo {
 			in.Defaults = defs
 		}
 		in.LaunchOver = len(cfg.Agents[in.Name]) > 0
+		in.Disabled = cfg.AgentDisabled(in.Name)
+		in.Default = cfg.DefaultAgent == in.Name
 		for _, j := range a.jobs {
 			j.mu.Lock()
 			live := j.running
@@ -223,6 +226,10 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		var args proto.RepoArgs
 		json.Unmarshal(req.Args, &args)
 		return a.gitStatus(ctx, args.Root)
+	case proto.OpLook:
+		var args proto.LookArgs
+		json.Unmarshal(req.Args, &args)
+		return a.look(ctx, args)
 	case proto.OpProjectGrep:
 		var args proto.GrepArgs
 		json.Unmarshal(req.Args, &args)
@@ -309,6 +316,22 @@ func (a *admin) applyDefaults(ctx context.Context, client *acp.Client, s acp.Ses
 			}
 		}
 	}
+	// Decision 0024: a task names its model and effort without knowing the
+	// agent's option ids; they replace the preset's by category.
+	for _, alias := range []string{"model", "effort"} {
+		v, ok := defs[alias]
+		if !ok || slices.ContainsFunc(opts, func(o acp.ConfigOption) bool { return o.ID == alias }) {
+			continue
+		}
+		delete(defs, alias)
+		if id := aliasOption(opts, alias); id != "" && !isForced(spec, id) {
+			if _, f := forced[id]; !f {
+				defs[id] = v
+			}
+		} else if id == "" {
+			warn(fmt.Sprintf("%s 没有可以设置的%s，这次用它自己的默认值", spec.Title, aliasName[alias]))
+		}
+	}
 	for k, v := range forced {
 		i := slices.IndexFunc(opts, func(o acp.ConfigOption) bool { return o.ID == k })
 		if i < 0 {
@@ -350,8 +373,15 @@ func (a *admin) applyDefaults(ctx context.Context, client *acp.Client, s acp.Ses
 			continue
 		}
 		if !opts[i].Has(want) {
-			warn(fmt.Sprintf("默认的%s「%s」已经不可用，这次用 agent 自己的默认值", opts[i].Name, want))
-			continue
+			if v := matchValue(opts[i], want); v != "" {
+				want = v
+			} else {
+				warn(fmt.Sprintf("%s「%s」不可用，这次用 agent 自己的默认值", opts[i].Name, want))
+				continue
+			}
+			if opts[i].Current == want {
+				continue
+			}
 		}
 		s.Options = opts
 		next, err := client.SetConfigOption(ctx, s, id, want)
@@ -362,6 +392,50 @@ func (a *admin) applyDefaults(ctx context.Context, client *acp.Client, s acp.Ses
 		opts = next
 	}
 	return opts, nil
+}
+
+var aliasName = map[string]string{"model": "模型选项", "effort": "思考强度选项"}
+
+// aliasOption finds the option a task-level key means: the model option,
+// or the reasoning level for effort.
+func aliasOption(opts []acp.ConfigOption, alias string) string {
+	want := map[string]string{"model": "model", "effort": "thought_level"}[alias]
+	for _, o := range opts {
+		if o.Category == want {
+			return o.ID
+		}
+	}
+	for _, o := range opts {
+		id := strings.ToLower(o.ID)
+		if alias == "effort" && (strings.Contains(id, "effort") || strings.Contains(id, "reasoning") || strings.Contains(id, "thought")) {
+			return o.ID
+		}
+		if alias == "model" && id == "model_id" {
+			return o.ID
+		}
+	}
+	return ""
+}
+
+// matchValue finds the value a loosely written choice means: same value
+// or name ignoring case, then a single value that contains it.
+func matchValue(o acp.ConfigOption, want string) string {
+	w := strings.ToLower(strings.TrimSpace(want))
+	for _, v := range o.Values {
+		if strings.ToLower(v.Value) == w || strings.ToLower(v.Name) == w {
+			return v.Value
+		}
+	}
+	found := ""
+	for _, v := range o.Values {
+		if strings.Contains(strings.ToLower(v.Value), w) || strings.Contains(strings.ToLower(v.Name), w) {
+			if found != "" {
+				return "" // ambiguous
+			}
+			found = v.Value
+		}
+	}
+	return found
 }
 
 // isForced reports whether sous sets the option itself.

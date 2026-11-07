@@ -184,7 +184,7 @@ export default function MessageView({ message }: { message: Message }) {
           <span className="h-px bg-line flex-1 min-w-4"></span>
           <span className="flex items-center gap-1.5 min-w-0 max-w-[calc(100%-48px)] h-7 pl-2 pr-2.5 rounded-full bg-sunken group-hover/trig:text-ink transition-colors">
             <Icon name={scheduled ? 'calendar' : 'refresh'} size={13} className="text-warm flex-none" />
-            <span className="font-medium text-warm flex-none">{scheduled ? '定时任务' : t.kind === 'followup' ? '跟进' : '系统'}</span>
+            <span className="font-medium text-warm flex-none">{scheduled ? '定时任务' : t.kind === 'followup' ? '跟进' : t.kind === 'task' ? t.label : '系统'}</span>
             {t.title && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>}
             <time className="text-faint tabular-nums flex-none">{time}</time>
             <Icon name="chevron" size={11} className={`text-faint flex-none transition-transform duration-200 ${showTrigger ? '' : '-rotate-90'}`} />

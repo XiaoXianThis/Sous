@@ -175,7 +175,7 @@ export function stages(
 ): Stage[] {
   let names = stageNames[t.kind] ?? stageNames.general
   if (t.kind === 'ops' && !t.deploy_commit) names = names.filter(([k]) => k !== 'health')
-  if (t.review === 'none' || t.kind === 'ops') names = names.filter(([k]) => k !== 'review')
+  if (t.review === 'none' || t.review === '' || t.kind === 'ops') names = names.filter(([k]) => k !== 'review')
   const keys = names.map(([k]) => k)
   const at = (k: string) => {
     const i = keys.indexOf(k)
@@ -216,7 +216,7 @@ export function stages(
 
 /** Where a task works and how it is reviewed, in words. */
 export const placeText: Record<string, string> = { worktree: '独立分支（worktree）', in_place: '就地修改（有快照）', scratch: '临时目录' }
-export const reviewText: Record<string, string> = { none: '不验收', model: '验收模型看 diff', agent: '审查岗位跑测试', user: '你来验收' }
+export const reviewText: Record<string, string> = { none: '不验收', model: '验收模型看 diff', agent: '验收 agent 跑测试', user: '你来验收' }
 
 /** How many stages are done, for "3/5". */
 export function progress(st: Stage[]): string {

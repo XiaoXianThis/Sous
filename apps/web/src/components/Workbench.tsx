@@ -210,7 +210,7 @@ export default function Workbench() {
           <span className="flex-1"></span>
           {data && (
             <div className="flex items-center flex-wrap gap-2" aria-label="概况">
-              <Stat icon="play" value={running} label="进行中" tone="accent" tip="正在执行、排队或由模型 / 审查岗位验收的任务" />
+              <Stat icon="play" value={running} label="进行中" tone="accent" tip="正在执行、排队或由模型 / agent 验收的任务" />
               <div className="relative" ref={popRef}>
                 <Stat icon="hand" value={pending} label="要你处理" tone="warning" tip="等你审批、验收，或受阻、失败、等机器的任务" expanded={attention} onClick={pending ? () => setAttention((v) => !v) : undefined} />
                 {attention && pending > 0 && !phone && (
