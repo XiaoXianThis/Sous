@@ -20,9 +20,12 @@ const (
 	MessageUser           Type = "message.user"
 	MessageAssistant      Type = "message.assistant"
 	MessageAssistantDelta Type = "message.assistant.delta"
-	UsageRecorded         Type = "usage.recorded"
-	MemoryPut             Type = "memory.put"
-	MemoryDeleted         Type = "memory.deleted"
+	// MessageTools records the tools the supervisor called after a message
+	// of its turn (the whole list so far, replacing what was stored).
+	MessageTools  Type = "message.tools"
+	UsageRecorded Type = "usage.recorded"
+	MemoryPut     Type = "memory.put"
+	MemoryDeleted Type = "memory.deleted"
 	// ThreadCompacted starts a new context segment of a thread: the
 	// messages up to CoversUpTo are folded into a summary (long-main-thread).
 	ThreadCompacted Type = "thread.compacted"
@@ -137,6 +140,25 @@ type MessagePayload struct {
 	// Source names who wrote an assistant message that is not the
 	// supervisor's own words: a project consultant (kind "consult").
 	Source *MessageSource `json:"source,omitempty"`
+	// Tools are the supervisor's own tool calls shown under this message:
+	// calls made earlier in the turn, before anything was stored to hang
+	// them on. Later calls come as message.tools.
+	Tools []ToolNote `json:"tools,omitempty"`
+}
+
+// ToolNote is one tool call of the supervisor as the chat shows it: the
+// name, a short summary of the arguments with anything that looks like a
+// credential masked, and the first line of the error when it failed.
+type ToolNote struct {
+	Name  string `json:"name"`
+	Args  string `json:"args,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// MessageToolsPayload sets the supervisor's tool calls shown under a message.
+type MessageToolsPayload struct {
+	MessageID string     `json:"message_id"`
+	Tools     []ToolNote `json:"tools"`
 }
 
 // MessageSource is the agent behind a consult message.

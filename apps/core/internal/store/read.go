@@ -122,6 +122,8 @@ type Message struct {
 	Attachments []event.Attachment `json:"attachments,omitempty"`
 	// Source names the consultant behind a consult message.
 	Source *event.MessageSource `json:"source,omitempty"`
+	// Tools are the supervisor's own tool calls after this message.
+	Tools []event.ToolNote `json:"tools,omitempty"`
 }
 
 // Messages returns up to limit messages of a thread with seq < before (0 means
@@ -131,7 +133,7 @@ func (s *Store) Messages(ctx context.Context, threadID string, before int64, lim
 		before = 1 << 62
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source FROM (
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools FROM (
 		   SELECT * FROM messages WHERE thread_id = ? AND event_seq < ? ORDER BY event_seq DESC LIMIT ?
 		 ) ORDER BY event_seq`, threadID, before, limit)
 	if err != nil {
@@ -145,9 +147,12 @@ func scanMessageRows(rows *sql.Rows) ([]Message, error) {
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var mctx, atts, source string
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Kind, &m.Seq, &m.CreatedAt, &mctx, &atts, &source); err != nil {
+		var mctx, atts, source, tools string
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.Error, &m.ReplyTo, &m.Kind, &m.Seq, &m.CreatedAt, &mctx, &atts, &source, &tools); err != nil {
 			return nil, err
+		}
+		if tools != "" {
+			_ = json.Unmarshal([]byte(tools), &m.Tools)
 		}
 		if source != "" {
 			m.Source = &event.MessageSource{}

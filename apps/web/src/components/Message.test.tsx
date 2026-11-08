@@ -74,3 +74,28 @@ describe('@ references in a user message', () => {
     expect(el.querySelector('.mention-tag')).toBeNull()
   })
 })
+
+describe('supervisor tools', () => {
+  const tools = [
+    { name: 'task_list', args: 'status=running' },
+    { name: 'machine_look', args: 'command=ls', error: '机器离线' },
+  ]
+  const line = () => el.querySelector('[data-testid=supervisor-tools] button[aria-expanded]') as HTMLButtonElement
+
+  it('is one folded line that lists each call when opened', async () => {
+    await render({ content: '先看看', kind: 'step', tools })
+    expect(line().textContent).toContain('调用了 2 个工具')
+    expect(line().textContent).toContain('1 个失败')
+    expect(line().getAttribute('aria-expanded')).toBe('false')
+    expect(el.querySelectorAll('[data-testid=supervisor-tools] li')).toHaveLength(0)
+    await act(async () => line().click())
+    const items = [...el.querySelectorAll('[data-testid=supervisor-tools] li')].map((li) => li.textContent)
+    expect(items).toEqual(['task_list · status=running', 'machine_look · command=ls · 失败：机器离线'])
+    expect(el.querySelector('[data-testid=supervisor-tools] .bg-danger')).not.toBeNull()
+  })
+
+  it('is not shown without tool calls', async () => {
+    await render({ content: '好了' })
+    expect(el.querySelector('[data-testid=supervisor-tools]')).toBeNull()
+  })
+})

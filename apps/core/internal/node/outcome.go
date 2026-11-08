@@ -14,6 +14,7 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
 )
 
 // How an agent says it cannot go on. Agents report these as errors (ACP
@@ -132,31 +133,8 @@ func jsonText(v any) string {
 	return string(raw)
 }
 
-// secretRE finds what looks like a credential in a tool's output.
-var secretRE = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(://[^/\s:@]+:)[^@\s/]+@`),
-	regexp.MustCompile(`(?i)\b(bearer|token|basic)\s+[A-Za-z0-9._~+/=-]{12,}`),
-	regexp.MustCompile(`(?i)\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})`),
-	regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY)[A-Z0-9_]*\s*[=:]\s*)\S+`),
-	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)`),
-}
-
 // mask hides what looks like a secret in text that goes to the Hub's logs.
-func mask(s string) string {
-	for i, re := range secretRE {
-		switch i {
-		case 0:
-			s = re.ReplaceAllString(s, "${1}***@")
-		case 1:
-			s = re.ReplaceAllString(s, "${1} ***")
-		case 3:
-			s = re.ReplaceAllString(s, "${1}***")
-		default:
-			s = re.ReplaceAllString(s, "***")
-		}
-	}
-	return s
-}
+func mask(s string) string { return redact.Mask(s) }
 
 // interpreters run the script file named by their first argument.
 var interpreters = map[string]bool{

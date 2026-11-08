@@ -264,7 +264,12 @@ func (s *Supervisor) turn(threadID string) {
 	}
 	retried := false
 	messageID := ids.New()
-	reply := func(text string, err error) { s.reply(threadID, messageID, upTo, "", text, err) }
+	// The tools called are shown under the turn's last stored message
+	// (anchor); calls made before anything was stored wait in pending and
+	// go with the next message.
+	var anchor string
+	var anchorTools, pending []event.ToolNote
+	reply := func(text string, err error) { s.store(threadID, messageID, upTo, "", text, err, pending) }
 	var texts []string // said since the last stored step
 	spoke := false     // said anything this turn
 	emit := func(d provider.Delta) {
@@ -314,7 +319,8 @@ func (s *Supervisor) turn(threadID string) {
 			// Store what was said before the tools run, so their results
 			// (task chips, reports) come after it, and stream the rest of
 			// the turn as a new message.
-			s.reply(threadID, messageID, upTo, event.KindStep, strings.Join(texts, "\n\n"), nil)
+			s.store(threadID, messageID, upTo, event.KindStep, strings.Join(texts, "\n\n"), nil, pending)
+			anchor, anchorTools, pending = messageID, pending, nil
 			messageID, texts = ids.New(), nil
 		}
 		if step == MaxSteps-1 {
@@ -322,6 +328,7 @@ func (s *Supervisor) turn(threadID string) {
 		}
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
+		var notes []event.ToolNote
 		for _, c := range calls {
 			var r provider.ToolResult
 			key := c.Name + "\x00" + string(c.Args)
@@ -336,6 +343,13 @@ func (s *Supervisor) turn(threadID string) {
 				r = s.opt.Tools.Call(ctx, c)
 			}
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
+			notes = append(notes, toolNote(c, r))
+		}
+		if anchor != "" {
+			anchorTools = append(anchorTools, notes...)
+			s.tools(threadID, anchor, anchorTools)
+		} else {
+			pending = append(pending, notes...)
 		}
 		if step == MaxSteps-2 && len(results.Parts) > 0 {
 			last := results.Parts[len(results.Parts)-1].ToolResult
@@ -351,7 +365,20 @@ func (s *Supervisor) turn(threadID string) {
 }
 
 func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text string, callErr error) {
-	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo, Kind: kind}
+	s.store(threadID, messageID, replyTo, kind, text, callErr, nil)
+}
+
+// tools records the supervisor's tool calls shown under a stored message.
+func (s *Supervisor) tools(threadID, messageID string, notes []event.ToolNote) {
+	ev := event.New(event.MessageTools, event.ActorSupervisor, threadID, event.MessageToolsPayload{MessageID: messageID, Tools: notes})
+	if _, err := s.opt.Log.Append(s.ctx, ev); err != nil {
+		slog.Error("supervisor: store tool calls", "thread", threadID, "err", err)
+	}
+}
+
+// store is reply that also shows tool calls under the message.
+func (s *Supervisor) store(threadID, messageID string, replyTo int64, kind, text string, callErr error, tools []event.ToolNote) {
+	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo, Kind: kind, Tools: tools}
 	if callErr != nil {
 		p.Error = true
 		if p.Content != "" {

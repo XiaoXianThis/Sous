@@ -47,12 +47,30 @@ func project(w *Writer, ev event.Event) error {
 			raw, _ := json.Marshal(p.Source)
 			source = string(raw)
 		}
+		tools := ""
+		if len(p.Tools) > 0 {
+			raw, _ := json.Marshal(p.Tools)
+			tools = string(raw)
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx, atts, source); err != nil {
+			`INSERT INTO messages(id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p.MessageID, ev.ThreadID, role, p.Content, p.Error, p.ReplyTo, p.Kind, ev.Seq, ev.TS, mctx, atts, source, tools); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE id = ?`, ev.TS, ev.ThreadID)
+		return err
+
+	case event.MessageTools:
+		var p event.MessageToolsPayload
+		if err := ev.Decode(&p); err != nil {
+			return err
+		}
+		tools := ""
+		if len(p.Tools) > 0 {
+			raw, _ := json.Marshal(p.Tools)
+			tools = string(raw)
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE messages SET tools = ? WHERE id = ? AND thread_id = ?`, tools, p.MessageID, ev.ThreadID)
 		return err
 
 	case event.ThreadCompacted:

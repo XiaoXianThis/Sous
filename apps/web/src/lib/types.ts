@@ -46,6 +46,16 @@ export interface Message {
   attachments?: Attachment[]
   /** Who wrote a consult message: the consultant's run, agent and project. */
   source?: MessageSource
+  /** The supervisor's own tool calls after this message of its turn. */
+  tools?: ToolNote[]
+}
+
+/** One tool call of the supervisor; the Hub summarizes and masks the arguments. */
+export interface ToolNote {
+  name: string
+  args?: string
+  /** First line of the error; absent when the call succeeded. */
+  error?: string
 }
 
 export interface MessageSource {

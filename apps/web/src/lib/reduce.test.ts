@@ -203,3 +203,19 @@ describe('consult messages', () => {
     expect(m.source).toMatchObject({ agent: 'claude', project: 'Sous' })
   })
 })
+
+describe('supervisor tool calls', () => {
+  it('keeps them from the message, message.tools and a later history page', () => {
+    const s = emptyState()
+    const one = { name: 'task_list', args: 'status=running' }
+    const two = { name: 'machine_look', args: 'command=ls', error: '机器离线' }
+    applyEvent(s, ev(1, 'message.user', { message_id: 'u1', content: '查查' }))
+    applyEvent(s, ev(2, 'message.assistant', { message_id: 's1', content: '先看看', kind: 'step', reply_to: 1, tools: [one] }))
+    expect(s.messages.t1[1].tools).toEqual([one])
+    applyEvent(s, ev(3, 'message.tools', { message_id: 's1', tools: [one, two] }))
+    expect(s.messages.t1[1].tools).toEqual([one, two])
+    // A page fetched before the event does not drop them.
+    mergeHistory(s, 't1', [{ id: 's1', thread_id: 't1', role: 'assistant', content: '先看看', kind: 'step', seq: 2, created_at: 0 }])
+    expect(s.messages.t1[1].tools).toEqual([one, two])
+  })
+})

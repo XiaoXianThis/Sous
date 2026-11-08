@@ -3,10 +3,12 @@ import { showProject } from '../lib/app'
 import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
 import { splitMentions } from '../lib/mention'
 import { triggerView } from '../lib/trigger'
-import type { Attachment, Message } from '../lib/types'
+import type { ToolCall } from '../lib/runs'
+import type { Attachment, Message, ToolNote } from '../lib/types'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import Icon from './Icon'
 import Markdown, { CopyButton } from './Markdown'
+import { ToolList } from './RunSteps'
 
 // Turns http(s) links in plain text into parts, so PR links are clickable.
 function linkify(text: string): { text: string; url?: string }[] {
@@ -150,6 +152,42 @@ export function Thinking({ text, live }: { text: string; live: boolean }) {
           data-testid="thinking"
         >
           <Markdown text={text} streaming={live} className="text-[13px] leading-[1.7] text-muted [&_p]:my-2 [&_strong]:text-muted" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The tools the supervisor called after a message: one folded line ("调用了
+ * N 个工具"), a click lists each call as name · arguments with the status dot
+ * of the Run step list. Not the Run's tools; those live in RunChip.
+ */
+export function SupervisorTools({ tools }: { tools: ToolNote[] }) {
+  const [open, setOpen] = useState(false)
+  const failed = tools.filter((t) => t.error).length
+  const steps: ToolCall[] = tools.map((t, i) => ({
+    id: String(i),
+    title: [t.name, t.args, t.error && `失败：${t.error}`].filter(Boolean).join(' · '),
+    status: t.error ? 'failed' : 'completed',
+    kind: '',
+  }))
+  return (
+    <div className="grid gap-1.5 min-w-0" data-testid="supervisor-tools">
+      <button
+        type="button"
+        className="justify-self-start inline-flex items-center gap-1.5 h-7 -ml-1 px-1.5 rounded-[8px] border-0 bg-transparent text-muted text-[13px] hover:bg-hover hover:text-ink transition-colors whitespace-nowrap"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <Icon name="bolt" size={14} />
+        <span>调用了 {tools.length} 个工具</span>
+        {failed > 0 && <span className="text-danger">· {failed} 个失败</span>}
+        <Icon name="chevron" size={12} className={`text-faint transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && (
+        <div className="pl-1 min-w-0">
+          <ToolList tools={steps} live={false} />
         </div>
       )}
     </div>
@@ -302,6 +340,7 @@ export default function MessageView({ message }: { message: Message }) {
       ) : (
         (message.content || message.streaming) && <Markdown text={message.content} streaming={message.streaming} />
       )}
+      {message.tools && message.tools.length > 0 && <SupervisorTools tools={message.tools} />}
       {!message.streaming && message.content && (
         <div className="flex items-center gap-0.5 -ml-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
           <CopyButton text={message.content} />

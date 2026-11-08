@@ -69,7 +69,10 @@ export function upsertMessage(state: ChatState, m: Message) {
   const msgs = list(state, m.thread_id)
   const i = msgs.findIndex((x) => x.id === m.id)
   if (i >= 0) {
-    msgs[i] = { ...m, thinking: msgs[i].thinking, streaming: false }
+    // Tool calls only grow: a page of history fetched before a message.tools
+    // event must not drop them.
+    const tools = m.tools?.length ? m.tools : msgs[i].tools
+    msgs[i] = { ...m, thinking: msgs[i].thinking, streaming: false, ...(tools && { tools }) }
   } else {
     msgs.push(m)
   }
@@ -151,10 +154,18 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         attachments: p.attachments?.length ? p.attachments : undefined,
         context: p.context || undefined,
         source: p.source || undefined,
+        tools: p.tools?.length ? p.tools : undefined,
         seq: ev.seq,
         created_at: ev.ts,
       })
       touch(state, ev.thread_id!, ev.ts)
+      break
+    }
+    case 'message.tools': {
+      // The supervisor's tool calls after one of its messages (the full list so far).
+      const msgs = list(state, ev.thread_id!)
+      const i = msgs.findIndex((x) => x.id === p.message_id)
+      if (i >= 0) msgs[i] = { ...msgs[i], tools: p.tools?.length ? p.tools : undefined }
       break
     }
     case 'trigger.fired': {

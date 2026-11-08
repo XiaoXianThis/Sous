@@ -461,6 +461,10 @@ UPDATE tasks SET
 	// earlier agent session.
 	`ALTER TABLE runs ADD COLUMN continue_prompt TEXT NOT NULL DEFAULT '';
 `,
+	// The supervisor's own tool calls, shown under its messages (JSON list
+	// of event.ToolNote).
+	`ALTER TABLE messages ADD COLUMN tools TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
