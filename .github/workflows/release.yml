@@ -55,7 +55,7 @@ jobs:
           echo "::add-mask::$kc_pw"
           umask 077
 
-          printf '%s' "$SOUS_SIGN_CERT_P12" | tr -d ' \t\r\n' | base64 --decode >"$p12" \
+          printf '%s' "$SOUS_SIGN_CERT_P12" | tr -d ' \t\r\n' | base64 -d >"$p12" \
             || fail "SOUS_SIGN_CERT_P12 is not valid base64"
           security create-keychain -p "$kc_pw" "$kc"
           security set-keychain-settings -lut 21600 "$kc" # stays unlocked for 6 hours
