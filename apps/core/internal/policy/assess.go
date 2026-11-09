@@ -13,7 +13,11 @@ import (
 type Assessment struct {
 	// Hard are signals no AI may wave through: the request goes to the
 	// user (and in the default mode, even an otherwise allowed one does).
-	Hard []string
+	Hard        []string
+	HardRead    []string
+	Effects     []Category
+	Opaque      bool
+	ParseStatus string
 	// Soft are facts the approver agent should weigh.
 	Soft []string
 	// Routine marks a well-known, bounded action the auto mode allows
@@ -27,6 +31,9 @@ type Assessment struct {
 // Note is the assessment as text for the approval card and the approver.
 func (a Assessment) Note() string {
 	var parts []string
+	if len(a.HardRead) > 0 {
+		parts = append(parts, "敏感位置只读："+strings.Join(a.HardRead, "、"))
+	}
 	if len(a.Hard) > 0 {
 		parts = append(parts, "高风险信号："+strings.Join(a.Hard, "、"))
 	}
@@ -67,7 +74,7 @@ const home = `(?:~|\$HOME|\$\{HOME\}|/Users/[^/\s"']+|/home/[^/\s"']+|/root)`
 // user a click, while a miss would let an AI decide something it must not.
 var hardSignals = []signal{
 	sig("读写凭据或密钥", `(?i)`+home+`/\.(ssh|aws|gnupg|kube|netrc|git-credentials|npmrc|pypirc|docker/config\.json|config/(gcloud|gh)|azure)\b`+
-		`|\b(id_rsa|id_ed25519|id_ecdsa)\b|/etc/(shadow|sudoers)|Library/Keychains|\bsecurity\s+(find|dump|export|add)-`),
+		`|\b(id_rsa|id_ed25519|id_ecdsa)\b|/etc/(shadow|sudoers)|Library/Keychains|\bsecurity\s+((find|dump|export|add)-|export\b)`),
 	sig("向外发送数据", `(?is)\bcurl\b.*(\s-d\b|\s--data\S*|\s-F\b|\s--form\b|\s-T\b|\s--upload-file|\s--json\b|\s-X\s*(POST|PUT|PATCH|DELETE)\b)`+
 		`|\bwget\b.*--(post-data|post-file|body-data|body-file)`+
 		`|\b(scp|sftp|ftp|nc|ncat|netcat|socat|telnet)\b|/dev/(tcp|udp)/`+
@@ -124,7 +131,7 @@ func isProtectedBranch(b string) bool {
 
 // Assess looks at a classified request. cmd is the command line ("" for a
 // file tool); paths are the files it names.
-func (p *Policy) Assess(r Request, cat Category) Assessment {
+func (p *Policy) assessLegacy(r Request, cat Category) Assessment {
 	in := parseInput(r.RawInput)
 	cmd := in.command
 	if cmd == "" && r.ToolKind == "execute" {
@@ -311,7 +318,7 @@ func Judge(role, mode string, c Category, a Assessment) (Action, string) {
 		if act == Deny {
 			return Deny, restrictedWhy[mode]
 		}
-		if len(a.Hard) > 0 {
+		if len(a.Hard) > 0 || len(a.HardRead) > 0 {
 			return Deny, a.Note() // a read of credentials, say: refused, not asked
 		}
 		return act, ""
@@ -319,7 +326,23 @@ func Judge(role, mode string, c Category, a Assessment) (Action, string) {
 	if EffectiveMode(role, mode) == ModeOpen || act == Deny {
 		return act, ""
 	}
+	if role == RoleServer {
+		for _, effect := range a.Effects {
+			if effect == EditWorktree || effect == Delete || effect == Service || effect == Irreversible {
+				return AskUser, "服务器副作用需要用户审批"
+			}
+		}
+		if a.Opaque {
+			return AskUser, "服务器未知脚本需要用户审批"
+		}
+	}
 	if len(a.Hard) > 0 && (act == Allow || act == AskAI) {
+		return AskUser, a.Note()
+	}
+	if len(a.HardRead) > 0 && (act == Allow || act == AskAI) {
+		if EffectiveMode(role, mode) == ModeAuto {
+			return AskAI, a.Note()
+		}
 		return AskUser, a.Note()
 	}
 	if act == AskAI && a.Routine != "" {

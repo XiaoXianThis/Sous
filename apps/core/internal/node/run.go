@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -44,8 +45,10 @@ var (
 )
 
 type run struct {
-	d    *Daemon
-	spec proto.RunStart
+	streams        map[string]*redactedLine
+	approvalScopes map[string]approvalScope
+	d              *Daemon
+	spec           proto.RunStart
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -80,12 +83,15 @@ type run struct {
 	toolTitles map[string]string
 	// failStreak counts tool calls in a row that failed with the same title;
 	// stuckSent marks that the streak was reported (end-to-end review 4.16).
-	failTitle  string
-	failStreak int
-	stuckSent  bool
-	turnText   strings.Builder
-	workdir    string
-	loading    bool // replaying a loaded session: its updates are old news
+	failTitle      string
+	failStreak     int
+	stuckSent      bool
+	turnText       strings.Builder
+	baseline       map[string]string
+	approvalLaunch []string
+	approvalEnv    []string
+	workdir        string
+	loading        bool // replaying a loaded session: its updates are old news
 	// resumed is set for a run restored after a restart of the daemon.
 	resumed *savedRun
 	// continued is set when ResumeSession was loaded: the agent remembers
@@ -135,6 +141,10 @@ func (r *run) end(status, stopReason, summary, diffstat string, err error) {
 		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
 	}
 	r.mu.Unlock()
+	r.flushStreams()
+	e.Summary = mask(e.Summary)
+	e.Error = mask(e.Error)
+	e.DiffStat = mask(e.DiffStat)
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
 	r.d.forget(r.spec.RunID)
 	slog.Info("daemon: run ended", "run", r.spec.RunID, "status", status, "err", err)
@@ -286,6 +296,10 @@ func (r *run) endWith(e proto.RunEnded) {
 		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
 	}
 	r.mu.Unlock()
+	r.flushStreams()
+	e.Summary = mask(e.Summary)
+	e.Error = mask(e.Error)
+	e.DiffStat = mask(e.DiffStat)
 	r.d.ob.reliable(proto.New(proto.TRunEnded, e))
 	r.d.forget(r.spec.RunID)
 	slog.Info("daemon: run ended", "run", r.spec.RunID, "status", e.Status, "outcome", e.Outcome, "kind", e.ErrorKind)
@@ -336,6 +350,9 @@ func (r *run) markStarted(ws workspace.Prepared) {
 	r.workdir = ws.Dir
 	r.spec.Branch = ws.Branch // a resumed run finds the same worktree
 	r.mu.Unlock()
+	if r.resumed == nil {
+		r.evidenceBaseline(ws.Dir)
+	}
 	r.save()
 	r.d.ob.reliable(proto.New(proto.TRunStarted, proto.RunStarted{RunID: r.spec.RunID, Workdir: ws.Dir, Branch: ws.Branch, BaseBranch: ws.BaseBranch,
 		BaseCommit: ws.Base}))
@@ -370,6 +387,10 @@ func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, ac
 	if err != nil {
 		return nil, acp.Session{}, fmt.Errorf("找不到 %s 的启动命令 %q：%w", spec.Title, spec.Launch[0], err)
 	}
+	r.mu.Lock()
+	r.approvalLaunch = append([]string{cmd.Path}, cmd.Args...)
+	r.approvalEnv = append(append([]string{}, os.Environ()...), cmd.Env...)
+	r.mu.Unlock()
 	r.status("正在启动 " + spec.Title)
 	client, err := acp.Start(r.ctx, cmd, acp.Callbacks{OnUpdate: r.onUpdate, OnPermission: r.onPermission})
 	if err != nil {
@@ -733,9 +754,9 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 		r.mu.Lock()
 		r.turnText.WriteString(u.Text)
 		r.mu.Unlock()
-		r.d.ob.ephemeral(proto.New(proto.TRunOutput, proto.RunUpdate{RunID: id, Kind: proto.UpdateText, Text: u.Text}))
+		r.streamText(proto.UpdateText, u.Text, false)
 	case "agent_thought_chunk":
-		r.d.ob.ephemeral(proto.New(proto.TRunOutput, proto.RunUpdate{RunID: id, Kind: proto.UpdateThought, Text: u.Text}))
+		r.streamText(proto.UpdateThought, u.Text, false)
 	case "tool_call", "tool_call_update":
 		if u.ToolCallID != "" {
 			r.mu.Lock()
@@ -745,7 +766,7 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 			}
 			r.mu.Unlock()
 		}
-		up := proto.RunUpdate{RunID: id, Kind: proto.UpdateTool, ToolCallID: u.ToolCallID, Title: u.Title, Status: u.Status, ToolKind: u.ToolKind}
+		up := proto.RunUpdate{RunID: id, Kind: proto.UpdateTool, ToolCallID: u.ToolCallID, Title: mask(u.Title), Status: u.Status, ToolKind: u.ToolKind}
 		if u.Status == "completed" || u.Status == "failed" {
 			up.Output = toolOutput(u.Raw)
 		}
@@ -756,7 +777,7 @@ func (r *run) onUpdate(_ string, u acp.Update) {
 	case "plan":
 		plan := make([]proto.PlanEntry, len(u.Plan))
 		for i, e := range u.Plan {
-			plan[i] = proto.PlanEntry{Content: e.Content, Priority: e.Priority, Status: e.Status}
+			plan[i] = proto.PlanEntry{Content: mask(e.Content), Priority: e.Priority, Status: e.Status}
 		}
 		r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{RunID: id, Kind: proto.UpdatePlan, Plan: plan}))
 	}
@@ -784,15 +805,21 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 	if title == "" {
 		title = "agent 请求执行一个操作"
 	}
-	act, assess, reason := r.judge(preq, cat)
+	facts, evidence, newCat, assess := r.approvalEvidence(preq, cat)
+	cat = newCat
+	act, reason := policy.Judge(r.d.role(), r.spec.PermissionMode, cat, assess)
+	if cat != policy.Floor && r.isBuiltinSousRequest(req) {
+		r.recordPolicy(title+"（内建 Sous 通知工具）", policy.Read, "allow")
+		return acp.Decision{OptionID: pickOption(req.Options, "allow_once")}
+	}
 	review := "user"
 	switch act {
 	case policy.Allow:
 		r.recordPolicy(title+reasonSuffix(reason), cat, "allow")
 		return acp.Decision{OptionID: pickOption(req.Options, "allow_once", "allow_always")}
 	case policy.Deny:
-		r.recordPolicy(title+"（"+why+"）", cat, "deny")
-		r.noteRefusal(title, "sous 的安全规则禁止："+why)
+		r.recordPolicy(title+"（"+firstNonEmpty(reason, why)+"）", cat, "deny")
+		r.noteRefusal(title, "sous 的安全规则禁止："+firstNonEmpty(reason, why))
 		return acp.Decision{OptionID: pickOption(req.Options, "reject_once", "reject_always")}
 	case policy.AskAI:
 		review = "ai"
@@ -801,10 +828,21 @@ func (r *run) onPermission(ctx context.Context, req acp.PermissionRequest) acp.D
 		why = strings.TrimSpace(note + "\n" + why)
 	}
 	detail := permissionDetail(why, req.ToolCall.RawInput)
-	if script := scriptPreview(policy.CommandOf(preq), workdir); script != "" {
-		detail = truncate(detail, detailRunes) + "\n\n" + script
+	opt, note := r.askWithEvidence(title, req.ToolCall.Kind, detail, cat, review, toOptions(req.Options), facts, evidence)
+
+	if kind := optionKind(req.Options, opt); kind == "allow_once" || kind == "allow_always" {
+		if !revalidateEvidence(evidence, workdir) {
+			r.noteRefusal(title, "证据已变化，请重新申请")
+			return acp.Decision{OptionID: pickOption(req.Options, "reject_once", "reject_always")}
+		}
+		if facts.Reusable {
+			current, _, _, _ := r.approvalEvidence(preq, cat)
+			if current.OperationKey != facts.OperationKey {
+				r.noteRefusal(title, "执行身份已变化，请重新申请")
+				return acp.Decision{OptionID: pickOption(req.Options, "reject_once", "reject_always")}
+			}
+		}
 	}
-	opt, note := r.ask(title, req.ToolCall.Kind, detail, cat, review, toOptions(req.Options))
 	if kind := optionKind(req.Options, opt); kind == "reject_once" || kind == "reject_always" {
 		r.noteRefusal(title, note)
 	}
@@ -833,6 +871,9 @@ func reasonSuffix(reason string) string {
 const maxRefusalTurns = 3
 
 func (r *run) noteRefusal(title, note string) {
+	r.recordPolicy(mask(title)+reasonSuffix(mask(note)), policy.ExecOther, "deny")
+	title = mask(title)
+	note = mask(note)
 	s := "「" + truncate(title, 120) + "」"
 	if note = strings.TrimSpace(note); note != "" {
 		s += "（理由：" + truncate(note, 200) + "）"
@@ -859,11 +900,11 @@ func optionKind(opts []acp.PermissionOption, id string) string {
 }
 
 func permissionDetail(why string, raw json.RawMessage) string {
-	d := prettyJSON(raw)
+	d := maskJSON(raw)
 	if why != "" && !strings.Contains(d, why) {
 		d = why + "\n\n" + d
 	}
-	return truncate(strings.TrimSpace(d), detailRunes)
+	return truncate(mask(strings.TrimSpace(d)), detailRunes)
 }
 
 func toOptions(in []acp.PermissionOption) []proto.Option {
@@ -890,7 +931,7 @@ func pickOption(opts []acp.PermissionOption, kinds ...string) string {
 // approval, automatic or not, is in the event log (requirements R5.5).
 func (r *run) recordPolicy(title string, cat policy.Category, decision string) {
 	r.d.ob.reliable(proto.New(proto.TRunUpdate, proto.RunUpdate{
-		RunID: r.spec.RunID, Kind: proto.UpdatePermission, Title: title, Category: string(cat), Status: decision,
+		RunID: r.spec.RunID, Kind: proto.UpdatePermission, Title: mask(title), Category: string(cat), Status: decision,
 	}))
 }
 
@@ -898,20 +939,32 @@ func (r *run) recordPolicy(title string, cat policy.Category, decision string) {
 // chosen option id and the decider's note, or "" when the run stops or
 // pauses first.
 func (r *run) ask(title, toolKind, detail string, cat policy.Category, review string, opts []proto.Option) (string, string) {
+	return r.askWithEvidence(title, toolKind, detail, cat, review, opts, nil, nil)
+}
+func (r *run) askWithEvidence(title, toolKind, detail string, cat policy.Category, review string, opts []proto.Option, facts *proto.PolicyFacts, evidence *proto.ApprovalEvidence) (string, string) {
 	approvalID := ids.New()
 	ch := make(chan string, 1)
 	r.mu.Lock()
 	r.approvals[approvalID] = ch
+	if r.approvalScopes == nil {
+		r.approvalScopes = map[string]approvalScope{}
+	}
+	scope := approvalScope{root: r.workdir}
+	if evidence != nil {
+		scope.scripts = evidence.Scripts
+	}
+	r.approvalScopes[approvalID] = scope
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
 		delete(r.approvals, approvalID)
+		delete(r.approvalScopes, approvalID)
 		delete(r.notes, approvalID)
 		r.mu.Unlock()
 	}()
 	r.d.ob.reliable(proto.New(proto.TApprovalRequest, proto.ApprovalRequest{
-		ApprovalID: approvalID, RunID: r.spec.RunID, Title: title, ToolKind: toolKind,
-		Detail: detail, Options: opts, Category: string(cat), Review: review,
+		ApprovalID: approvalID, RunID: r.spec.RunID, Title: mask(title), ToolKind: toolKind,
+		Detail: mask(detail), Options: opts, Category: string(cat), Review: review, Facts: facts, Evidence: evidence,
 	}))
 	// Waiting for the user can take hours: give the machine's slot to other
 	// runs meanwhile, and take one again once answered.

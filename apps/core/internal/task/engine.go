@@ -62,10 +62,11 @@ type Model struct {
 }
 
 type Engine struct {
-	Log      *eventlog.Log
-	Nodes    *nodehub.Hub
-	Reviewer Model // nil provider: every run passes review
-	Approver Model // nil provider: every AI approval goes to the user
+	ApprovalPolicy ApprovalPolicy
+	Log            *eventlog.Log
+	Nodes          *nodehub.Hub
+	Reviewer       Model // nil provider: every run passes review
+	Approver       Model // nil provider: every AI approval goes to the user
 
 	// Beat, when set, is called on every loop iteration (for the watchdog).
 	Beat func()

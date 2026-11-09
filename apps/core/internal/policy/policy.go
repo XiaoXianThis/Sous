@@ -150,13 +150,17 @@ var DefaultFloor = []string{
 
 // Policy classifies requests for one run.
 type Policy struct {
-	floor     []*regexp.Regexp
-	extraHard []*regexp.Regexp
-	noRoutine bool
+	floor       []*regexp.Regexp
+	extraHard   []*regexp.Regexp
+	noRoutine   bool
+	legacyShell bool
+	noHardRead  bool
 }
 
 // Config is the policy section of a node's config.
 type Config struct {
+	LegacyShell      bool `json:"legacy_shell,omitempty"`
+	HardReadDisabled bool `json:"hard_read_disabled,omitempty"`
 	// FloorDisabled turns the floor rules off (requirements R5.2).
 	FloorDisabled bool `json:"floor_disabled,omitempty"`
 	// Floor replaces the default floor rules when set.
@@ -173,7 +177,7 @@ type Config struct {
 
 // New compiles a policy. Invalid patterns are returned as errors.
 func New(c Config) (*Policy, error) {
-	p := &Policy{noRoutine: c.RoutineDisabled}
+	p := &Policy{noRoutine: c.RoutineDisabled, legacyShell: c.LegacyShell, noHardRead: c.HardReadDisabled}
 	for _, r := range c.ExtraHard {
 		re, err := regexp.Compile(r)
 		if err != nil {
@@ -200,15 +204,19 @@ func New(c Config) (*Policy, error) {
 
 // Request is an agent's permission request.
 type Request struct {
-	ToolKind string // ACP tool kind: read, edit, delete, move, search, execute, think, fetch, other
+	UnsetEnv []string // node-derived wrapper facts for a script; never from rawInput
+	ToolKind string   // ACP tool kind: read, edit, delete, move, search, execute, think, fetch, other
 	Title    string
 	RawInput json.RawMessage
 	Paths    []string // locations the tool call names
 	Workdir  string
+	CWD      string // execution cwd, distinct from the trust root
+	Shell    string // empty uses the platform shell; unsupported syntax falls back
 }
 
 // Classify returns the category of a request and a short reason.
 func (p *Policy) Classify(r Request) (Category, string) {
+	r = ResolveRequest(r)
 	in := parseInput(r.RawInput)
 	paths := append(append([]string{}, r.Paths...), in.paths...)
 	cmd := in.command
@@ -216,9 +224,33 @@ func (p *Policy) Classify(r Request) (Category, string) {
 		cmd = r.Title // some agents only put the command in the title
 	}
 	if cmd != "" {
-		if rule := p.floorHit(cmd); rule != "" {
+		if rule := p.floorHit(cmd + "\n" + in.floorText); rule != "" {
 			return Floor, "命中底线规则：" + rule
 		}
+	}
+
+	if len(r.UnsetEnv) > 0 {
+		cmd = ReachableShell(cmd, r.UnsetEnv)
+	}
+	if cmd != "" {
+		var c Category
+		var why string
+		if p.legacyShell {
+			c, why = classifyCommandLegacy(cmd, r.Workdir)
+		} else {
+			c, why = classifyRequestCommand(cmd, r)
+		}
+		if outside(paths, r.Workdir) != "" && rank[c] < rank[OutsideWorktree] {
+			c = OutsideWorktree
+			why = "工具声明了工作目录之外的路径"
+		}
+		if (r.ToolKind == "edit" || r.ToolKind == "move") && rank[c] < rank[EditWorktree] {
+			c = EditWorktree
+		}
+		if r.ToolKind == "delete" && rank[c] < rank[Delete] {
+			c = Delete
+		}
+		return c, why
 	}
 
 	switch r.ToolKind {
@@ -230,7 +262,10 @@ func (p *Policy) Classify(r Request) (Category, string) {
 			// A "read" that carries a command line is judged by the command:
 			// the kind is the agent's word, the command is what runs (review
 			// M2; the read-only modes rely on this).
-			return classifyCommand(cmd, r.Workdir)
+			if p.legacyShell {
+				return classifyCommandLegacy(cmd, r.Workdir)
+			}
+			return classifyRequestCommand(cmd, r)
 		}
 		return Read, ""
 	case "edit", "move":
@@ -247,10 +282,16 @@ func (p *Policy) Classify(r Request) (Category, string) {
 		if cmd == "" {
 			return ExecOther, "无法识别的命令"
 		}
-		return classifyCommand(cmd, r.Workdir)
+		if p.legacyShell {
+			return classifyCommandLegacy(cmd, r.Workdir)
+		}
+		return classifyRequestCommand(cmd, r)
 	}
 	if cmd != "" {
-		return classifyCommand(cmd, r.Workdir)
+		if p.legacyShell {
+			return classifyCommandLegacy(cmd, r.Workdir)
+		}
+		return classifyRequestCommand(cmd, r)
 	}
 	return ExecOther, "未知类型的操作"
 }
@@ -265,6 +306,10 @@ func CommandOf(r Request) string {
 	return cmd
 }
 
+func RequestPaths(r Request) []string {
+	return append(append([]string{}, r.Paths...), parseInput(r.RawInput).paths...)
+}
+
 func (p *Policy) floorHit(cmd string) string {
 	for _, re := range p.floor {
 		if re.MatchString(cmd) {
@@ -275,8 +320,10 @@ func (p *Policy) floorHit(cmd string) string {
 }
 
 type input struct {
-	command string
-	paths   []string
+	floorText  string
+	command    string
+	paths      []string
+	cwd, shell string
 }
 
 // parseInput pulls a command line and file paths out of a tool's raw input,
@@ -301,16 +348,24 @@ func parseInput(raw json.RawMessage) input {
 					parts = append(parts, s)
 				}
 			}
-			// ["bash", "-lc", "go test ./..."] runs its last part.
-			if len(parts) >= 3 && (parts[1] == "-c" || parts[1] == "-lc") {
-				in.command = parts[len(parts)-1]
-			} else {
-				in.command = strings.Join(parts, " ")
+			in.floorText = strings.Join(parts, " ")
+			for i, part := range parts {
+				parts[i] = "'" + strings.ReplaceAll(part, "'", "'\"'\"'") + "'"
 			}
+			in.command = strings.Join(parts, " ")
 		}
 		if in.command != "" {
 			break
 		}
+	}
+	for _, k := range []string{"cwd", "workdir"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			in.cwd = v
+			break
+		}
+	}
+	if v, ok := m["shell"].(string); ok {
+		in.shell = v
 	}
 	for _, k := range []string{"path", "file_path", "filePath", "abs_path", "notebook_path", "target", "destination", "source", "cwd", "workdir"} {
 		if s, ok := m[k].(string); ok && s != "" {
@@ -355,7 +410,13 @@ func outside(paths []string, workdir string) string {
 var splitter = regexp.MustCompile(`&&|\|\||;|\||\n`)
 
 // classifyCommand classifies a shell command line by its worst part.
-func classifyCommand(cmd, workdir string) (Category, string) {
+func classifyCommandLegacy(cmd, workdir string) (Category, string) {
+	return classifyLegacy(cmd, workdir, 0)
+}
+func classifyLegacy(cmd, workdir string, depth int) (Category, string) {
+	if depth >= 16 || len(cmd) > 256<<10 {
+		return ExecOther, "旧解析器预算耗尽"
+	}
 	worst, why := Read, ""
 	// Commands inside $(...), `...` and <(...) run too: classify them as
 	// commands of their own.
@@ -364,12 +425,12 @@ func classifyCommand(cmd, workdir string) (Category, string) {
 		worst, why = ExecOther, "无法解析的命令替换"
 	}
 	for _, sub := range subs {
-		if c, w := classifyCommand(sub, workdir); rank[c] > rank[worst] {
+		if c, w := classifyLegacy(sub, workdir, depth+1); rank[c] > rank[worst] {
 			worst, why = c, w
 		}
 	}
 	for _, part := range splitter.Split(cmd, -1) {
-		c, w := classifyOne(strings.TrimSpace(part), workdir)
+		c, w := classifyOneDepth(strings.TrimSpace(part), workdir, depth+1)
 		if rank[c] > rank[worst] {
 			worst, why = c, w
 		}
@@ -383,7 +444,13 @@ func classifyCommand(cmd, workdir string) (Category, string) {
 // classifyOne classifies one simple command, then raises the result when
 // it redirects output into a file.
 func classifyOne(cmd, workdir string) (Category, string) {
-	c, w := classifyBase(cmd, workdir)
+	return classifyOneDepth(cmd, workdir, 0)
+}
+func classifyOneDepth(cmd, workdir string, depth int) (Category, string) {
+	if depth >= 16 {
+		return ExecOther, "旧解析器递归预算耗尽"
+	}
+	c, w := classifyBaseDepth(cmd, workdir, depth)
 	if rc, rw := redirectCategory(cmd, workdir); rank[rc] > rank[c] {
 		return rc, rw
 	}
@@ -456,8 +523,11 @@ func redirectCategory(cmd, workdir string) (Category, string) {
 var redirect = regexp.MustCompile(`^(\d*|&)(>>?|>\|)(.*)$`)
 
 func classifyBase(cmd, workdir string) (Category, string) {
+	return classifyBaseDepth(cmd, workdir, 0)
+}
+func classifyBaseDepth(cmd, workdir string, depth int) (Category, string) {
 	if m := shellC.FindStringSubmatch(strings.TrimSpace(cmd)); m != nil {
-		return classifyCommand(m[1]+m[2], workdir)
+		return classifyLegacy(m[1]+m[2], workdir, depth+1)
 	}
 	f := strings.Fields(cmd)
 	// Skip environment assignments like FOO=1 go test.
@@ -475,9 +545,54 @@ func classifyBase(cmd, workdir string) (Category, string) {
 		if len(inner) == 0 {
 			return Read, "" // env alone prints the environment
 		}
-		return classifyOne(strings.Join(inner, " "), workdir)
+		return classifyOneDepth(strings.Join(inner, " "), workdir, depth+1)
+	}
+	return classifyArgvDepth(f, cmd, workdir, depth)
+}
+
+// classifyArgv consumes decoded argv; it must never split quoted arguments again.
+func classifyArgv(f []string, cmd, workdir string) (Category, string) {
+	return classifyArgvDepth(f, cmd, workdir, 0)
+}
+func classifyArgvDepth(f []string, cmd, workdir string, depth int) (Category, string) {
+	if len(f) == 0 {
+		return Read, ""
 	}
 	name := filepath.Base(f[0])
+	if name == "git" && len(f) > 1 && strings.HasPrefix(f[1], "-") {
+		i := 1
+		var roots []string
+		for i < len(f) && strings.HasPrefix(f[i], "-") {
+			v := f[i]
+			switch {
+			case v == "--no-pager" || v == "--paginate":
+				i++
+			case v == "-C" || v == "-c" || v == "--git-dir" || v == "--work-tree":
+				if i+1 >= len(f) {
+					return ExecOther, cmd
+				}
+				if v != "-c" {
+					roots = append(roots, f[i+1])
+				}
+				i += 2
+			case strings.HasPrefix(v, "--git-dir=") || strings.HasPrefix(v, "--work-tree="):
+				_, path, _ := strings.Cut(v, "=")
+				roots = append(roots, path)
+				i++
+			default:
+				return ExecOther, cmd
+			}
+		}
+		if i >= len(f) {
+			return ExecOther, cmd
+		}
+		inner := append([]string{f[0]}, f[i:]...)
+		c, w := classifyArgvDepth(inner, cmd, workdir, depth+1)
+		if outside(roots, workdir) != "" && rank[c] < rank[OutsideWorktree] {
+			return OutsideWorktree, cmd
+		}
+		return c, w
+	}
 	args := f[1:]
 	sub := ""
 	if len(args) > 0 {
@@ -527,7 +642,7 @@ func classifyBase(cmd, workdir string) (Category, string) {
 					}
 					inner = append(inner, x)
 				}
-				if c, _ := classifyOne(strings.Join(inner, " "), workdir); rank[c] > rank[ExecOther] {
+				if c, _ := classifyOneDepth(strings.Join(inner, " "), workdir, depth+1); rank[c] > rank[ExecOther] {
 					return c, cmd
 				}
 				return ExecOther, cmd
@@ -865,3 +980,21 @@ func substitutions(cmd string) (string, []string, bool) {
 	}
 	return out.String(), subs, open
 }
+
+// ResolveRequest preserves execution context supplied by the adapter while
+// keeping Workdir as the node-owned trust root.
+func ResolveRequest(r Request) Request {
+	in := parseInput(r.RawInput)
+	if in.cwd != "" {
+		r.CWD = in.cwd
+		if !filepath.IsAbs(r.CWD) && !strings.HasPrefix(r.CWD, "~") {
+			r.CWD = filepath.Join(r.Workdir, r.CWD)
+		}
+	}
+	if in.shell != "" {
+		r.Shell = in.shell
+	}
+	return r
+}
+
+func (p *Policy) ShellEnabled() bool { return !p.legacyShell }

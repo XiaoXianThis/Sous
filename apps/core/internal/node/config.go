@@ -18,10 +18,11 @@ import (
 // Config is ~/.sous/node.json. It holds the device token, so it is written
 // with mode 0600.
 type Config struct {
-	HubURL string `json:"hub_url"` // https://agent.wxian.cc
-	NodeID string `json:"node_id"`
-	Name   string `json:"name"`
-	Token  string `json:"token"`
+	ApprovalInspectDisabled bool   `json:"approval_inspect_disabled,omitempty"`
+	HubURL                  string `json:"hub_url"` // https://agent.wxian.cc
+	NodeID                  string `json:"node_id"`
+	Name                    string `json:"name"`
+	Token                   string `json:"token"`
 	// Concurrency bounds how many runs execute at once (default 2).
 	Concurrency int `json:"concurrency,omitempty"`
 	// SousMCP overrides how sous's own MCP server for sub-agents starts

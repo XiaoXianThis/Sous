@@ -10,6 +10,7 @@ var patterns = []struct {
 	re   *regexp.Regexp
 	repl string
 }{
+	{regexp.MustCompile(`(?i)("[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*"\s*:\s*)"(?:\\.|[^"\\])*(?:"|$)`), `${1}"***"`},
 	{regexp.MustCompile(`(?i)(://[^/\s:@]+:)[^@\s/]+@`), "${1}***@"},
 	{regexp.MustCompile(`(?i)\b(bearer|token|basic)\s+[A-Za-z0-9._~+/=-]{12,}`), "${1} ***"},
 	{regexp.MustCompile(`(?i)\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})`), "***"},

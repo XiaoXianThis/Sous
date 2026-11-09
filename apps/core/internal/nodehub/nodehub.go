@@ -26,6 +26,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
 
@@ -55,8 +56,9 @@ type Hub struct {
 	// Set by the Hub from its auth: the login session a request belongs to
 	// (Owner, for shells), and the check that it logged in recently
 	// (Fresh, answering 401 itself when not).
-	Owner func(*http.Request) string
-	Fresh func(http.ResponseWriter, *http.Request) bool
+	Owner             func(*http.Request) string
+	Fresh             func(http.ResponseWriter, *http.Request) bool
+	MaxAIAllowsPerRun int // local Hub configuration; zero uses 150
 }
 
 func (h *Hub) owner(r *http.Request) string {
@@ -441,12 +443,13 @@ func (h *Hub) Decide(ctx context.Context, approvalID, optionID, note string) err
 
 // DecideAs answers an approval on behalf of by: the user or the approver agent.
 func (h *Hub) DecideAs(ctx context.Context, approvalID, optionID, note, by string) error {
+	note = redact.Mask(note)
 	a, err := h.log.Store.Approval(ctx, approvalID)
 	if err != nil {
 		return err
 	}
 	if a.Status != "pending" {
-		return fmt.Errorf("这个审批已经%s", map[string]string{"decided": "处理过了", "expired": "过期了"}[a.Status])
+		return store.ErrApprovalClosed
 	}
 	if optionID != "" {
 		valid := false
@@ -462,7 +465,17 @@ func (h *Hub) DecideAs(ctx context.Context, approvalID, optionID, note, by strin
 	})
 	ev.RunID = a.RunID
 	ev.TaskID = a.TaskID
-	if _, err := h.log.Append(ctx, ev); err != nil {
+	if _, err := h.log.Write(ctx, func(w *store.Writer) error {
+		limit := h.MaxAIAllowsPerRun
+		if limit == 0 {
+			limit = 150
+		}
+		if err := w.CheckApprovalDecision(a.ID, optionID, by, limit); err != nil {
+			return err
+		}
+		_, err := w.Append(ev)
+		return err
+	}); err != nil {
 		return err
 	}
 	r, err := h.log.Store.Run(ctx, a.RunID)
@@ -477,6 +490,7 @@ func (h *Hub) DecideAs(ctx context.Context, approvalID, optionID, note, by strin
 
 // Escalate hands an approval the approver agent was unsure of to the user.
 func (h *Hub) Escalate(ctx context.Context, approvalID, note string) error {
+	note = redact.Mask(note)
 	a, err := h.log.Store.Approval(ctx, approvalID)
 	if err != nil {
 		return err

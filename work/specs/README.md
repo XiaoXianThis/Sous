@@ -24,3 +24,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [e2e-review-2026-11](e2e-review-2026-11/) | core, web | 已完成端到端测试（浏览器/CLI），修复任务待排期 |
 | [flexible-workflow](flexible-workflow/) | core, web | 已实现并通过自动测试（含端到端），真实模型验收进行中 |
 | [supervisor-loop](supervisor-loop/) | core, web | 已实现并通过自动测试（含端到端），真实 agent 实测 sous mcp 待做 |
+| [approval-friction](approval-friction/) | core | 已分批实施并自测，见[实施与16条对比](approval-friction/implementation.md)；medium/300额度仍按方案等待观测 |

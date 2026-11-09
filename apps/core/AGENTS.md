@@ -1,7 +1,7 @@
 # core
 
 - Purpose: sous 的 Go 核心。编译出两个二进制：`sous-hub`（服务端大脑，部署在 Linux 服务器）和 `sous`（客户端 daemon + 命令行，运行在 Windows / macOS / Linux）。
-- Stack: Go（版本见 `go.mod`），SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO），`coder/websocket`，`go-webauthn/webauthn`，`kardianos/service`（客户端的系统服务），`aymanbagabas/go-pty`（安装和登录用的伪终端，含 Windows ConPTY），`pelletier/go-toml/v2`（校验 TOML 配置文件）。
+- Stack: Go（版本见 `go.mod`），SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO），`coder/websocket`，`go-webauthn/webauthn`，`kardianos/service`（客户端的系统服务），`aymanbagabas/go-pty`（安装和登录用的伪终端，含 Windows ConPTY），`pelletier/go-toml/v2`（校验 TOML 配置文件），`mvdan.cc/sh/v3 v3.12.0`（只使用 syntax 解析，不执行 shell）。
 - Depends on: 运行时读取 `build/web/`（web 的构建产物）作为 PWA 静态文件。对外提供 `docs/api/core-hub-http.md`、`docs/api/core-hub-node.md`、`docs/api/core-daemon-ipc.md` 三份契约。
 
 ## Tasks

@@ -38,7 +38,8 @@ func (r *run) reportTurn() {
 	if text == "" {
 		text = "（顾问这一轮没有给出文字回答）"
 	}
-	r.d.ob.reliable(proto.New(proto.TRunTurn, proto.RunTurn{RunID: r.spec.RunID, Text: text, SessionID: sid}))
+	r.flushStreams()
+	r.d.ob.reliable(proto.New(proto.TRunTurn, proto.RunTurn{RunID: r.spec.RunID, Text: mask(text), SessionID: sid}))
 }
 
 // waitQuestion waits for the next question; false when the run is stopped

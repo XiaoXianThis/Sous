@@ -212,13 +212,15 @@ func projectRun(w *Writer, ev event.Event) error {
 			return err
 		}
 		opts, _ := json.Marshal(p.Options)
+		facts, _ := json.Marshal(p.Facts)
+		evidence, _ := json.Marshal(p.Evidence)
 		review := p.Review
 		if review == "" {
 			review = "user"
 		}
-		return exec(`INSERT INTO approvals(id, run_id, thread_id, task_id, title, tool_kind, detail, options, category, review, status, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			p.ApprovalID, ev.RunID, ev.ThreadID, ev.TaskID, p.Title, p.ToolKind, p.Detail, string(opts), p.Category, review, "pending", ev.TS)
+		return exec(`INSERT INTO approvals(id, run_id, thread_id, task_id, title, tool_kind, detail, options, category, review, status, created_at, facts, evidence)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p.ApprovalID, ev.RunID, ev.ThreadID, ev.TaskID, p.Title, p.ToolKind, p.Detail, string(opts), p.Category, review, "pending", ev.TS, string(facts), string(evidence))
 	case event.ApprovalEscalated:
 		var p event.ApprovalEscalatedPayload
 		if err := ev.Decode(&p); err != nil {
@@ -562,38 +564,42 @@ func (s *Store) RunEvents(ctx context.Context, runID string) ([]event.Event, err
 }
 
 type Approval struct {
-	ID         string                 `json:"id"`
-	RunID      string                 `json:"run_id"`
-	TaskID     string                 `json:"task_id"`
-	Category   string                 `json:"category"`
-	Review     string                 `json:"review"` // user / ai
-	Escalation string                 `json:"escalation"`
-	Note       string                 `json:"note"`
-	ThreadID   string                 `json:"thread_id"`
-	Title      string                 `json:"title"`
-	ToolKind   string                 `json:"tool_kind"`
-	Detail     string                 `json:"detail"`
-	Options    []event.ApprovalOption `json:"options"`
-	Status     string                 `json:"status"` // pending / decided / expired
-	OptionID   string                 `json:"option_id"`
-	DecidedBy  string                 `json:"decided_by"`
-	CreatedAt  int64                  `json:"created_at"`
-	DecidedAt  int64                  `json:"decided_at"`
+	ID         string                  `json:"id"`
+	RunID      string                  `json:"run_id"`
+	TaskID     string                  `json:"task_id"`
+	Category   string                  `json:"category"`
+	Review     string                  `json:"review"` // user / ai
+	Escalation string                  `json:"escalation"`
+	Note       string                  `json:"note"`
+	ThreadID   string                  `json:"thread_id"`
+	Title      string                  `json:"title"`
+	ToolKind   string                  `json:"tool_kind"`
+	Detail     string                  `json:"detail"`
+	Options    []event.ApprovalOption  `json:"options"`
+	Status     string                  `json:"status"` // pending / decided / expired
+	OptionID   string                  `json:"option_id"`
+	DecidedBy  string                  `json:"decided_by"`
+	CreatedAt  int64                   `json:"created_at"`
+	DecidedAt  int64                   `json:"decided_at"`
+	Facts      *proto.PolicyFacts      `json:"facts,omitempty"`
+	Evidence   *proto.ApprovalEvidence `json:"evidence,omitempty"`
 }
 
-const approvalCols = `id, run_id, task_id, category, review, escalation, note, thread_id, title, tool_kind, detail, options, status, option_id, decided_by, created_at, decided_at`
+const approvalCols = `id, run_id, task_id, category, review, escalation, note, thread_id, title, tool_kind, detail, options, status, option_id, decided_by, created_at, decided_at, facts, evidence`
 
 func scanApprovals(rows *sql.Rows) ([]Approval, error) {
 	defer rows.Close()
 	out := []Approval{}
 	for rows.Next() {
 		var a Approval
-		var opts string
+		var opts, facts, evidence string
 		if err := rows.Scan(&a.ID, &a.RunID, &a.TaskID, &a.Category, &a.Review, &a.Escalation, &a.Note, &a.ThreadID, &a.Title, &a.ToolKind, &a.Detail, &opts, &a.Status,
-			&a.OptionID, &a.DecidedBy, &a.CreatedAt, &a.DecidedAt); err != nil {
+			&a.OptionID, &a.DecidedBy, &a.CreatedAt, &a.DecidedAt, &facts, &evidence); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(opts), &a.Options)
+		json.Unmarshal([]byte(facts), &a.Facts)
+		json.Unmarshal([]byte(evidence), &a.Evidence)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -635,7 +641,7 @@ func (s *Store) Approvals(ctx context.Context, status, runID string) ([]Approval
 
 // TaskApprovals lists a task's approvals across all its runs, oldest first.
 func (s *Store) TaskApprovals(ctx context.Context, taskID string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+approvalCols+` FROM approvals WHERE task_id = ? ORDER BY created_at LIMIT 500`, taskID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+approvalCols+` FROM approvals WHERE task_id = ? ORDER BY created_at, rowid`, taskID)
 	if err != nil {
 		return nil, err
 	}

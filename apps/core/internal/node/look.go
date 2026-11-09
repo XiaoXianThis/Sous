@@ -35,6 +35,13 @@ func (a *admin) look(ctx context.Context, args proto.LookArgs) (proto.LookResult
 	if cmd == "" {
 		return proto.LookResult{}, nodeErr(proto.ErrCodeInvalid, "没有命令")
 	}
+	if args.ApprovalID != "" || args.RunID != "" {
+		_, scope, err := a.approvalScope(args.RunID, args.ApprovalID)
+		if err != nil {
+			return proto.LookResult{}, err
+		}
+		args.Dir = scope.root
+	}
 	dir := ExpandPath(args.Dir)
 	if dir == "" {
 		dir = ExpandPath("~")
@@ -47,13 +54,18 @@ func (a *admin) look(ctx context.Context, args proto.LookArgs) (proto.LookResult
 	pol := a.d.pol()
 	cat, why := pol.Classify(req)
 	act, reason := policy.Judge(a.d.role(), policy.ModeReadOnly, cat, pol.Assess(req, cat))
+	if cat != policy.Floor && args.ApprovalID != "" {
+		if result, handled, err := a.inspectProjection(ctx, args); handled {
+			return result, err
+		}
+	}
 	if act != policy.Allow {
 		return proto.LookResult{}, nodeErr(proto.ErrCodeInvalid, "machine_look 只能执行只读的查看命令，这条不行（%s）%s", cat, reasonSuffix(firstNonEmpty(reason, why)))
 	}
-	if secretDump.MatchString(cmd) {
+	if secretDump.MatchString(cmd) || !safeLookPaths(cmd, dir) {
 		return proto.LookResult{}, nodeErr(proto.ErrCodeInvalid, "machine_look 不读环境变量和密钥文件，它们会进到对话里")
 	}
-	slog.Info("daemon: machine.look", "dir", dir, "command", cmd)
+	slog.Info("daemon: machine.look", "dir", dir, "command", mask(cmd))
 	ctx, cancel := context.WithTimeout(ctx, lookTimeout)
 	defer cancel()
 	var c *exec.Cmd
@@ -64,10 +76,11 @@ func (a *admin) look(ctx context.Context, args proto.LookArgs) (proto.LookResult
 	}
 	c.Dir = dir
 	c.Stdin = nil
+	c.Env = append(os.Environ(), "PAGER=cat", "SYSTEMD_PAGER=cat", "SYSTEMD_PAGERSECURE=1", "GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0")
 	out := &capped{max: lookBytes}
 	c.Stdout, c.Stderr = out, out
 	err := c.Run()
-	res := proto.LookResult{Output: strings.ToValidUTF8(out.b.String(), "�"), Truncated: out.cut, TimedOut: ctx.Err() != nil}
+	res := proto.LookResult{Output: mask(strings.ToValidUTF8(out.b.String(), "�")), Truncated: out.cut, TimedOut: ctx.Err() != nil}
 	var ee *exec.ExitError
 	switch {
 	case errors.As(err, &ee):

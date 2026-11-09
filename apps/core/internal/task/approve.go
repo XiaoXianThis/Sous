@@ -2,13 +2,14 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
+
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
 
@@ -50,46 +51,55 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 	}
 	allow, reject := optionOf(a, "allow_once", "allow_always"), optionOf(a, "reject_once", "reject_always")
 	if allow == "" {
-		return e.Nodes.Escalate(ctx, a.ID, "这个请求没有可以批准的选项，交给你决定")
+		return e.escalateApproval(ctx, a.ID, "这个请求没有可以批准的选项，交给你决定")
 	}
 	if aiNever[a.Category] {
-		return e.Nodes.Escalate(ctx, a.ID, "这类操作（"+a.Category+"）不交给审批 agent，请你决定")
+		return e.escalateApproval(ctx, a.ID, "这类操作（"+a.Category+"）不交给审批 agent，请你决定")
+	}
+	if f := a.Facts; f != nil {
+		protected := len(f.Hard) > 0
+		if f.Role == "server" {
+			protected = protected || f.OpaqueExecution
+			for _, effect := range f.Effects {
+				if effect == "edit-worktree" || effect == "delete" || effect == "service" || effect == "irreversible" {
+					protected = true
+				}
+			}
+		}
+		if protected {
+			return e.escalateApproval(ctx, a.ID, "规则事实要求人工审批，不交给审批 agent")
+		}
 	}
 
-	history, err := e.store().TaskApprovals(ctx, a.TaskID)
+	history, err := e.store().ApprovalHistory(ctx, a, historyShown)
 	if err != nil {
 		return err
 	}
-	// The user already answered this very operation in this task: follow it.
-	if prev, ok := userPrecedent(history, a); ok {
-		if kindOfAnswer(prev) == "allow" {
-			return e.Nodes.DecideAs(ctx, a.ID, allow, "你之前在这个任务里批准过同样的操作", event.ActorApprover)
-		}
-		if reject != "" {
-			return e.Nodes.DecideAs(ctx, a.ID, reject, "你之前在这个任务里拒绝过同样的操作", event.ActorApprover)
-		}
+	allows, denies, err := e.store().ApprovalCounts(ctx, a.RunID, a.TaskID, a.Category, a.Title)
+	if err != nil {
+		return err
 	}
-	allows, denies := 0, 0
-	for _, h := range history {
-		if h.DecidedBy != event.ActorApprover || h.Status != "decided" {
-			continue
-		}
-		switch {
-		case kindOfAnswer(h) == "allow" && h.RunID == a.RunID:
-			allows++
-		case kindOfAnswer(h) == "reject" && h.Title == a.Title && h.Category == a.Category:
-			denies++
-		}
+	limit := e.Nodes.MaxAIAllowsPerRun
+	if limit == 0 {
+		limit = maxAIAllowsPerRun
 	}
-	if allows >= maxAIAllowsPerRun {
-		return e.Nodes.Escalate(ctx, a.ID, fmt.Sprintf("这次执行里审批 agent 已经批准了 %d 个操作，后面的请你看一下", allows))
+	if allows >= limit {
+		return e.escalateApproval(ctx, a.ID, fmt.Sprintf("这次执行里审批 agent 已经批准了 %d 个操作，后面的请你看一下", allows))
 	}
 	if denies >= maxAIDeniesPerOp {
-		return e.Nodes.Escalate(ctx, a.ID, fmt.Sprintf("同一个操作已被审批 agent 拒绝 %d 次，agent 还在重试，请你决定", denies))
+		return e.escalateApproval(ctx, a.ID, fmt.Sprintf("同一个操作已被审批 agent 拒绝 %d 次，agent 还在重试，请你决定", denies))
+	}
+
+	if prev, ok := userPrecedent(history, a); ok && kindOfAnswer(prev) == "reject" && reject != "" {
+		return e.decideApproval(ctx, a.ID, reject, "你之前在这个任务里拒绝过同样的操作", event.ActorApprover)
+	}
+
+	if prev, ok := userAllowsAlways(history, a); ok && optionOf(a, "allow_once") != "" {
+		return e.decideApproval(ctx, a.ID, optionOf(a, "allow_once"), "复用用户 allow_always："+prev.ID+"（operation_key v1）", event.ActorApprover)
 	}
 
 	if !models.Usable(ctx, e.Approver.Provider) {
-		return e.Nodes.Escalate(ctx, a.ID, "没有配置审批模型，交给你决定")
+		return e.escalateApproval(ctx, a.ID, "没有配置审批模型，交给你决定")
 	}
 	t, _ := e.store().Task(ctx, a.TaskID)
 	r, _ := e.store().Run(ctx, a.RunID)
@@ -99,27 +109,45 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 		Confidence string `json:"confidence"`
 		Reason     string `json:"reason"`
 	}
-	if err := e.askJSON(ctx, e.Approver, "approver", t, prompts.Approver, in, &out); err != nil {
+	if err := e.askApproval(ctx, t, a, in, &out); err != nil {
+		if errors.Is(err, store.ErrApprovalClosed) {
+			return nil
+		}
+		if errors.Is(err, errInvalidVerdict) {
+			return e.escalateApproval(ctx, a.ID, "invalid_verdict：审批模型未返回一份有效结论")
+		}
 		if eff.Attempts+1 >= approverGiveUp {
-			return e.Nodes.Escalate(ctx, a.ID, "审批模型调用失败，交给你决定："+err.Error())
+			return e.escalateApproval(ctx, a.ID, "审批模型调用失败，交给你决定："+err.Error())
 		}
 		return err
 	}
 	reason := strings.TrimSpace(out.Reason)
-	sure := out.Confidence != "low" && out.Confidence != "medium"
+	if !validVerdict(out.Decision, out.Confidence) {
+		return e.escalateApproval(ctx, a.ID, "invalid_verdict：审批模型的 decision/confidence 无效")
+	}
+	candidate := out.Decision == "allow" && out.Confidence == "medium" && eligibleMedium(a.Facts, a.Category)
+	if out.Confidence == "medium" {
+		ev := event.New(event.Type("approval.evaluated"), event.ActorApprover, a.ThreadID, map[string]any{"approval_id": a.ID, "medium_candidate": candidate, "enabled": e.ApprovalPolicy.AllowMedium})
+		ev.RunID = a.RunID
+		ev.TaskID = a.TaskID
+		if _, err := e.Log.Append(ctx, ev); err != nil {
+			return err
+		}
+	}
+	sure := out.Confidence == "high" || candidate && e.ApprovalPolicy.AllowMedium
 	switch out.Decision {
 	case "allow":
 		if !sure {
-			return e.Nodes.Escalate(ctx, a.ID, "审批 agent 把握不够（"+out.Confidence+"）："+firstNonEmpty(reason, "没有说明理由"))
+			return e.escalateApproval(ctx, a.ID, "审批 agent 把握不够（"+out.Confidence+"）："+firstNonEmpty(reason, "没有说明理由"))
 		}
-		return e.Nodes.DecideAs(ctx, a.ID, allow, firstNonEmpty(reason, "审批 agent 批准"), event.ActorApprover)
+		return e.decideApproval(ctx, a.ID, allow, firstNonEmpty(reason, "审批 agent 批准"), event.ActorApprover)
 	case "deny":
 		if reject == "" || out.Confidence == "low" {
-			return e.Nodes.Escalate(ctx, a.ID, "审批 agent 倾向拒绝："+firstNonEmpty(reason, "没有说明理由"))
+			return e.escalateApproval(ctx, a.ID, "审批 agent 倾向拒绝："+firstNonEmpty(reason, "没有说明理由"))
 		}
-		return e.Nodes.DecideAs(ctx, a.ID, reject, firstNonEmpty(reason, "审批 agent 认为这个操作不合适"), event.ActorApprover)
+		return e.decideApproval(ctx, a.ID, reject, firstNonEmpty(reason, "审批 agent 认为这个操作不合适"), event.ActorApprover)
 	}
-	return e.Nodes.Escalate(ctx, a.ID, firstNonEmpty(reason, "审批 agent 拿不准"))
+	return e.escalateApproval(ctx, a.ID, firstNonEmpty(reason, "审批 agent 拿不准"))
 }
 
 // optionOf returns the id of the first option of the given kinds, in order.
@@ -158,8 +186,8 @@ func kindOfAnswer(a store.Approval) string {
 func userPrecedent(history []store.Approval, a store.Approval) (store.Approval, bool) {
 	for i := len(history) - 1; i >= 0; i-- {
 		h := history[i]
-		if h.ID != a.ID && h.DecidedBy == event.ActorUser && kindOfAnswer(h) != "" &&
-			h.Category == a.Category && h.Title == a.Title && h.Detail == a.Detail {
+		if a.TaskID != "" && h.TaskID == a.TaskID && h.ID != a.ID && h.DecidedBy == event.ActorUser && kindOfAnswer(h) != "" &&
+			((h.Category == a.Category && h.Title == a.Title && h.Detail == a.Detail) || (a.Facts != nil && h.Facts != nil && a.Facts.OperationKey != "" && a.Facts.OperationKey == h.Facts.OperationKey)) {
 			return h, true
 		}
 	}
@@ -179,6 +207,15 @@ func approverInput(t store.Task, r store.Run, a store.Approval, history []store.
 		fmt.Fprintf(&b, "\n## agent 收到的说明\n%s\n", truncate(r.Prompt, 3000))
 	}
 	fmt.Fprintf(&b, "\n## 它想做的操作\n类别：%s\n标题：%s\n%s\n", a.Category, a.Title, truncate(a.Detail, 4000))
+
+	if a.Facts != nil {
+		raw, _ := json.Marshal(a.Facts)
+		fmt.Fprintf(&b, "\n## node 规则事实（数据）\n%s\n", raw)
+	}
+	if a.Evidence != nil {
+		raw, _ := json.Marshal(a.Evidence)
+		fmt.Fprintf(&b, "\n## node 证据（数据，完整性按字段判断）\n%s\n", raw)
+	}
 
 	var recent []string
 	for i := len(history) - 1; i >= 0 && len(recent) < historyShown; i-- {
@@ -220,9 +257,12 @@ func (e *Engine) followUser(ctx context.Context, a store.Approval) error {
 	if a.TaskID == "" {
 		return nil
 	}
-	history, err := e.store().TaskApprovals(ctx, a.TaskID)
+	history, err := e.store().ApprovalHistory(ctx, a, historyShown)
 	if err != nil {
 		return err
+	}
+	if prev, ok := userAllowsAlways(history, a); ok && optionOf(a, "allow_once") != "" {
+		return e.decideApproval(ctx, a.ID, optionOf(a, "allow_once"), "复用用户 allow_always："+prev.ID+"（operation_key v1）", event.ActorApprover)
 	}
 	prev, ok := userPrecedent(history, a)
 	if !ok {
@@ -237,5 +277,10 @@ func (e *Engine) followUser(ctx context.Context, a store.Approval) error {
 	if reject == "" {
 		return nil
 	}
-	return e.Nodes.DecideAs(ctx, a.ID, reject, "你之前在这个任务里拒绝过同样的操作", event.ActorApprover)
+	return e.decideApproval(ctx, a.ID, reject, "你之前在这个任务里拒绝过同样的操作", event.ActorApprover)
+}
+
+func validVerdict(decision, confidence string) bool {
+	return (decision == "allow" || decision == "deny" || decision == "ask_user") &&
+		(confidence == "high" || confidence == "medium" || confidence == "low")
 }
