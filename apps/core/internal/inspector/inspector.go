@@ -323,6 +323,9 @@ func (in *Inspector) record(ctx context.Context, s Suspect, f event.FindingPaylo
 		slog.Error("inspector: main thread", "err", err)
 		return
 	}
+	// Look the topic up before Write: the store has one connection, so a
+	// read inside the write transaction would wait on itself forever.
+	topic := st.TaskTopic(ctx, main, s.Run.TaskID)
 	_, err = in.Log.Write(ctx, func(w *store.Writer) error {
 		ev := event.New(event.InspectorFinding, event.ActorInspector, main, f)
 		ev.RunID, ev.TaskID = s.Run.ID, s.Run.TaskID
@@ -333,7 +336,7 @@ func (in *Inspector) record(ctx context.Context, s Suspect, f event.FindingPaylo
 			return nil
 		}
 		msg := event.New(event.MessageAssistant, event.ActorInspector, main,
-			event.MessagePayload{MessageID: ids.New(), Content: note(f), Kind: event.KindInspector, TopicID: in.Log.Store.TaskTopic(ctx, main, s.Run.TaskID)})
+			event.MessagePayload{MessageID: ids.New(), Content: note(f), Kind: event.KindInspector, TopicID: topic})
 		msg.RunID, msg.TaskID = s.Run.ID, s.Run.TaskID
 		_, err := w.Append(msg)
 		return err

@@ -3,7 +3,9 @@ package store_test
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
@@ -23,8 +25,18 @@ func putEv(t *testing.T, s *store.Store, evs ...event.Event) {
 	}
 }
 
+// clock gives the test's events strictly increasing timestamps: events made
+// within one millisecond would otherwise tie, and topic order is by time.
+var clock atomic.Int64
+
+func stamp(ev event.Event) event.Event {
+	clock.CompareAndSwap(0, time.Now().UnixMilli())
+	ev.TS = clock.Add(1)
+	return ev
+}
+
 func msg(typ event.Type, thread string, p event.MessagePayload) event.Event {
-	return event.New(typ, event.ActorUser, thread, p)
+	return stamp(event.New(typ, event.ActorUser, thread, p))
 }
 
 func TestTopicProjection(t *testing.T) {
@@ -54,7 +66,7 @@ func TestTopicProjection(t *testing.T) {
 	}
 
 	closed, sum := event.TopicClosed, "做完了"
-	put(t, s, event.New(event.TopicUpdated, event.ActorSupervisor, th, event.TopicUpdatedPayload{TopicID: "a", Status: &closed, Summary: &sum}))
+	put(t, s, stamp(event.New(event.TopicUpdated, event.ActorSupervisor, th, event.TopicUpdatedPayload{TopicID: "a", Status: &closed, Summary: &sum})))
 	// The supervisor's own reply after closing keeps it closed…
 	put(t, s, msg(event.MessageAssistant, th, event.MessagePayload{MessageID: "r2", Content: "已关闭", TopicID: "a"}))
 	if a, _ = s.Topic(ctx, "a"); a.Status != event.TopicClosed || a.Summary != "做完了" {
@@ -66,7 +78,7 @@ func TestTopicProjection(t *testing.T) {
 		t.Fatalf("reopened: %+v", a)
 	}
 
-	put(t, s, event.New(event.MessageMoved, event.ActorSupervisor, th, event.MessageMovedPayload{MessageID: "b", TopicID: "a", From: "b"}))
+	put(t, s, stamp(event.New(event.MessageMoved, event.ActorSupervisor, th, event.MessageMovedPayload{MessageID: "b", TopicID: "a", From: "b"})))
 	msgs, _ := s.TopicMessages(ctx, th, "a", 0, 50)
 	ids := []string{}
 	for _, m := range msgs {

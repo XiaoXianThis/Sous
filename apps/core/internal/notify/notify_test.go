@@ -54,7 +54,7 @@ func TestHandleRespectsSwitchesAndQuietHours(t *testing.T) {
 		}
 	}
 	push(notice)
-	if len(got) != 1 || got[0].Title != "sous" || got[0].Body != "早上好" || got[0].URL != "/#thread="+main {
+	if len(got) != 1 || got[0].Title != "sous" || got[0].Body != "早上好" || got[0].URL != "/#topic=m1" || got[0].Tag != "topic-m1" {
 		t.Fatalf("notice: %+v", got)
 	}
 	if subs, _ := st.PushSubscriptions(ctx); len(subs) != 1 {

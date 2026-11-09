@@ -585,6 +585,8 @@ func (h *Hub) stuck(ctx context.Context, ref runRef, runID, what string) {
 		return
 	}
 	f := event.FindingPayload{FindingID: ids.New(), Rule: "repeat", Severity: "warning", Action: event.ActionPause, Reason: reason, Done: done}
+	// Read before Write: the store's one connection is held by the transaction.
+	topic := h.log.Store.TaskTopic(ctx, main, r.TaskID)
 	_, err = h.log.Write(ctx, func(w *store.Writer) error {
 		ev := event.New(event.InspectorFinding, event.ActorInspector, main, f)
 		ev.RunID, ev.TaskID = runID, r.TaskID
@@ -593,7 +595,7 @@ func (h *Hub) stuck(ctx context.Context, ref runRef, runID, what string) {
 		}
 		text := fmt.Sprintf("「%s」的 agent %s，已经暂停。可以发一句话告诉它换个办法（会接着做），或者换一个 agent 重试。", firstNonEmpty(r.Title, "这个任务"), what)
 		msg := event.New(event.MessageAssistant, event.ActorInspector, main,
-			event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindInspector, TopicID: h.log.Store.TaskTopic(ctx, main, r.TaskID)})
+			event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindInspector, TopicID: topic})
 		msg.RunID, msg.TaskID = runID, r.TaskID
 		_, err := w.Append(msg)
 		return err
