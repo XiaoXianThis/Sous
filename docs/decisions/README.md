@@ -20,7 +20,7 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0005](0005-permission-modes.md) | 三档权限模式，加一条底线 | Accepted |
 | [0006](0006-inspector-instead-of-budget.md) | 不设花费上限，由巡检 agent 监督 | Accepted |
 | [0007](0007-storage-and-models.md) | 存储用 SQLite，模型多协议、默认 DeepSeek | Accepted |
-| [0008](0008-manual-update-unsigned.md) | 手动更新，不做代码签名 | Accepted |
+| [0008](0008-manual-update-unsigned.md) | 手动更新，不做代码签名 | Accepted（不做代码签名被 0026 取代） |
 | [0009](0009-deliver-by-pull-request.md) | 代码任务以 PR 交付，sous 永不合并主分支 | Superseded by 0022 |
 | [0010](0010-policy-is-a-safety-net.md) | 权限策略是安全网，执行隔离放到第二期 | Accepted |
 | [0011](0011-supervisor-owns-tasks.md) | 第一期由主管自己维护任务，不单独设置 extractor | Accepted |
@@ -38,3 +38,4 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted（“验收默认由 AI 判断”被 0024 取代） |
 | [0024](0024-presets-machine-agents-and-a-lighter-supervisor.md) | 预设、每台电脑的 agent，以及更顺手的主管 | Accepted |
 | [0025](0025-supervisor-loop.md) | 主管的闭环：任务进展叫醒主管、结构化结果、子 agent 能问能报、路由只是偏好 | Accepted |
+| [0026](0026-self-signed-darwin-releases.md) | 发布的 macOS 二进制用自签名证书签名 | Accepted |

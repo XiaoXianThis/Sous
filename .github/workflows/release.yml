@@ -3,6 +3,16 @@ name: release
 # publishes sous (Windows, macOS, Linux) and sous-hub (Linux) to GitHub
 # Releases with goreleaser (apps/core/.goreleaser.yaml). Daemons update
 # themselves from these releases (internal/update).
+#
+# The job runs on macOS so the darwin binaries can be signed with the fixed
+# self-signed identity "Sous Dev Signing" (decision 0026,
+# docs/guides/macos-signing-and-permissions.md). Everything is still cross
+# compiled with CGO_ENABLED=0, so the Linux and Windows builds are the same as
+# before. The identity comes from two repository secrets, created with
+# apps/core/scripts/export-signing-cert.sh:
+#   SOUS_SIGN_CERT_P12           the identity as a base64-encoded .p12
+#   SOUS_SIGN_CERT_P12_PASSWORD  the .p12 password
+# Without them the release fails; it never falls back to ad-hoc signatures.
 on:
   push:
     tags: ['v*']
@@ -10,11 +20,65 @@ permissions:
   contents: write
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    env:
+      # The certificate the secrets must contain: SHA-1 of "Sous Dev Signing",
+      # the same identity local builds use. Public (it is part of every signed
+      # binary's designated requirement); change it only when the certificate
+      # is replaced on purpose.
+      SOUS_SIGN_CERT_SHA1: 970B643A535B0E5B736FD011DFC11AF8896BCE72
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the changelog needs the history
+      # First, so missing or wrong secrets fail the release before the tests run.
+      # Puts the identity in a throwaway keychain in $RUNNER_TEMP; its path is
+      # passed to the goreleaser step as SOUS_SIGN_KEYCHAIN.
+      - name: Import the macOS signing identity
+        env:
+          SOUS_SIGN_CERT_P12: ${{ secrets.SOUS_SIGN_CERT_P12 }}
+          SOUS_SIGN_CERT_P12_PASSWORD: ${{ secrets.SOUS_SIGN_CERT_P12_PASSWORD }}
+        run: |
+          set -eu
+          fail() {
+            echo "::error title=macOS signing::$1"
+            echo "Create the secrets with apps/core/scripts/export-signing-cert.sh; see the" \
+              "\"发布产物签名\" section of docs/guides/macos-signing-and-permissions.md." >&2
+            exit 1
+          }
+          [ -n "$SOUS_SIGN_CERT_P12" ] || fail "the repository secret SOUS_SIGN_CERT_P12 is missing or empty"
+          [ -n "$SOUS_SIGN_CERT_P12_PASSWORD" ] || fail "the repository secret SOUS_SIGN_CERT_P12_PASSWORD is missing or empty"
+
+          kc="$RUNNER_TEMP/sous-signing.keychain-db"
+          p12="$RUNNER_TEMP/sous-signing.p12"
+          kc_pw=$(openssl rand -hex 24)
+          echo "::add-mask::$kc_pw"
+          umask 077
+
+          printf '%s' "$SOUS_SIGN_CERT_P12" | tr -d ' \t\r\n' | base64 --decode >"$p12" \
+            || fail "SOUS_SIGN_CERT_P12 is not valid base64"
+          security create-keychain -p "$kc_pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc" # stays unlocked for 6 hours
+          security unlock-keychain -p "$kc_pw" "$kc"
+          security import "$p12" -k "$kc" -f pkcs12 -P "$SOUS_SIGN_CERT_P12_PASSWORD" \
+            -T /usr/bin/codesign >/dev/null \
+            || { rm -f "$p12"; fail "cannot import SOUS_SIGN_CERT_P12 (wrong SOUS_SIGN_CERT_P12_PASSWORD, or not a .p12)"; }
+          rm -f "$p12"
+          # Lets codesign use the key without a dialog.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pw" "$kc" >/dev/null
+          # On the search list for the whole job: codesign only finds identities
+          # there. The runner is thrown away afterwards, so nothing is restored;
+          # sign-darwin.sh sees the keychain already listed and leaves the list alone.
+          # shellcheck disable=SC2046 # runner keychain paths have no spaces
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+
+          found=$(security find-identity -p codesigning "$kc" \
+            | awk '/"Sous Dev Signing"/ { print $2; exit }')
+          [ -n "$found" ] || fail "SOUS_SIGN_CERT_P12 has no code signing identity named \"Sous Dev Signing\""
+          [ "$found" = "$SOUS_SIGN_CERT_SHA1" ] \
+            || fail "SOUS_SIGN_CERT_P12 holds certificate $found, expected $SOUS_SIGN_CERT_SHA1 (the identity local builds use)"
+          echo "SOUS_SIGN_KEYCHAIN=$kc" >>"$GITHUB_ENV"
+          echo "imported \"Sous Dev Signing\" ($found)"
       - uses: actions/setup-go@v5
         with:
           go-version-file: apps/core/go.mod
@@ -32,6 +96,8 @@ jobs:
       - run: wok install web
       - run: wok test web
       - run: wok build web
+      # The build hook (scripts/sign-darwin.sh) signs each darwin binary before
+      # it is archived, so checksums.txt covers the signed files.
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -40,3 +106,27 @@ jobs:
           workdir: apps/core
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOUS_SIGN: require # fail instead of shipping ad-hoc signatures (CI defaults to off)
+          # SOUS_SIGN_KEYCHAIN is set by the import step above.
+      - name: Check the darwin signatures
+        working-directory: apps/core
+        run: |
+          set -eu
+          want=$(printf '%s' "$SOUS_SIGN_CERT_SHA1" | tr 'A-F' 'a-f')
+          n=0
+          for f in dist/sous_darwin_*/sous; do
+            codesign --verify --strict "$f" \
+              || { echo "::error title=macOS signing::$f has no valid signature"; exit 1; }
+            req=$(codesign -d -r- "$f" 2>&1)
+            echo "$f: $req"
+            case "$req" in
+              *"identifier \"cc.wxian.sous\" and certificate leaf = H\"$want\""*) ;;
+              *) echo "::error title=macOS signing::$f is not signed with \"Sous Dev Signing\""; exit 1 ;;
+            esac
+            n=$((n + 1))
+          done
+          [ "$n" -eq 2 ] || { echo "::error title=macOS signing::expected 2 darwin binaries, found $n"; exit 1; }
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          if [ -n "${SOUS_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$SOUS_SIGN_KEYCHAIN" || true; fi

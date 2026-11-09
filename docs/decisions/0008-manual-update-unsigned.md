@@ -1,6 +1,6 @@
 # 0008 手动更新，不做代码签名
 
-- Status: Accepted
+- Status: Accepted（「不做代码签名」被 0026 取代）
 - Date: 2026-11-03
 
 ## Context
