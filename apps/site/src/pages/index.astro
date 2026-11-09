@@ -3,6 +3,30 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import AgentMark from '../components/AgentMark.astro';
 import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
 
+const useCaseScenarios = [
+  {
+    code: 'SCENARIO 01',
+    title: '手机随手交办，多台电脑独立分支并发改代码',
+    when: '通勤路上、开会间隙或离开工位时想到一个改动',
+    what: '在手机主屏打开 sous PWA 跟主管说一句需求。主管自动唤醒家里或办公室在线的 Mac / Linux 开发机，在 ~/.sous/worktrees/ 下的独立分支启动 Claude Code 或 Codex 改代码、跑测试——完全不碰你电脑上写了一半的本地工作区。',
+    highlight: '独立 Worktree 隔离 · 原地审批条一键批复 · 做完带着测试结果汇报',
+  },
+  {
+    code: 'SCENARIO 02',
+    title: '先让「只读顾问」摸清陌生代码库，再无缝转交实施',
+    when: '接手复杂模块、排查疑难 Bug 或在两种设计方案间权衡',
+    what: '不用一上来就盲目建写任务。先在对话里跟主管推敲，主管自动拉起目标电脑上只读常驻的「项目顾问（consult）」翻阅代码回答细节；等方案拍板后，直接通过 from_consult 继承顾问已读过代码的会话动手修改，省去重复读代码的等待与 Token。',
+    highlight: 'ModeReadOnly 零误改风险 · 会话上下文直接继承 · 避免返工',
+  },
+  {
+    code: 'SCENARIO 03',
+    title: '开发机编码验收 → 分支合并 → 服务器自动部署与健康检查',
+    when: '个人全栈项目或多机器协作，从改代码到上线一气呵成',
+    what: '开发机上的子 Agent 完成任务后改动停在分支上等你确认；你发话「合并并推送」后，Hub 检测到远端部署分支（如 main）出现新提交，自动向 role:server 的服务器派发运维部署任务，并在脚本跑完后执行 health 健康检查。',
+    highlight: '受控 Git 操作（绝不擅自强推） · 跨机自动触发部署 · 失败自动告警',
+  },
+];
+
 const capabilities = [
   {
     code: '01',
@@ -191,7 +215,11 @@ const supportedAgents: Array<{
       </div>
 
       <!-- Bespoke HTML/CSS + SVG Product Schematic (Workbench + ApprovalStrip + Supervisor Chat) -->
-      <div class="mt-10 md:mt-12 enter-fade enter-delay-1">
+      <div class="mt-10 md:mt-12 enter-fade enter-delay-1 space-y-2">
+        <div class="flex items-center justify-between text-[11px] font-mono text-faint px-1">
+          <span>▾ 界面示意（HTML/CSS 自绘示意，还原真实三栏工作台、任务卡原地审批条与主管对话结构）</span>
+          <span class="hidden sm:inline">apps/web · Workbench &amp; ApprovalStrip</span>
+        </div>
         <div
           class="rounded-md bg-canvas border border-line-strong shadow-elevated overflow-hidden"
           role="region"
@@ -370,6 +398,39 @@ const supportedAgents: Array<{
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Three Clear Use-Case Scenarios Section -->
+  <section id="scenarios" class="border-b border-line py-section bg-canvas">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-8">
+      <div class="max-w-2xl space-y-2">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">01 / USE CASES</div>
+        <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          一眼看懂的三个典型使用场景
+        </h2>
+        <p class="text-sm sm:text-base text-muted">
+          把你从「守在终端前盯每一个 Agent 窗口」中解放出来，回到主厨的位置做决策与验收。
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {useCaseScenarios.map((sc) => (
+          <div class="rounded-md bg-page border border-line p-6 flex flex-col justify-between gap-5">
+            <div class="space-y-3">
+              <div class="font-mono text-xs text-accent font-semibold">{sc.code}</div>
+              <h3 class="text-lg font-semibold text-ink tracking-tight leading-snug">{sc.title}</h3>
+              <div class="rounded-xs bg-panel border border-line px-2.5 py-1.5 text-xs text-muted">
+                <span class="font-mono text-faint">何时用：</span>{sc.when}
+              </div>
+              <p class="text-xs sm:text-sm text-muted leading-relaxed">{sc.what}</p>
+            </div>
+            <div class="pt-3 border-t border-line font-mono text-[11px] text-faint">
+              {sc.highlight}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   </section>

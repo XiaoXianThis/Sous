@@ -6,7 +6,15 @@ const docs = defineCollection({
   schema: z.object({
     title: z.string(),
     description: z.string(),
-    group: z.enum(['getting-started', 'usage', 'development', 'reference']),
+    group: z.enum([
+      'getting-started',
+      'concepts',
+      'guides',
+      'reference',
+      'development',
+      'architecture',
+      'faq',
+    ]),
     order: z.number(),
     sourceDoc: z.string().optional(),
     updatedAt: z.string().optional(),

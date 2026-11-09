@@ -1,8 +1,13 @@
 ---
 import { getCollection } from 'astro:content';
-import { DOC_GROUPS, GROUP_LABELS, REPO_URL } from '../lib/docs-nav';
+import { GROUP_LABELS, GROUP_RANK } from '../lib/docs-nav';
 
 const docsEntries = await getCollection('docs');
+const sortedEntries = [...docsEntries].sort((a, b) => {
+  const gDiff = GROUP_RANK[a.data.group] - GROUP_RANK[b.data.group];
+  if (gDiff !== 0) return gDiff;
+  return a.data.order - b.data.order;
+});
 
 interface SearchItem {
   title: string;
@@ -16,13 +21,13 @@ interface SearchItem {
 
 const searchIndex: SearchItem[] = [];
 
-for (const entry of docsEntries) {
+for (const entry of sortedEntries) {
   const cleanBody = (entry.body || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[#>*`|_-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 900);
+    .slice(0, 1200);
 
   searchIndex.push({
     title: entry.data.title,
@@ -31,25 +36,19 @@ for (const entry of docsEntries) {
     href: `/docs/${entry.id}`,
     external: false,
     stage: 1,
-    keywords: `${entry.data.title} ${entry.data.description} ${cleanBody}`,
+    keywords: `${entry.data.title} ${entry.data.description} ${GROUP_LABELS[entry.data.group]} ${cleanBody}`,
   });
 }
 
-for (const group of DOC_GROUPS) {
-  for (const item of group.items) {
-    if (item.stage === 2) {
-      searchIndex.push({
-        title: item.title,
-        description: item.description,
-        group: `${group.title} · 第二阶段`,
-        href: `${REPO_URL}/blob/main/${item.repoPath}`,
-        external: true,
-        stage: 2,
-        keywords: `${item.title} ${item.description} ${item.repoPath}`,
-      });
-    }
-  }
-}
+searchIndex.push({
+  title: '版本更新日志 (Changelog · v0.1.0 – v0.1.7)',
+  description: 'Sous 历次 Git 标签与 GitHub Release 版本记录，涵盖 M0–M5、三层自动审批、灵活工作流、主管闭环与审批摩擦治理。',
+  group: '发布历史',
+  href: '/changelog',
+  external: false,
+  stage: 1,
+  keywords: 'changelog release 版本 更新日志 v0.1.0 v0.1.1 v0.1.2 v0.1.3 v0.1.4 v0.1.5 v0.1.6 v0.1.7',
+});
 ---
 
 <div
@@ -69,8 +68,8 @@ for (const group of DOC_GROUPS) {
       <input
         id="doc-search-input"
         type="search"
-         autocomplete="off"
-        placeholder="搜索安装、配对、Hub、ACP、权限策略、工作台…"
+        autocomplete="off"
+        placeholder="搜索安装、配对、hub.yaml、node.json、ACP、审批、排错…"
         class="w-full bg-transparent text-base sm:text-sm text-ink placeholder:text-faint focus:outline-none"
       />
       <button
@@ -87,7 +86,7 @@ for (const group of DOC_GROUPS) {
     </div>
 
     <div class="px-3.5 py-2 bg-canvas border-t border-line flex items-center justify-between text-[11px] font-mono text-faint">
-      <span>本地全文检索（无第三方服务）</span>
+      <span>本地全文检索（覆盖全部 14 篇文档与更新日志）</span>
       <span>↑↓ 导航 · Enter 打开</span>
     </div>
   </div>
@@ -119,7 +118,7 @@ for (const group of DOC_GROUPS) {
 
       if (!matched.length) {
         listEl.innerHTML =
-          '<div class="px-4 py-8 text-center text-xs text-faint">未找到匹配的文档条目，请尝试搜索 "sous pair"、"hub.yaml"、"ACP" 或 "worktree"。</div>';
+          '<div class="px-4 py-8 text-center text-xs text-faint">未找到匹配的文档条目，请尝试搜索 "sous pair"、"hub.yaml"、"node.json"、"ACP" 或 "worktree"。</div>';
         return;
       }
 
@@ -133,9 +132,7 @@ for (const group of DOC_GROUPS) {
           >
             <div class="flex items-center justify-between gap-2">
               <span class="text-sm font-medium text-ink">${escapeHtml(item.title)}</span>
-              <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs border border-line ${
-                item.stage === 1 ? 'text-accent bg-sunken' : 'text-faint bg-canvas'
-              }">${escapeHtml(item.group)}${item.external ? ' ↗' : ''}</span>
+              <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs border border-line text-accent bg-sunken">${escapeHtml(item.group)}</span>
             </div>
             <p class="mt-1 text-xs text-muted line-clamp-2">${escapeHtml(item.description)}</p>
           </a>

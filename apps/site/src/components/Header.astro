@@ -8,6 +8,7 @@ interface Props {
 
 const { currentPath = Astro.url.pathname } = Astro.props;
 const isDocs = currentPath.startsWith('/docs');
+const isChangelog = currentPath.startsWith('/changelog');
 ---
 
 <header class="sticky top-0 z-40 h-nav-h bg-page/90 backdrop-blur-md border-b border-line">
@@ -34,11 +35,11 @@ const isDocs = currentPath.startsWith('/docs');
         >
           首页
         </a>
+        <a href="/#scenarios" class="text-muted hover:text-ink transition-colors duration-fast">
+          使用场景
+        </a>
         <a href="/#capabilities" class="text-muted hover:text-ink transition-colors duration-fast">
           核心能力
-        </a>
-        <a href="/#workflow" class="text-muted hover:text-ink transition-colors duration-fast">
-          工作流
         </a>
         <a href="/#agents" class="text-muted hover:text-ink transition-colors duration-fast">
           支持 Agent
@@ -51,6 +52,15 @@ const isDocs = currentPath.startsWith('/docs');
           ]}
         >
           文档
+        </a>
+        <a
+          href="/changelog"
+          class:list={[
+            'transition-colors duration-fast',
+            isChangelog ? 'text-accent font-medium' : 'text-muted hover:text-ink',
+          ]}
+        >
+          更新日志
         </a>
       </nav>
     </div>
@@ -146,6 +156,9 @@ const isDocs = currentPath.startsWith('/docs');
         <a href="/" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-ink hover:bg-hover">
           首页
         </a>
+        <a href="/#scenarios" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+          三个使用场景
+        </a>
         <a href="/#capabilities" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           核心能力
         </a>
@@ -155,11 +168,11 @@ const isDocs = currentPath.startsWith('/docs');
         <a href="/#agents" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           支持的编程 Agent
         </a>
-        <a href="/#quickstart" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
-          快速开始
-        </a>
         <a href="/docs" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-accent font-medium hover:bg-hover">
           文档中心 (/docs)
+        </a>
+        <a href="/changelog" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+          版本更新日志 (/changelog)
         </a>
       </nav>
 
@@ -174,24 +187,13 @@ const isDocs = currentPath.startsWith('/docs');
             <ul class="space-y-1 pl-4 border-l border-line">
               {group.items.map((item) => (
                 <li>
-                  {item.slug ? (
-                    <a
-                      href={`/docs/${item.slug}`}
-                      data-drawer-link
-                      class="block py-1 text-xs text-muted hover:text-accent"
-                    >
-                      {item.title}
-                    </a>
-                  ) : (
-                    <a
-                      href={`${REPO_URL}/blob/main/${item.repoPath}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="block py-1 text-xs text-faint hover:text-muted"
-                    >
-                      {item.title} <span class="font-mono text-[10px]">↗</span>
-                    </a>
-                  )}
+                  <a
+                    href={`/docs/${item.slug}`}
+                    data-drawer-link
+                    class="block py-1 text-xs text-muted hover:text-accent"
+                  >
+                    {item.title}
+                  </a>
                 </li>
               ))}
             </ul>

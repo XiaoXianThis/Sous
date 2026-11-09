@@ -1,21 +1,21 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import { DOC_GROUPS, REPO_URL } from '../../lib/docs-nav';
+import { DOC_GROUPS } from '../../lib/docs-nav';
 ---
 
 <BaseLayout
   title="文档中心"
-  description="sous 官方文档中心：按入门、使用、开发、参考四个分组组织的完整指南与架构文档。"
+  description="sous 官方文档中心：按入门、概念、使用指南、参考、开发、架构、FAQ 七大分组组织的完整指南与参考手册。"
 >
   <section class="border-b border-line bg-canvas py-10 md:py-14">
     <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-6">
       <div class="max-w-2xl space-y-2.5">
-        <div class="font-mono text-xs uppercase tracking-wider text-accent">DOCUMENTATION</div>
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">DOCUMENTATION · 7 GROUPS · 14 GUIDES</div>
         <h1 class="text-2xl sm:text-3xl md:text-4xl font-semibold tracking-tight text-ink">
           sous 文档中心
         </h1>
         <p class="text-sm sm:text-base text-muted leading-relaxed">
-          按<strong class="text-ink font-medium">入门、使用、开发、参考</strong>四个象限组织。第一阶段已上线三篇核心文档；其余章节正从仓库 `docs/` 逐步迁移至站点，现可直接点击阅读仓库 Markdown 原文。
+          按<strong class="text-ink font-medium">入门、概念、使用指南、参考、开发、架构、FAQ</strong>七大分组组织。所有命令、配置文件字段与接口路径均与当前仓库代码核对一致，可直接复制执行。
         </p>
       </div>
 
@@ -42,7 +42,7 @@ import { DOC_GROUPS, REPO_URL } from '../../lib/docs-nav';
     </div>
   </section>
 
-  <!-- 4 Category Groups -->
+  <!-- 7 Category Groups -->
   <section class="py-10 md:py-14 bg-page">
     <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-10">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="docs-group-grid">
@@ -69,41 +69,21 @@ import { DOC_GROUPS, REPO_URL } from '../../lib/docs-nav';
                     data-doc-card
                     data-keywords={`${group.title} ${item.title} ${item.description} ${item.repoPath}`.toLowerCase()}
                   >
-                    {item.slug ? (
-                      <a
-                        href={`/docs/${item.slug}`}
-                        class="group block p-3.5 rounded-sm bg-page border border-line hover:border-accent transition-colors duration-fast"
-                      >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="text-sm font-medium text-ink group-hover:text-accent transition-colors duration-fast">
-                            {item.title}
-                          </span>
-                          <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-accent-soft text-accent flex-none">
-                            在线阅读 →
-                          </span>
-                        </div>
-                        <p class="mt-1 text-xs text-muted leading-relaxed">{item.description}</p>
-                        <div class="mt-2 font-mono text-[11px] text-faint">来源: {item.repoPath}</div>
-                      </a>
-                    ) : (
-                      <a
-                        href={`${REPO_URL}/blob/main/${item.repoPath}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="group block p-3.5 rounded-sm bg-canvas border border-line hover:border-line-strong transition-colors duration-fast"
-                      >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="text-sm font-medium text-muted group-hover:text-ink transition-colors duration-fast">
-                            {item.title}
-                          </span>
-                          <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-panel border border-line text-faint flex-none">
-                            第二阶段 · 仓库原文 ↗
-                          </span>
-                        </div>
-                        <p class="mt-1 text-xs text-faint leading-relaxed">{item.description}</p>
-                        <div class="mt-2 font-mono text-[11px] text-faint">路径: {item.repoPath}</div>
-                      </a>
-                    )}
+                    <a
+                      href={`/docs/${item.slug}`}
+                      class="group block p-3.5 rounded-sm bg-page border border-line hover:border-accent transition-colors duration-fast"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="text-sm font-medium text-ink group-hover:text-accent transition-colors duration-fast">
+                          {item.title}
+                        </span>
+                        <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-accent-soft text-accent flex-none">
+                          在线阅读 →
+                        </span>
+                      </div>
+                      <p class="mt-1 text-xs text-muted leading-relaxed">{item.description}</p>
+                      <div class="mt-2 font-mono text-[11px] text-faint">参考源: {item.repoPath}</div>
+                    </a>
                   </li>
                 ))}
               </ul>

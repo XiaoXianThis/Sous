@@ -16,7 +16,7 @@ import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
           一个长期运行、随叫随到的私人 AI 助理。你和它讨论需求，它自己维护任务、通过 ACP 协议调度 Claude Code / Codex / Cursor / OpenCode / Kiro 去干活，需要时找你审批，完成后汇报。
         </p>
         <p class="font-mono text-xs text-faint">
-          仓库组织遵循 <a href="https://wokspace.wxian.cc" target="_blank" rel="noopener noreferrer" class="text-muted hover:text-ink underline underline-offset-2">wokspace</a> 规范 · MIT License
+          仓库组织遵循 <a href="https://wokspace.wxian.cc" target="_blank" rel="noopener noreferrer" class="text-muted hover:text-ink underline underline-offset-2">wokspace</a> 规范 · <a href={`${REPO_URL}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer" class="text-muted hover:text-ink underline underline-offset-2">MIT License</a>
         </p>
       </div>
 
@@ -24,20 +24,23 @@ import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
         <h2 class="font-mono text-xs uppercase tracking-wider text-faint">站点导航</h2>
         <ul class="space-y-1.5 text-xs text-muted">
           <li><a href="/" class="hover:text-ink transition-colors duration-fast">首页</a></li>
+          <li><a href="/#scenarios" class="hover:text-ink transition-colors duration-fast">三个使用场景</a></li>
           <li><a href="/#capabilities" class="hover:text-ink transition-colors duration-fast">核心能力</a></li>
-          <li><a href="/#workflow" class="hover:text-ink transition-colors duration-fast">工作流示意</a></li>
           <li><a href="/#agents" class="hover:text-ink transition-colors duration-fast">支持的 Agent</a></li>
-          <li><a href="/#quickstart" class="hover:text-ink transition-colors duration-fast">快速开始</a></li>
+          <li><a href="/changelog" class="hover:text-ink transition-colors duration-fast">版本更新日志</a></li>
+          <li><a href="/sitemap.xml" class="hover:text-ink transition-colors duration-fast">Sitemap</a></li>
         </ul>
       </div>
 
       <div class="md:col-span-3 space-y-2.5">
-        <h2 class="font-mono text-xs uppercase tracking-wider text-faint">核心文档</h2>
+        <h2 class="font-mono text-xs uppercase tracking-wider text-faint">文档快速入口</h2>
         <ul class="space-y-1.5 text-xs text-muted">
-          <li><a href="/docs" class="hover:text-ink transition-colors duration-fast">文档首页（分组索引）</a></li>
-          <li><a href="/docs/getting-started" class="hover:text-ink transition-colors duration-fast">安装与部署 Hub</a></li>
-          <li><a href="/docs/connect-machine" class="hover:text-ink transition-colors duration-fast">接入一台电脑或服务器</a></li>
-          <li><a href="/docs/architecture-overview" class="hover:text-ink transition-colors duration-fast">架构概览：Hub、Node 与工作台</a></li>
+          <li><a href="/docs" class="hover:text-ink transition-colors duration-fast">文档首页（7 大分组索引）</a></li>
+          <li><a href="/docs/getting-started" class="hover:text-ink transition-colors duration-fast">5 分钟跑起来：安装与部署 Hub</a></li>
+          <li><a href="/docs/connect-machine" class="hover:text-ink transition-colors duration-fast">接入电脑与配置各家 Agent</a></li>
+          <li><a href="/docs/cli-and-config" class="hover:text-ink transition-colors duration-fast">CLI 与配置文件参考</a></li>
+          <li><a href="/docs/architecture-overview" class="hover:text-ink transition-colors duration-fast">系统架构：Hub/Daemon 与存储</a></li>
+          <li><a href="/docs/faq-troubleshooting" class="hover:text-ink transition-colors duration-fast">FAQ 与常见故障排查</a></li>
         </ul>
       </div>
 
@@ -55,13 +58,13 @@ import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
             </a>
           </li>
           <li>
-            <a href={`${REPO_URL}/blob/main/docs/decisions/README.md`} target="_blank" rel="noopener noreferrer" class="hover:text-ink transition-colors duration-fast">
-              架构决策记录 (ADR) ↗
+            <a href={`${REPO_URL}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer" class="hover:text-ink transition-colors duration-fast">
+              MIT License ↗
             </a>
           </li>
           <li>
-            <a href={`${REPO_URL}/blob/main/docs/api/README.md`} target="_blank" rel="noopener noreferrer" class="hover:text-ink transition-colors duration-fast">
-              应用间契约 (API) ↗
+            <a href={`${REPO_URL}/blob/main/docs/decisions/README.md`} target="_blank" rel="noopener noreferrer" class="hover:text-ink transition-colors duration-fast">
+              架构决策记录 (ADR) ↗
             </a>
           </li>
         </ul>
@@ -69,8 +72,8 @@ import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
     </div>
 
     <div class="pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-faint font-mono">
-      <span>© 2026 Sous Contributors · Released under the MIT License.</span>
-      <span>Hub thinks · Node acts · Event-sourced in Go & SQLite</span>
+      <span>Copyright © 2026 XiaoXianThis · Released under the <a href={`${REPO_URL}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer" class="text-muted hover:text-ink underline underline-offset-2">MIT License</a>.</span>
+      <span>Hub thinks · Node acts · Event-sourced in Go &amp; SQLite</span>
     </div>
   </div>
 </footer>

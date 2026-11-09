@@ -39,6 +39,7 @@ const {
 } = Astro.props;
 
 const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
+const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}.md`;
 ---
 
 <BaseLayout title={`${title} · 文档`} description={description}>
@@ -83,33 +84,23 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
             </div>
           )}
           <div class="space-y-2">
-            <div class="font-mono text-[11px] text-faint">全部章节</div>
+            <div class="font-mono text-[11px] text-faint">全部章节（7 大类）</div>
             {DOC_GROUPS.map((g) => (
               <div class="space-y-1">
                 <div class="font-medium text-ink">{g.code} · {g.title}</div>
                 <ul class="space-y-1 pl-2 border-l border-line">
                   {g.items.map((item) => (
                     <li>
-                      {item.slug ? (
-                        <a
-                          href={`/docs/${item.slug}`}
-                          class:list={[
-                            'block py-0.5',
-                            item.slug === currentSlug ? 'text-accent font-medium' : 'text-muted hover:text-ink',
-                          ]}
-                        >
-                          {item.title}
-                        </a>
-                      ) : (
-                        <a
-                          href={`${REPO_URL}/blob/main/${item.repoPath}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="block py-0.5 text-faint hover:text-muted"
-                        >
-                          {item.title} <span class="font-mono text-[10px]">(第二阶段 · 原文 ↗)</span>
-                        </a>
-                      )}
+                      <a
+                        href={`/docs/${item.slug}`}
+                        aria-current={item.slug === currentSlug ? 'page' : undefined}
+                        class:list={[
+                          'block py-0.5',
+                          item.slug === currentSlug ? 'text-accent font-medium' : 'text-muted hover:text-ink',
+                        ]}
+                      >
+                        {item.title}
+                      </a>
                     </li>
                   ))}
                 </ul>
@@ -129,7 +120,7 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
               <a href="/docs" class="font-mono text-xs uppercase tracking-wider text-faint hover:text-ink transition-colors duration-fast">
                 DOCS INDEX
               </a>
-              <span class="font-mono text-[11px] text-faint">Stage 1</span>
+              <span class="font-mono text-[11px] text-faint">7 Groups</span>
             </div>
             <div class="relative">
               <input
@@ -151,34 +142,21 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
                 </div>
                 <ul class="space-y-0.5 border-l border-line ml-2 pl-2">
                   {g.items.map((item) => {
-                    const active = item.slug === currentSlug && g.key === group;
+                    const active = item.slug === currentSlug;
                     return (
                       <li data-sidebar-item data-title={`${item.title} ${item.description}`.toLowerCase()}>
-                        {item.slug ? (
-                          <a
-                            href={`/docs/${item.slug}`}
-                            aria-current={active ? 'page' : undefined}
-                            class:list={[
-                              'block px-2.5 py-1.5 rounded-sm text-xs transition-colors duration-fast',
-                              active
-                                ? 'bg-accent-soft text-accent font-medium'
-                                : 'text-muted hover:text-ink hover:bg-hover',
-                            ]}
-                          >
-                            {item.title}
-                          </a>
-                        ) : (
-                          <a
-                            href={`${REPO_URL}/blob/main/${item.repoPath}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-sm text-xs text-faint hover:text-muted hover:bg-hover transition-colors duration-fast"
-                            title="第二阶段迁移页面，点击查看 GitHub 仓库 Markdown 原文"
-                          >
-                            <span class="truncate">{item.title}</span>
-                            <span class="font-mono text-[10px] flex-none">原文↗</span>
-                          </a>
-                        )}
+                        <a
+                          href={`/docs/${item.slug}`}
+                          aria-current={active ? 'page' : undefined}
+                          class:list={[
+                            'block px-2.5 py-1.5 rounded-sm text-xs transition-colors duration-fast',
+                            active
+                              ? 'bg-accent-soft text-accent font-medium'
+                              : 'text-muted hover:text-ink hover:bg-hover',
+                          ]}
+                        >
+                          {item.title}
+                        </a>
                       </li>
                     );
                   })}
@@ -202,17 +180,28 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
                 <span>更新于 {updatedAt}</span>
               </>
             )}
-            {sourceDoc && (
+            <div class="ml-auto flex items-center gap-2">
+              {sourceDoc && (
+                <a
+                  href={`${REPO_URL}/blob/main/${sourceDoc}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-xs bg-panel border border-line text-[11px] text-muted hover:text-ink"
+                >
+                  <span>参考: {sourceDoc}</span>
+                  <span>↗</span>
+                </a>
+              )}
               <a
-                href={`${REPO_URL}/blob/main/${sourceDoc}`}
+                href={editUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-xs bg-panel border border-line text-[11px] text-muted hover:text-ink"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-xs bg-panel border border-line text-[11px] text-muted hover:text-accent"
               >
-                <span>源文件: {sourceDoc}</span>
+                <span>编辑此页</span>
                 <span>↗</span>
               </a>
-            )}
+            </div>
           </div>
 
           <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
@@ -222,14 +211,28 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
             {description}
           </p>
 
-          <div class="doc-prose mt-6">
+          <div class="doc-prose mt-6" id="doc-prose-body">
             <slot />
+          </div>
+
+          <!-- Edit this page footer bar -->
+          <div class="mt-10 pt-4 border-t border-line flex flex-wrap items-center justify-between gap-2 text-xs text-faint font-mono">
+            <a
+              href={editUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 text-muted hover:text-accent transition-colors duration-fast"
+            >
+              <span>✎ 在 GitHub 上编辑此页（apps/site/src/content/docs/{currentSlug}.md）</span>
+              <span>↗</span>
+            </a>
+            {updatedAt && <span>最后核对：{updatedAt}</span>}
           </div>
 
           <!-- Prev / Next Navigation -->
           <nav
             aria-label="上一篇与下一篇"
-            class="mt-12 pt-6 border-t border-line grid grid-cols-1 sm:grid-cols-2 gap-3"
+            class="mt-6 pt-6 border-t border-line grid grid-cols-1 sm:grid-cols-2 gap-3"
           >
             {prevDoc ? (
               <a
@@ -302,6 +305,15 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
           )}
 
           <div class="pt-4 border-t border-line space-y-2">
+            <a
+              href={editUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="w-full flex items-center justify-between px-3 py-2 rounded-sm bg-panel border border-line hover:border-line-strong text-xs text-muted hover:text-ink transition-colors duration-fast"
+            >
+              <span>编辑此页</span>
+              <span class="font-mono text-[10px] text-faint">GitHub ↗</span>
+            </a>
             <button
               type="button"
               data-open-search
@@ -318,21 +330,39 @@ const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
   <script is:inline>
     (() => {
+      // Sidebar filter
       const filterInput = document.getElementById('sidebar-filter-input');
-      if (!filterInput) return;
-      filterInput.addEventListener('input', () => {
-        const q = (filterInput.value || '').trim().toLowerCase();
-        document.querySelectorAll('[data-sidebar-group]').forEach((groupEl) => {
-          let visibleCount = 0;
-          groupEl.querySelectorAll('[data-sidebar-item]').forEach((itemEl) => {
-            const text = itemEl.getAttribute('data-title') || '';
-            const match = !q || text.includes(q);
-            itemEl.style.display = match ? '' : 'none';
-            if (match) visibleCount++;
+      if (filterInput) {
+        filterInput.addEventListener('input', () => {
+          const q = (filterInput.value || '').trim().toLowerCase();
+          document.querySelectorAll('[data-sidebar-group]').forEach((groupEl) => {
+            let visibleCount = 0;
+            groupEl.querySelectorAll('[data-sidebar-item]').forEach((itemEl) => {
+              const text = itemEl.getAttribute('data-title') || '';
+              const match = !q || text.includes(q);
+              itemEl.style.display = match ? '' : 'none';
+              if (match) visibleCount++;
+            });
+            groupEl.style.display = visibleCount > 0 ? '' : 'none';
           });
-          groupEl.style.display = visibleCount > 0 ? '' : 'none';
         });
-      });
+      }
+
+      // Add clickable anchor links (#) to headings in article prose
+      const prose = document.getElementById('doc-prose-body');
+      if (prose) {
+        prose.querySelectorAll('h2[id], h3[id]').forEach((heading) => {
+          const id = heading.getAttribute('id');
+          if (!id || heading.querySelector('.heading-anchor')) return;
+          const anchor = document.createElement('a');
+          anchor.href = `#${id}`;
+          anchor.className =
+            'heading-anchor ml-2 font-mono text-xs text-faint hover:text-accent no-underline opacity-60 hover:opacity-100 transition-opacity';
+          anchor.setAttribute('aria-label', '章节锚点链接');
+          anchor.textContent = '#';
+          heading.appendChild(anchor);
+        });
+      }
     })();
   </script>
 </BaseLayout>

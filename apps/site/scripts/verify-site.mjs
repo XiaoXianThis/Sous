@@ -8,10 +8,26 @@ const buildDir = process.env.WOK_OUT || path.resolve(__dirname, '../../../build/
 const requiredFiles = [
   'index.html',
   '404.html',
+  'changelog/index.html',
   'docs/index.html',
+  'docs/introduction/index.html',
   'docs/getting-started/index.html',
+  'docs/first-task/index.html',
+  'docs/core-concepts/index.html',
+  'docs/presets-and-machines/index.html',
+  'docs/approval-mechanism/index.html',
   'docs/connect-machine/index.html',
+  'docs/workbench-and-presets/index.html',
+  'docs/git-and-schedules/index.html',
+  'docs/cli-and-config/index.html',
+  'docs/api-and-events/index.html',
+  'docs/development-guide/index.html',
   'docs/architecture-overview/index.html',
+  'docs/faq-troubleshooting/index.html',
+  'sitemap.xml',
+  'robots.txt',
+  'og-placeholder.svg',
+  'favicon.svg',
 ];
 
 for (const rel of requiredFiles) {
@@ -33,14 +49,42 @@ function collectHtmlFiles(dir, acc = []) {
 
 const htmlFiles = collectHtmlFiles(buildDir);
 const pageIds = new Map();
+const seenTitles = new Map();
+const seenDescriptions = new Map();
 
 for (const file of htmlFiles) {
   const content = fs.readFileSync(file, 'utf8');
+  const relFile = path.relative(buildDir, file);
   const ids = new Set();
   for (const m of content.matchAll(/\bid="([^"]+)"/g)) {
     ids.add(m[1]);
   }
   pageIds.set(file, ids);
+
+  // Verify unique <title> and <meta name="description">
+  const titleMatch = content.match(/<title>([^<]+)<\/title>/);
+  if (!titleMatch || !titleMatch[1].trim()) {
+    console.error(`Missing or empty <title> in ${relFile}`);
+    process.exit(1);
+  }
+  const title = titleMatch[1].trim();
+  if (seenTitles.has(title)) {
+    console.error(`Duplicate <title> "${title}" in ${relFile} and ${seenTitles.get(title)}`);
+    process.exit(1);
+  }
+  seenTitles.set(title, relFile);
+
+  const descMatch = content.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+  if (!descMatch || !descMatch[1].trim()) {
+    console.error(`Missing or empty <meta name="description"> in ${relFile}`);
+    process.exit(1);
+  }
+  const desc = descMatch[1].trim();
+  if (seenDescriptions.has(desc)) {
+    console.error(`Duplicate meta description in ${relFile} and ${seenDescriptions.get(desc)}`);
+    process.exit(1);
+  }
+  seenDescriptions.set(desc, relFile);
 }
 
 function resolveRouteToFile(routePath) {
@@ -91,4 +135,6 @@ for (const file of htmlFiles) {
   }
 }
 
-console.log(`Verified ${htmlFiles.length} HTML pages and ${checkedLinks} links in ${buildDir}. All reachable.`);
+console.log(
+  `Verified ${htmlFiles.length} HTML pages (unique titles & descriptions) and ${checkedLinks} links in ${buildDir}. All reachable.`
+);
