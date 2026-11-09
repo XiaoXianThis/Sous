@@ -1,0 +1,197 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
+
+interface ReleaseEntry {
+  version: string;
+  date: string;
+  commit: string;
+  headline: string;
+  highlights: string[];
+}
+
+const releases: ReleaseEntry[] = [
+  {
+    version: 'v0.1.7',
+    date: '2026-11-09',
+    commit: 'bd19fc1',
+    headline: '审批摩擦治理、Shell AST 解析、审批员只读取证与 macOS 固定身份签名',
+    highlights: [
+      '审批引擎升级为基于 mvdan.cc/sh/v3 的真实 Shell 语法树解析，细分 Hard（不可逆写/外发）与 HardRead（敏感凭据读取），支持节点本地包装脚本证据采集。',
+      '审批 Agent 新增有界只读取证循环（inspect / read_file，单次审批最多 4 次工具调用），看清上下文再放行；单 Run 自动放行上限提升至 150（可调至 300）。',
+      'allow_always（以后这类都行）规则新增脚本 SHA-256 执行身份绑定，脚本被篡改后自动失效重审；内建 sous mcp 工具免审直通。',
+      'macOS 引入固定名称自签名证书（Sous Dev Signing，标识符 cc.wxian.sous），消除二进制升级后访问受保护目录时的重复 TCC 弹窗与后台挂起。',
+      'Web 工作台补齐 Claude Code、Codex、Cursor、OpenCode、Kiro 五大 Agent 的真实品牌图标。',
+    ],
+  },
+  {
+    version: 'v0.1.6',
+    date: '2026-11-08',
+    commit: '091b85c',
+    headline: '对话流展示主管工具调用折叠条',
+    highlights: [
+      '主管在回复过程中自己调用的工具（如 project_read、machine_look、task_create 等）通过 message.tools 事件实时同步，在聊天消息旁以默认折叠摘要展示。',
+      '自动对类似凭据的参数字段名与密钥值进行 *** 脱敏。',
+    ],
+  },
+  {
+    version: 'v0.1.5',
+    date: '2026-11-07',
+    commit: '32c0372',
+    headline: '主管闭环、内置 sous mcp 通道、预设（Preset）体系与只读查看电脑',
+    highlights: [
+      '打通主管闭环：子 Agent 进展按 20 秒窗口合批唤醒主管；Run 结束时解析「## 结果」结构化章节向用户汇报；返工支持通过 resume_session 续接同一个 ACP 会话。',
+      '每个工作 Run 自动注入本地 sous mcp 服务，为子 Agent 提供 report_progress（报进度）、ask_supervisor（向主管或用户提问）与 report_result（交结果）三个工具。',
+      '原「岗位」升级为「预设（Preset / Persona）」：支持绑定 Agent + 模型 + 思考强度（effort），并允许按任务覆盖 model / effort。',
+      '每台电脑支持配置 default_agent、disabled_agents 与 custom_agents；机器角色改为偏好路由（首选角色不可用时回退并明确提醒）。',
+      '新增 machine_look 工具供主管只读查看任意在线电脑的目录、文件与安全只读命令输出；主管单轮工具调用上限提升至 50 步。',
+    ],
+  },
+  {
+    version: 'v0.1.4',
+    date: '2026-11-06',
+    commit: '3611ee3',
+    headline: '工作台原地审批条、折叠式 Run 历史、诚实结果判定与部署健康检查',
+    highlights: [
+      '工作台任务卡内嵌原地审批条（ApprovalStrip），无需跳转即可一键「允许这一次 / 拒绝」；已完成的历史 Run 自动折叠展示。',
+      '诚实判断 Run 结果：未发生实质改动或工具调用的空跑标记为 no_action 并转入 blocked，细化 auth / agent_quota / disconnect / timeout / launch 等错误分类（error_kind）。',
+      '项目部署目标新增可选健康检查命令（deploy.health），部署 Agent 执行完毕后通过健康检查才记为 project.deployed。',
+    ],
+  },
+  {
+    version: 'v0.1.3',
+    date: '2026-11-06',
+    commit: '82860b4',
+    headline: '灵活任务工作流（worktree / in_place / scratch）、受控 Git 操作与项目顾问',
+    highlights: [
+      '落实「条条大道通罗马」（ADR 0022）：按任务自由选择执行位置（独立 worktree、原地 in_place、临时草稿 scratch）与验收方式（none / model / agent / user）。',
+      '任务完成后改动留在分支上，不自动强推或合并；新增受控 Git 操作（git_commit、git_merge、git_push、git_pr、git_revert）及 in_place 影子仓库字节级快照恢复。',
+      '新增只读常驻的「项目顾问（consult）」会话，支持多轮追问代码库，并可通过 from_consult 将顾问已读过代码的会话无缝交给实施任务。',
+      '聊天输入框支持通过 @名字 引用项目（context.mentions），将主管作用域聚焦到指定项目。',
+    ],
+  },
+  {
+    version: 'v0.1.2',
+    date: '2026-11-05',
+    commit: 'f26767d',
+    headline: '长对话分段摘要、多模态附件上传、外部 MCP 管理与三层自动审批',
+    highlights: [
+      '长对话上下文分段压缩（conversation_segments）：超过软/硬阈值时由 compactor 角色提炼长期记忆与结构化摘要，历史原文永久保留可查。',
+      '支持上传图片、文本与 PDF 附件（最大 20 MB），多模态直传主管模型。',
+      '支持在网页添加与管理主管可用的外部 MCP Server（stdio 与 streamable HTTP），支持主管提议、用户审批启用。',
+      '上线三层自动审批（确定性规则 + 审批 Agent + 单 Run 次数上限）及主管 web_search / web_fetch 联网工具（带内网地址 SSRF 防护）。',
+      '新增客户端一键安装脚本（work/scripts/install-sous.sh 与 install-sous.ps1）及移动端 iOS Liquid Glass 自适应布局。',
+    ],
+  },
+  {
+    version: 'v0.1.1',
+    date: '2026-11-05',
+    commit: 'b6f9bc4',
+    headline: 'CI 格式检查与 Windows 跨平台测试修复',
+    highlights: [
+      '修复 CI 代码格式检查与 Windows 环境下的路径及单元测试可移植性问题。',
+    ],
+  },
+  {
+    version: 'v0.1.0',
+    date: '2026-11-04',
+    commit: 'd423083',
+    headline: '首个正式版本（M0–M5）：Hub/Node 分离架构、ACP 多 Agent 调度与三栏工作台',
+    highlights: [
+      '完成 Hub（sous-hub）与 Node（sous daemon）分离架构，基于 SQLite 单一事件日志（eventlog.Log）与 WebSocket 断线无损追赶（/ws?since=）。',
+      '支持 WebAuthn Passkey 无密码认证、一次性配对码绑定开发机与服务器，以及终端直接对话（sous chat）。',
+      '内置支持通过 ACP 协议调度 Claude Code、Codex、Cursor、OpenCode、Kiro 五大编程 Agent，支持在网页远程安装、升级、登录 Agent 与编辑配置。',
+      '上线三栏 Web 工作台、项目在线文件浏览、多机仓库状态同步（sync / wip）、网页交互式项目终端、页面模型供应商配置、Cron 定时任务与后台巡检（inspector）。',
+    ],
+  },
+];
+---
+
+<BaseLayout
+  title="版本更新日志 (Changelog)"
+  description="Sous 历次 Git 标签与 GitHub Release 版本记录（v0.1.0 至 v0.1.7），与仓库真实 Tag 历史严格对齐。"
+>
+  <section class="border-b border-line bg-canvas py-10 md:py-14">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-4">
+      <div class="max-w-2xl space-y-2.5">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">CHANGELOG · RELEASE HISTORY</div>
+        <h1 class="text-2xl sm:text-3xl md:text-4xl font-semibold tracking-tight text-ink">
+          版本更新日志
+        </h1>
+        <p class="text-sm sm:text-base text-muted leading-relaxed">
+          整理自仓库真实 Git 标签历史（<code>v0.1.0</code> … <code>v0.1.7</code>）。每个版本均提供 macOS、Linux、Windows 预编译二进制与 SHA-256 校验清单，可通过 <code>sous update</code> 或网页「设置 → 更新」一键升级。
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 pt-1">
+        <a
+          href={RELEASES_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-accent text-accent-ink font-medium text-xs hover:opacity-90 transition-opacity duration-fast"
+        >
+          <span>前往 GitHub Releases 下载</span>
+          <span class="font-mono">↗</span>
+        </a>
+        <a
+          href="/docs/getting-started"
+          class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-panel border border-line hover:border-line-strong text-xs text-ink font-medium transition-colors duration-fast"
+        >
+          <span>查看安装与升级指南</span>
+          <span class="font-mono">→</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="py-10 md:py-14 bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg">
+      <div class="max-w-4xl space-y-6">
+        {releases.map((rel, idx) => (
+          <article
+            id={rel.version}
+            class="rounded-md bg-panel border border-line p-6 sm:p-7 space-y-4"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-line">
+              <div class="flex items-center gap-3">
+                <a
+                  href={`#${rel.version}`}
+                  class="font-mono text-lg sm:text-xl font-semibold text-ink hover:text-accent transition-colors duration-fast"
+                >
+                  {rel.version}
+                </a>
+                {idx === 0 && (
+                  <span class="font-mono text-[11px] px-2 py-0.5 rounded-xs bg-accent-soft text-accent font-medium">
+                    Latest
+                  </span>
+                )}
+                <span class="font-mono text-xs text-faint">commit {rel.commit}</span>
+              </div>
+              <div class="flex items-center gap-3 font-mono text-xs text-muted">
+                <time datetime={rel.date}>{rel.date}</time>
+                <a
+                  href={`${REPO_URL}/releases/tag/${rel.version}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-accent hover:underline"
+                >
+                  Release ↗
+                </a>
+              </div>
+            </div>
+
+            <h2 class="text-base sm:text-lg font-semibold text-ink">
+              {rel.headline}
+            </h2>
+
+            <ul class="space-y-2 text-xs sm:text-sm text-muted leading-relaxed list-disc pl-5">
+              {rel.highlights.map((item) => (
+                <li>{item}</li>
+              ))}
+            </ul>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+</BaseLayout>

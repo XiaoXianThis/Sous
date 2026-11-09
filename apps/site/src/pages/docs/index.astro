@@ -1,0 +1,116 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { DOC_GROUPS } from '../../lib/docs-nav';
+---
+
+<BaseLayout
+  title="文档中心"
+  description="sous 官方文档中心：按入门、概念、使用指南、参考、开发、架构、FAQ 七大分组组织的完整指南与参考手册。"
+>
+  <section class="border-b border-line bg-canvas py-10 md:py-14">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-6">
+      <div class="max-w-2xl space-y-2.5">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">DOCUMENTATION · 7 GROUPS · 14 GUIDES</div>
+        <h1 class="text-2xl sm:text-3xl md:text-4xl font-semibold tracking-tight text-ink">
+          sous 文档中心
+        </h1>
+        <p class="text-sm sm:text-base text-muted leading-relaxed">
+          按<strong class="text-ink font-medium">入门、概念、使用指南、参考、开发、架构、FAQ</strong>七大分组组织。所有命令、配置文件字段与接口路径均与当前仓库代码核对一致，可直接复制执行。
+        </p>
+      </div>
+
+      <!-- Inline Search / Filter Bar -->
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 max-w-xl">
+        <div class="relative flex-1">
+          <input
+            id="docs-hub-filter"
+            type="search"
+            placeholder="在本页快速过滤章节标题或描述…"
+            aria-label="快速过滤文档章节"
+            class="w-full h-10 px-3.5 rounded-sm bg-page border border-line-strong text-sm text-ink placeholder:text-faint focus:outline-none focus:border-accent"
+          />
+        </div>
+        <button
+          type="button"
+          data-open-search
+          class="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-sm bg-panel border border-line hover:border-line-strong text-xs text-muted hover:text-ink font-mono transition-colors duration-fast"
+        >
+          <span>全文搜索模态框</span>
+          <kbd class="px-1.5 py-0.5 rounded-xs bg-sunken border border-line text-[11px]">⌘K</kbd>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 Category Groups -->
+  <section class="py-10 md:py-14 bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-10">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="docs-group-grid">
+        {DOC_GROUPS.map((group) => (
+          <div
+            data-doc-group
+            class="rounded-md bg-panel border border-line p-6 flex flex-col justify-between gap-5"
+          >
+            <div class="space-y-4">
+              <div class="flex items-start justify-between gap-2 pb-3 border-b border-line">
+                <div>
+                  <div class="font-mono text-xs text-accent">GROUP {group.code}</div>
+                  <h2 class="text-xl font-semibold text-ink mt-0.5">{group.title}</h2>
+                </div>
+                <span class="font-mono text-xs text-faint px-2 py-0.5 rounded-xs bg-sunken border border-line">
+                  {group.items.length} 篇
+                </span>
+              </div>
+              <p class="text-xs text-muted leading-relaxed">{group.subtitle}</p>
+
+              <ul class="space-y-2.5 pt-1">
+                {group.items.map((item) => (
+                  <li
+                    data-doc-card
+                    data-keywords={`${group.title} ${item.title} ${item.description} ${item.repoPath}`.toLowerCase()}
+                  >
+                    <a
+                      href={`/docs/${item.slug}`}
+                      class="group block p-3.5 rounded-sm bg-page border border-line hover:border-accent transition-colors duration-fast"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="text-sm font-medium text-ink group-hover:text-accent transition-colors duration-fast">
+                          {item.title}
+                        </span>
+                        <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-accent-soft text-accent flex-none">
+                          在线阅读 →
+                        </span>
+                      </div>
+                      <p class="mt-1 text-xs text-muted leading-relaxed">{item.description}</p>
+                      <div class="mt-2 font-mono text-[11px] text-faint">参考源: {item.repoPath}</div>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <script is:inline>
+    (() => {
+      const input = document.getElementById('docs-hub-filter');
+      if (!input) return;
+      input.addEventListener('input', () => {
+        const q = (input.value || '').trim().toLowerCase();
+        document.querySelectorAll('[data-doc-group]').forEach((groupEl) => {
+          let visible = 0;
+          groupEl.querySelectorAll('[data-doc-card]').forEach((cardEl) => {
+            const kw = cardEl.getAttribute('data-keywords') || '';
+            const ok = !q || kw.includes(q);
+            cardEl.style.display = ok ? '' : 'none';
+            if (ok) visible++;
+          });
+          groupEl.style.display = visible > 0 ? '' : 'none';
+        });
+      });
+    })();
+  </script>
+</BaseLayout>

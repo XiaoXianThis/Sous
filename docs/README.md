@@ -1,67 +1,24 @@
-# sous
+# docs
 
-你的副主厨：一个长期运行、随叫随到的私人 AI 助理。你和它讨论需求，它自己维护任务、调度 Claude Code / Codex / Kiro / Cursor / OpenCode 等编程 agent 去干活，需要时找你审批，完成后汇报，并在手机、电脑、网页上随时可用。
+本目录存放 `sous` 的长期架构、决策、接口契约与使用指南。
 
-> sous 取自法餐后厨的 sous-chef（副主厨）：你是主厨，它替你指挥各个岗位。
+- **项目简介、核心能力与快速开始**：请直接阅读仓库根目录的 [**README.md**](../README.md)。
+- **仓库与代理工作规范**：见根目录 [**AGENTS.md**](../AGENTS.md) 与 [**apps/README.md**](../apps/README.md)。
 
-> This file is the repository home page. GitHub shows `docs/README.md` automatically, so the root has no README.
+## 文档索引
 
-## Layout
+- **使用与运维指南（[guides/README.md](guides/README.md)）**
+  - [部署 Hub](guides/deploy-hub.md)
+  - [接入一台电脑或服务器](guides/connect-machine.md)
+  - [macOS 签名与隐私权限](guides/macos-signing-and-permissions.md)
+- **系统架构（[architecture/README.md](architecture/README.md)）**
+  - [工作台：项目、预设、任务和机器](architecture/workbench.md)
+  - [主管的上下文](architecture/supervisor-context.md)
+- **架构决策记录（[decisions/README.md](decisions/README.md)）**
+  - ADR `0001`–`0026`（常驻架构、Hub/Node 边界、ACP 子 agent、权限模式、自动审批分层、长上下文、MCP、预设与主管闭环等）
+- **应用间接口契约（[api/README.md](api/README.md)）**
+  - [core-hub-http.md](api/core-hub-http.md)
+  - [core-hub-node.md](api/core-hub-node.md)
+  - [core-daemon-ipc.md](api/core-daemon-ipc.md)
 
-This repository is a [wokspace](https://wokspace.wxian.cc).
-
-```
-AGENTS.md        rules for agents; the entry point for every agent
-apps/            independent projects, each in its own language's layout
-build/           final build output (not committed)
-docs/            long-lived documentation (this directory)
-work/            specs, scripts, tests, assets, infrastructure, scratch space
-```
-
-## Commands
-
-```
-wok ls                 list apps and their tasks
-wok dev <app>          start an app
-wok build --all        build every app into build/
-wok check              check the layout
-```
-
-Releases: push a tag such as `v0.1.0`; `.github/workflows/release.yml` publishes `sous` and `sous-hub` to GitHub Releases, and machines update from there.
-
-## Documentation
-
-- [决策记录](decisions/README.md)
-- [接口契约](api/README.md)
-- [架构](architecture/README.md)
-- [部署 Hub](guides/deploy-hub.md)
-- [接入一台电脑](guides/connect-machine.md)
-
-当前进行中的设计见 `work/specs/sous-mvp/`（第一期）和 `work/specs/m5-workbench/`（工作台：项目、岗位、服务器）。使用逻辑见 [架构 · 工作台](architecture/workbench.md)。
-
-设计上主要参考 [DeepSeek Super-agent 原型](https://github.com/deepseek-ai/dsh-superagent-prototype)：概念对照和值得借鉴的思路见 `work/agent/rules/super-agent-reference.md`。
-
-## Agent setup
-
-Files that belong to one agent tool are ignored by git, so each person sets them up locally. Shared standard versions live in `work/agent/configs/`. Run the commands below at the repository root.
-
-- **Tools that read AGENTS.md** (Kiro, Codex, Cursor, GitHub Copilot, ...): nothing to do.
-- **Claude Code**: create `CLAUDE.md` containing the single line `@AGENTS.md`.
-- **Gemini CLI**: set its context file name to `AGENTS.md`.
-- **Kiro specs (optional)**: Kiro writes specs to `.kiro/specs/`. Link it to `work/specs/` before Kiro creates its first spec, and specs become part of the repository.
-
-  macOS / Linux:
-
-  ```sh
-  mkdir -p .kiro
-  ln -s ../work/specs .kiro/specs
-  ```
-
-  Windows PowerShell (a directory junction needs no admin rights):
-
-  ```powershell
-  New-Item -ItemType Directory -Force .kiro | Out-Null
-  New-Item -ItemType Junction -Path .kiro\specs -Target (Resolve-Path work\specs)
-  ```
-
-  Without the link, agents copy final specs to `work/specs/` as `AGENTS.md` requires.
+进行中或已完成的设计规格位于 `work/specs/`（如 `work/specs/sous-mvp/`、`work/specs/m5-workbench/`）；Super-agent 参考对照见 `work/agent/rules/super-agent-reference.md`。

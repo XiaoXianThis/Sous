@@ -1,0 +1,40 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="404 页面未找到" description="请求的页面不存在或尚未迁入站点。">
+  <section class="py-20 md:py-28 bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg">
+      <div class="max-w-lg rounded-md bg-panel border border-line-strong p-6 sm:p-8 space-y-5">
+        <div class="font-mono text-xs text-accent">HTTP 404 · NOT FOUND</div>
+        <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          未找到该页面
+        </h1>
+        <p class="text-sm text-muted leading-relaxed">
+          你访问的链接不存在，或属于将在第二阶段迁入站点的文档章节。你可以通过文档中心或全文搜索查找所需内容。
+        </p>
+        <div class="pt-2 flex flex-wrap items-center gap-3">
+          <a
+            href="/"
+            class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-accent text-accent-ink font-medium text-xs"
+          >
+            <span>返回首页</span>
+          </a>
+          <a
+            href="/docs"
+            class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-page border border-line hover:border-line-strong text-ink font-medium text-xs"
+          >
+            <span>浏览文档中心</span>
+          </a>
+          <button
+            type="button"
+            data-open-search
+            class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-page border border-line hover:border-line-strong text-muted hover:text-ink text-xs font-mono"
+          >
+            <span>搜索文档 ⌘K</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,176 @@
+---
+import { getCollection } from 'astro:content';
+import { GROUP_LABELS, GROUP_RANK } from '../lib/docs-nav';
+
+const docsEntries = await getCollection('docs');
+const sortedEntries = [...docsEntries].sort((a, b) => {
+  const gDiff = GROUP_RANK[a.data.group] - GROUP_RANK[b.data.group];
+  if (gDiff !== 0) return gDiff;
+  return a.data.order - b.data.order;
+});
+
+interface SearchItem {
+  title: string;
+  description: string;
+  group: string;
+  href: string;
+  external: boolean;
+  stage: number;
+  keywords: string;
+}
+
+const searchIndex: SearchItem[] = [];
+
+for (const entry of sortedEntries) {
+  const cleanBody = (entry.body || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*`|_-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1200);
+
+  searchIndex.push({
+    title: entry.data.title,
+    description: entry.data.description,
+    group: GROUP_LABELS[entry.data.group],
+    href: `/docs/${entry.id}`,
+    external: false,
+    stage: 1,
+    keywords: `${entry.data.title} ${entry.data.description} ${GROUP_LABELS[entry.data.group]} ${cleanBody}`,
+  });
+}
+
+searchIndex.push({
+  title: '版本更新日志 (Changelog · v0.1.0 – v0.1.7)',
+  description: 'Sous 历次 Git 标签与 GitHub Release 版本记录，涵盖 M0–M5、三层自动审批、灵活工作流、主管闭环与审批摩擦治理。',
+  group: '发布历史',
+  href: '/changelog',
+  external: false,
+  stage: 1,
+  keywords: 'changelog release 版本 更新日志 v0.1.0 v0.1.1 v0.1.2 v0.1.3 v0.1.4 v0.1.5 v0.1.6 v0.1.7',
+});
+---
+
+<div
+  id="doc-search-modal"
+  class="fixed inset-0 z-50 hidden"
+  role="dialog"
+  aria-modal="true"
+  aria-label="搜索文档"
+>
+  <div data-search-backdrop class="fixed inset-0 bg-black/65 backdrop-blur-xs"></div>
+  <div class="relative mx-auto mt-16 sm:mt-24 w-[calc(100%-2rem)] max-w-xl rounded-md bg-panel border border-line-strong shadow-elevated overflow-hidden">
+    <div class="flex items-center gap-2.5 px-3.5 py-3 border-b border-line bg-page">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-faint flex-none" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-3.5-3.5" stroke-linecap="round" />
+      </svg>
+      <input
+        id="doc-search-input"
+        type="search"
+        autocomplete="off"
+        placeholder="搜索安装、配对、hub.yaml、node.json、ACP、审批、排错…"
+        class="w-full bg-transparent text-base sm:text-sm text-ink placeholder:text-faint focus:outline-none"
+      />
+      <button
+        type="button"
+        data-search-close
+        class="font-mono text-[11px] text-faint hover:text-ink border border-line px-1.5 py-0.5 rounded-xs bg-panel"
+      >
+        ESC
+      </button>
+    </div>
+
+    <div id="doc-search-results" class="max-h-[60dvh] overflow-y-auto divide-y divide-line">
+      <!-- Populated by client script -->
+    </div>
+
+    <div class="px-3.5 py-2 bg-canvas border-t border-line flex items-center justify-between text-[11px] font-mono text-faint">
+      <span>本地全文检索（覆盖全部 14 篇文档与更新日志）</span>
+      <span>↑↓ 导航 · Enter 打开</span>
+    </div>
+  </div>
+</div>
+
+<script is:inline define:vars={{ searchIndex }}>
+  (() => {
+    const modal = document.getElementById('doc-search-modal');
+    const input = document.getElementById('doc-search-input');
+    const listEl = document.getElementById('doc-search-results');
+    if (!modal || !input || !listEl) return;
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderList(query) {
+      const q = (query || '').trim().toLowerCase();
+      const terms = q ? q.split(/\s+/).filter(Boolean) : [];
+      const matched = searchIndex.filter((item) => {
+        if (!terms.length) return true;
+        const hay = item.keywords.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      });
+
+      if (!matched.length) {
+        listEl.innerHTML =
+          '<div class="px-4 py-8 text-center text-xs text-faint">未找到匹配的文档条目，请尝试搜索 "sous pair"、"hub.yaml"、"node.json"、"ACP" 或 "worktree"。</div>';
+        return;
+      }
+
+      listEl.innerHTML = matched
+        .map(
+          (item) => `
+          <a
+            href="${escapeHtml(item.href)}"
+            ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''}
+            class="block px-4 py-3 hover:bg-hover transition-colors duration-fast"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-medium text-ink">${escapeHtml(item.title)}</span>
+              <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-xs border border-line text-accent bg-sunken">${escapeHtml(item.group)}</span>
+            </div>
+            <p class="mt-1 text-xs text-muted line-clamp-2">${escapeHtml(item.description)}</p>
+          </a>
+        `
+        )
+        .join('');
+    }
+
+    function openSearch() {
+      modal.classList.remove('hidden');
+      renderList(input.value);
+      setTimeout(() => input.focus(), 10);
+    }
+
+    function closeSearch() {
+      modal.classList.add('hidden');
+    }
+
+    document.querySelectorAll('[data-open-search]').forEach((btn) => {
+      btn.addEventListener('click', openSearch);
+    });
+    document.querySelectorAll('[data-search-close], [data-search-backdrop]').forEach((el) => {
+      el.addEventListener('click', closeSearch);
+    });
+
+    input.addEventListener('input', () => renderList(input.value));
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (modal.classList.contains('hidden')) {
+          openSearch();
+        } else {
+          closeSearch();
+        }
+      } else if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+        closeSearch();
+      }
+    });
+  })();
+</script>

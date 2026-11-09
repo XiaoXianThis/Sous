@@ -1,0 +1,796 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AgentMark from '../components/AgentMark.astro';
+import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
+
+const useCaseScenarios = [
+  {
+    code: 'SCENARIO 01',
+    title: '手机随手交办，多台电脑独立分支并发改代码',
+    when: '通勤路上、开会间隙或离开工位时想到一个改动',
+    what: '在手机主屏打开 sous PWA 跟主管说一句需求。主管自动唤醒家里或办公室在线的 Mac / Linux 开发机，在 ~/.sous/worktrees/ 下的独立分支启动 Claude Code 或 Codex 改代码、跑测试——完全不碰你电脑上写了一半的本地工作区。',
+    highlight: '独立 Worktree 隔离 · 原地审批条一键批复 · 做完带着测试结果汇报',
+  },
+  {
+    code: 'SCENARIO 02',
+    title: '先让「只读顾问」摸清陌生代码库，再无缝转交实施',
+    when: '接手复杂模块、排查疑难 Bug 或在两种设计方案间权衡',
+    what: '不用一上来就盲目建写任务。先在对话里跟主管推敲，主管自动拉起目标电脑上只读常驻的「项目顾问（consult）」翻阅代码回答细节；等方案拍板后，直接通过 from_consult 继承顾问已读过代码的会话动手修改，省去重复读代码的等待与 Token。',
+    highlight: 'ModeReadOnly 零误改风险 · 会话上下文直接继承 · 避免返工',
+  },
+  {
+    code: 'SCENARIO 03',
+    title: '开发机编码验收 → 分支合并 → 服务器自动部署与健康检查',
+    when: '个人全栈项目或多机器协作，从改代码到上线一气呵成',
+    what: '开发机上的子 Agent 完成任务后改动停在分支上等你确认；你发话「合并并推送」后，Hub 检测到远端部署分支（如 main）出现新提交，自动向 role:server 的服务器派发运维部署任务，并在脚本跑完后执行 health 健康检查。',
+    highlight: '受控 Git 操作（绝不擅自强推） · 跨机自动触发部署 · 失败自动告警',
+  },
+];
+
+const capabilities = [
+  {
+    code: '01',
+    tag: 'ARCHITECTURE',
+    title: 'Hub 只动脑，Node 才动手',
+    summary:
+      '服务端 sous-hub 常驻 Linux 服务器，负责对话、事件溯源、长上下文摘要与任务编排，绝不执行 shell 命令；客户端 sous 运行在你的开发机与服务器上，主动外连 Hub（本机零入站端口），并在本地二次强制校验目录与权限策略。',
+    meta: 'docs/decisions/0002 · 单一事件日志 eventlog.Log',
+  },
+  {
+    code: '02',
+    tag: 'ACP DISPATCH',
+    title: '统一调度多家编程 Agent',
+    summary:
+      '通过标准 ACP（Agent Client Protocol）统一驱动本机已安装并登录的 Claude Code、Codex、Cursor、OpenCode、Kiro 及自定义 Agent。支持将常用的「Agent + 模型 + 思考强度」保存为预设，由主管按在线电脑自动匹配派发。',
+    meta: 'docs/decisions/0004 & 0024 · 支持按任务覆盖 model / effort',
+  },
+  {
+    code: '03',
+    tag: 'ISOLATION',
+    title: '独立 Worktree 与就地快照保护',
+    summary:
+      '代码任务可在 ~/.sous/worktrees/<仓库>/<id> 的独立分支上并发执行，完全不触碰你的原始工作区；就地任务（in_place）自动记录前后文件快照，支持一键恢复。任务做完改动停在分支上，只有你发话才执行提交、快进合并、推送或开 PR。',
+    meta: 'docs/decisions/0022 · 绝不自动合并主分支或强推',
+  },
+  {
+    code: '04',
+    tag: 'GOVERNANCE',
+    title: '分层自动审批与本地安全底线',
+    summary:
+      'Node 本地底线正则当场拦截删主目录、格式化等高危命令；确定性规则识别凭据、外传、提权、改远端等硬信号一律交你定夺；无硬信号的常规请求由审批 Agent 评估，拿不准时在工作台卡片原地弹出「允许这一次 / 拒绝」。',
+    meta: 'docs/decisions/0005 & 0019 · default / auto / open 三档模式',
+  },
+  {
+    code: '05',
+    tag: 'CLOSED LOOP',
+    title: '子 Agent 能问能报，多端随时在线',
+    summary:
+      '每个工作 Run 自动挂载本地 sous mcp 通道：子 Agent 可实时报进度（report_progress）、遇到分歧向主管或你提问（ask_supervisor）、结束时提交结构化结果（report_result）叫醒主管继续推进。支持桌面工作台、手机主屏 PWA 与终端 sous chat。',
+    meta: 'docs/decisions/0018 & 0025 · 断网 outbox.jsonl 自动对账补发',
+  },
+];
+
+const workflowSteps = [
+  {
+    step: '01',
+    phase: '讨论与顾问',
+    actor: '用户 ↔ 主管 / 项目顾问',
+    desc: '自然语言聊需求。小问题由主管调 project_read 或只读 machine_look 秒查；需要通读代码库连续推敲时，自动唤醒目标开发机上只读常驻的「项目顾问（consult）」会话。',
+    artifact: 'project_read · machine_look · consult (ModeReadOnly)',
+  },
+  {
+    step: '02',
+    phase: '拆解与派发',
+    actor: '主管 → 任务引擎 (Router)',
+    desc: '确定动手后，主管创建任务并选定执行位置（独立 worktree / 就地 in_place / 临时 scratch）、起点分支、预设（Agent + 模型）与验收方式，支持直接继承顾问已读过代码的会话。',
+    artifact: 'task_create · from_consult · 偏好路由与在线工位匹配',
+  },
+  {
+    step: '03',
+    phase: 'Agent 隔离执行',
+    actor: 'Node Daemon → ACP 子 Agent',
+    desc: '目标电脑上的 sous daemon 拉起对应的 ACP 编程 Agent。执行期间 Agent 通过本地 sous mcp 实时回报阶段进度，遇到需求歧义主动调用 ask_supervisor 提问并等待答复。',
+    artifact: 'ACP Session · sous mcp (report_progress / ask_supervisor)',
+  },
+  {
+    step: '04',
+    phase: '分层权限审批',
+    actor: '本地策略 → 审批 Agent → 用户',
+    desc: 'Agent 请求执行命令或改文件时，先过 Node 本地底线与硬信号检测，再经审批 Agent 过滤常规操作；真正需要你拍板的请求会原地出现在工作台任务卡与手机通知中，一键批复。',
+    artifact: 'policy.Judge · ApprovalStrip (允许这一次 / 拒绝)',
+  },
+  {
+    step: '05',
+    phase: '结构化汇报与交付',
+    actor: 'Run 结束 → 叫醒主管 → 按需 Git',
+    desc: 'Agent 以「## 结果」（做了 / 改动 / 验证 / 风险 / 需决定）收尾，触发事件叫醒主管向你汇报。你确认后，由主管执行 git_commit、git_merge、git_push 或 git_pr，合并后可触发服务器自动部署。',
+    artifact: 'task.ParseResult · git_merge / git_pr · 部署健康检查',
+  },
+];
+
+const supportedAgents: Array<{
+  id: 'claude' | 'codex' | 'cursor' | 'opencode' | 'kiro';
+  name: string;
+  binary: string;
+  launch: string;
+  loginCmd: string;
+  configPath: string;
+  note: string;
+}> = [
+  {
+    id: 'claude',
+    name: 'Claude Code',
+    binary: 'claude',
+    launch: 'npx -y @agentclientprotocol/claude-agent-acp@0.100.0',
+    loginCmd: 'claude auth login（或在 claude 内 /login）',
+    configPath: '~/.claude/settings.json',
+    note: '支持 CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY；需安装 Node.js (npx)。',
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    binary: 'codex',
+    launch: 'npx -y @agentclientprotocol/codex-acp@2.5.0',
+    loginCmd: 'codex login / codex login --device-auth',
+    configPath: '~/.codex/config.toml',
+    note: '支持 OPENAI_API_KEY 或 config.toml 自定义 provider；需安装 Node.js (npx)。',
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    binary: 'cursor-agent',
+    launch: 'cursor-agent acp',
+    loginCmd: 'cursor-agent login',
+    configPath: '~/.cursor/cli-config.json',
+    note: '原生内置 ACP 服务，固定使用 agent 会话模式以接入 sous 权限审批。',
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    binary: 'opencode',
+    launch: 'opencode acp',
+    loginCmd: 'opencode auth login',
+    configPath: '~/.config/opencode/opencode.json',
+    note: '原生 ACP，sous 自动注入 edit / bash / webfetch 询问规则以纳入本地策略管控。',
+  },
+  {
+    id: 'kiro',
+    name: 'Kiro',
+    binary: 'kiro-cli',
+    launch: 'kiro-cli acp',
+    loginCmd: 'kiro-cli login --use-device-flow',
+    configPath: '~/.kiro/settings/cli.json',
+    note: '原生 ACP，默认/自动模式下自动将 autopilot 设为 off，由 sous 接管审批。',
+  },
+];
+---
+
+<BaseLayout title="sous">
+  <!-- Hero Section -->
+  <section class="border-b border-line bg-page pt-10 pb-14 md:pt-16 md:pb-20">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg">
+      <div class="max-w-3xl space-y-5 enter-fade">
+        <div class="inline-flex flex-wrap items-center gap-2 font-mono text-xs text-muted bg-panel border border-line px-2.5 py-1 rounded-xs">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-ok"></span>
+          <span>SOUS-CHEF FOR DEVELOPERS</span>
+          <span class="text-faint">·</span>
+          <span class="text-faint">Go + SQLite 事件溯源 · ACP 多 Agent 调度</span>
+        </div>
+
+        <h1 class="font-display text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight text-ink">
+          你是主厨，只管提想法与拍板；<br class="hidden sm:inline" />
+          <span class="text-accent">sous</span> 替你指挥各个编程 Agent 干活。
+        </h1>
+
+        <p class="text-base sm:text-lg text-muted leading-relaxed">
+          <strong class="text-ink font-medium">sous（副主厨）</strong> 是一个长期运行、随叫随到的私人 AI 助理。你和它讨论需求，它自己维护任务、按预设调度你多台电脑和服务器上的
+          <span class="text-ink">Claude Code、Codex、Cursor、OpenCode、Kiro</span> 并发执行，需要时找你审批，完成后带着结构化验证结果向你汇报——在手机、电脑、网页和终端上随时可用。
+        </p>
+
+        <div class="pt-2 flex flex-wrap items-center gap-3">
+          <a
+            href="#quickstart"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-accent text-accent-ink font-medium text-sm hover:opacity-90 transition-opacity duration-fast"
+          >
+            <span>快速开始</span>
+            <span class="font-mono text-xs">→</span>
+          </a>
+          <a
+            href="/docs"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-panel border border-line hover:border-line-strong text-ink font-medium text-sm transition-colors duration-fast"
+          >
+            <span>阅读文档</span>
+            <span class="font-mono text-xs text-faint">/docs</span>
+          </a>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-canvas border border-line hover:border-line-strong text-muted hover:text-ink text-sm transition-colors duration-fast"
+          >
+            <span>GitHub 仓库</span>
+            <span class="font-mono text-xs text-faint">↗</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Bespoke HTML/CSS + SVG Product Schematic (Workbench + ApprovalStrip + Supervisor Chat) -->
+      <div class="mt-10 md:mt-12 enter-fade enter-delay-1 space-y-2">
+        <div class="flex items-center justify-between text-[11px] font-mono text-faint px-1">
+          <span>▾ 界面示意（HTML/CSS 自绘示意，还原真实三栏工作台、任务卡原地审批条与主管对话结构）</span>
+          <span class="hidden sm:inline">apps/web · Workbench &amp; ApprovalStrip</span>
+        </div>
+        <div
+          class="rounded-md bg-canvas border border-line-strong shadow-elevated overflow-hidden"
+          role="region"
+          aria-label="sous 工作台与主管对话界面示意"
+        >
+          <!-- Window Top Chrome -->
+          <div class="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-sunken border-b border-line text-xs font-mono">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="inline-block w-2.5 h-2.5 rounded-full bg-line-strong"></span>
+              <span class="inline-block w-2.5 h-2.5 rounded-full bg-line-strong"></span>
+              <span class="inline-block w-2.5 h-2.5 rounded-full bg-line-strong"></span>
+              <span class="ml-1 text-ink font-medium truncate">sous workbench</span>
+              <span class="hidden sm:inline text-faint">— https://agent.wxian.cc</span>
+            </div>
+            <div class="flex items-center gap-3 text-[11px] text-muted">
+              <span class="inline-flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+                <span>2 正在执行</span>
+              </span>
+              <span class="inline-flex items-center gap-1 text-warn">
+                <span>●</span>
+                <span>1 要你处理</span>
+              </span>
+              <span class="hidden sm:inline text-faint">3 台机器在线</span>
+            </div>
+          </div>
+
+          <!-- Two-pane Workbench + Chat Schematic -->
+          <div class="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-line">
+            <!-- Left: Workbench Project Cards (7 cols) -->
+            <div class="lg:col-span-7 p-4 sm:p-5 space-y-4 bg-page">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-semibold text-ink">工作台 · 激活项目</span>
+                  <span class="font-mono text-[11px] text-faint px-1.5 py-0.5 rounded-xs bg-panel border border-line">
+                    Sous (github.com/XiaoXianThis/Sous)
+                  </span>
+                </div>
+                <span class="font-mono text-[11px] text-faint">刚刚更新</span>
+              </div>
+
+              <!-- Location badges -->
+              <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+                <span class="px-2 py-0.5 rounded-xs bg-panel border border-line text-muted">
+                  macbook-pro:~/Code/Sous <span class="text-ok">● clean</span>
+                </span>
+                <span class="px-2 py-0.5 rounded-xs bg-panel border border-line text-muted">
+                  dev-mini:~/work/Sous <span class="text-faint">↓1</span>
+                </span>
+                <span class="px-2 py-0.5 rounded-xs bg-panel border border-line text-muted">
+                  prod-srv:/opt/sous <span class="text-accent">role:server</span>
+                </span>
+              </div>
+
+              <!-- Active Run Card 1: With inline ApprovalStrip -->
+              <div class="rounded-sm bg-panel border border-line-strong p-3.5 space-y-2.5">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <AgentMark name="claude" size={20} />
+                    <span class="text-xs font-medium text-ink truncate">
+                      site: 新建 Astro 官网+文档站骨架，设计系统、首页
+                    </span>
+                  </div>
+                  <span class="flex-none font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-accent-soft text-accent">
+                    等你审批
+                  </span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-faint">
+                  <span>worktree: sous/site-astro-readme-40fwd6jqm6</span>
+                  <span>·</span>
+                  <span>Claude Code · macbook-pro</span>
+                  <span>·</span>
+                  <span>进度：已生成设计系统与首页，正在执行 wok build site</span>
+                </div>
+
+                <!-- Inline ApprovalStrip (replaces output slot, exact Sous pattern) -->
+                <div class="rounded-xs bg-sunken border border-line p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div class="min-w-0 space-y-0.5">
+                    <div class="flex items-center gap-1.5 text-[11px]">
+                      <span class="font-mono uppercase text-warn font-semibold">PERMIT REQUEST</span>
+                      <span class="text-faint">·</span>
+                      <span class="text-muted truncate">请求在 apps/site 执行构建命令</span>
+                    </div>
+                    <code class="block font-mono text-xs text-ink truncate">
+                      wok build site &amp;&amp; wok check
+                    </code>
+                  </div>
+                  <div class="flex items-center gap-1.5 flex-none">
+                    <span class="px-2.5 py-1 rounded-xs bg-accent text-accent-ink font-medium text-xs select-none">
+                      允许这一次
+                    </span>
+                    <span class="px-2.5 py-1 rounded-xs bg-panel border border-line text-muted text-xs select-none">
+                      拒绝
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Active Run Card 2: Completed / Unmerged branch -->
+              <div class="rounded-sm bg-panel border border-line p-3.5 space-y-2">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <AgentMark name="codex" size={20} />
+                    <span class="text-xs font-medium text-ink truncate">
+                      core: 补充 ask_supervisor 超时恢复与单测覆盖
+                    </span>
+                  </div>
+                  <span class="flex-none font-mono text-[11px] px-1.5 py-0.5 rounded-xs bg-sunken border border-line text-muted">
+                    已结束 · 未合并
+                  </span>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-faint">
+                  <span>Codex · dev-mini · worktree: sous/fix-ask-timeout-89a1c</span>
+                  <span class="text-ok">✓ go test ./internal/node/... 通过</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: Supervisor Chat Timeline (5 cols) -->
+            <div class="lg:col-span-5 p-4 sm:p-5 bg-canvas flex flex-col justify-between space-y-4">
+              <div class="space-y-3.5">
+                <div class="flex items-center justify-between pb-2 border-b border-line">
+                  <div class="flex items-center gap-2">
+                    <AgentMark name="sous" size={18} />
+                    <span class="text-xs font-semibold text-ink">主线对话 · sous</span>
+                  </div>
+                  <span class="font-mono text-[11px] text-faint">Context 18% · KV Cached</span>
+                </div>
+
+                <!-- User bubble -->
+                <div class="flex justify-end">
+                  <div class="max-w-[88%] rounded-md bg-panel border border-line px-3 py-2 text-xs text-ink">
+                    帮我把官网第一阶段搭起来，顺便让 dev-mini 跑一下 node 的恢复测试。
+                  </div>
+                </div>
+
+                <!-- Supervisor tool fold -->
+                <div class="font-mono text-[11px] text-faint flex items-center gap-1.5 px-1">
+                  <span>▸ 调用了 3 个工具</span>
+                  <span>·</span>
+                  <span>project_read · task_create × 2</span>
+                </div>
+
+                <!-- Trigger pill -->
+                <div class="flex items-center gap-2 py-0.5">
+                  <div class="h-px flex-1 bg-line"></div>
+                  <span class="font-mono text-[10px] text-faint px-2 py-0.5 rounded-full bg-panel border border-line">
+                    ⚡ 任务进展 · core 测试已完成 (20s 合批)
+                  </span>
+                  <div class="h-px flex-1 bg-line"></div>
+                </div>
+
+                <!-- Supervisor structured report -->
+                <div class="space-y-1.5 text-xs text-muted leading-relaxed">
+                  <p class="text-ink font-medium">
+                    `core` 的超时恢复任务已在 `dev-mini` 上完成并通过验证：
+                  </p>
+                  <div class="rounded-sm bg-panel border border-line p-2.5 font-mono text-[11px] space-y-1">
+                    <div><span class="text-ink">做了：</span>补齐 `run.answerAsk` 20 分钟超时回退与端到端测试</div>
+                    <div><span class="text-ink">验证：</span>`go test ./internal/node -run TestAskSupervisor` 通过</div>
+                    <div><span class="text-ink">需要决定：</span>改动留在分支 `sous/fix-ask-timeout-89a1c`，要现在合并到 `main` 吗？</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Composer mock -->
+              <div class="pt-2">
+                <div class="rounded-sm bg-panel border border-line px-3 py-2 flex items-center justify-between gap-2 text-xs text-faint">
+                  <span class="truncate">输入指令，或用 @Sous 引用项目…</span>
+                  <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-ink text-page font-mono text-[10px]">
+                    ↑
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Three Clear Use-Case Scenarios Section -->
+  <section id="scenarios" class="border-b border-line py-section bg-canvas">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-8">
+      <div class="max-w-2xl space-y-2">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">01 / USE CASES</div>
+        <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          一眼看懂的三个典型使用场景
+        </h2>
+        <p class="text-sm sm:text-base text-muted">
+          把你从「守在终端前盯每一个 Agent 窗口」中解放出来，回到主厨的位置做决策与验收。
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {useCaseScenarios.map((sc) => (
+          <div class="rounded-md bg-page border border-line p-6 flex flex-col justify-between gap-5">
+            <div class="space-y-3">
+              <div class="font-mono text-xs text-accent font-semibold">{sc.code}</div>
+              <h3 class="text-lg font-semibold text-ink tracking-tight leading-snug">{sc.title}</h3>
+              <div class="rounded-xs bg-panel border border-line px-2.5 py-1.5 text-xs text-muted">
+                <span class="font-mono text-faint">何时用：</span>{sc.when}
+              </div>
+              <p class="text-xs sm:text-sm text-muted leading-relaxed">{sc.what}</p>
+            </div>
+            <div class="pt-3 border-t border-line font-mono text-[11px] text-faint">
+              {sc.highlight}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Core Capabilities Section -->
+  <section id="capabilities" class="border-b border-line py-section bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-10">
+      <div class="max-w-2xl space-y-2">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">01 / CAPABILITIES</div>
+        <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          为多项目、多机器、多 Agent 协作而生的常驻架构
+        </h2>
+        <p class="text-sm sm:text-base text-muted">
+          不绑定单一模型厂商，也不只是简单的网页聊天壳或静态看板。每一项能力都来自 `apps/core` 与 `apps/web` 的真实工程实现。
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 border-t border-l border-line">
+        {capabilities.map((cap, idx) => (
+          <div
+            class:list={[
+              'p-6 bg-panel/50 border-r border-b border-line flex flex-col justify-between gap-5',
+              idx < 2 ? 'lg:col-span-3' : 'lg:col-span-2',
+            ]}
+          >
+            <div class="space-y-3">
+              <div class="flex items-center justify-between font-mono text-xs">
+                <span class="text-accent font-medium">{cap.code}</span>
+                <span class="text-faint">{cap.tag}</span>
+              </div>
+              <h3 class="text-lg font-semibold text-ink tracking-tight">{cap.title}</h3>
+              <p class="text-sm text-muted leading-relaxed">{cap.summary}</p>
+            </div>
+            <div class="pt-3 border-t border-line font-mono text-[11px] text-faint">
+              {cap.meta}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflow Section (讨论 → 拆任务 → Agent 执行 → 审批 → 汇报) -->
+  <section id="workflow" class="border-b border-line py-section bg-canvas">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-10">
+      <div class="max-w-2xl space-y-2">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">02 / WORKFLOW</div>
+        <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          五步闭环：从一句想法到可验证的分支交付
+        </h2>
+        <p class="text-sm sm:text-base text-muted">
+          遵循「条条大道通罗马」原则（ADR 0022 &amp; 0025）：不写死僵化流水线，由主管根据任务风险挑选执行方式，并通过事件触发形成完整闭环。
+        </p>
+      </div>
+
+      <!-- 5-Step Pipeline Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-5 border-t border-l border-line bg-page">
+        {workflowSteps.map((item) => (
+          <div class="p-5 border-r border-b border-line flex flex-col justify-between gap-4">
+            <div class="space-y-2.5">
+              <div class="flex items-center justify-between font-mono text-xs">
+                <span class="px-1.5 py-0.5 rounded-xs bg-accent-soft text-accent font-semibold">
+                  STEP {item.step}
+                </span>
+              </div>
+              <h3 class="text-base font-semibold text-ink">{item.phase}</h3>
+              <div class="font-mono text-[11px] text-faint">{item.actor}</div>
+              <p class="text-xs text-muted leading-relaxed">{item.desc}</p>
+            </div>
+            <div class="pt-2.5 border-t border-line font-mono text-[11px] text-faint break-words">
+              {item.artifact}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <!-- Architecture & Protocol Flow Diagram (Inline SVG / HTML) -->
+      <div class="rounded-md bg-page border border-line p-5 sm:p-6 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-mono text-xs text-ink font-medium">
+            HUB ↔ NODE 安全边界与通信拓扑（零入站端口）
+          </div>
+          <a href="/docs/architecture-overview" class="font-mono text-xs text-accent hover:underline">
+            查看完整架构文档 →
+          </a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-11 gap-3 items-stretch text-xs">
+          <!-- Client Endpoints -->
+          <div class="lg:col-span-3 rounded-sm bg-panel border border-line p-4 space-y-2">
+            <div class="font-mono text-[11px] text-faint uppercase">多端入口 (你)</div>
+            <div class="text-sm font-semibold text-ink">Web 工作台 / 手机 PWA / CLI</div>
+            <ul class="space-y-1 text-muted font-mono text-[11px]">
+              <li>· 桌面三栏工作台 + 项目对话</li>
+              <li>· iOS Liquid Glass 主屏全屏 App</li>
+              <li>· 本机终端 `sous chat` 直接对话</li>
+              <li>· Passkey (WebAuthn) 无密码认证</li>
+            </ul>
+          </div>
+
+          <div class="lg:col-span-1 flex items-center justify-center font-mono text-faint text-xs py-1">
+            <span class="hidden lg:inline">HTTPS / WSS ⇄</span>
+            <span class="lg:hidden">⇅ HTTPS / WSS</span>
+          </div>
+
+          <!-- Hub -->
+          <div class="lg:col-span-3 rounded-sm bg-panel border border-line-strong p-4 space-y-2">
+            <div class="flex items-center justify-between font-mono text-[11px]">
+              <span class="text-accent uppercase font-semibold">大脑 · sous-hub</span>
+              <span class="text-faint">Linux Server</span>
+            </div>
+            <div class="text-sm font-semibold text-ink">思考、存储与协调中心</div>
+            <ul class="space-y-1 text-muted font-mono text-[11px]">
+              <li>· 事件日志 `eventlog.Log` (SQLite)</li>
+              <li>· 主管 / 审批 / 验收 / 巡检模型调用</li>
+              <li>· `web_search` &amp; `web_fetch` (内网防护)</li>
+              <li>· 绝不执行 shell、不碰代码仓库</li>
+            </ul>
+          </div>
+
+          <div class="lg:col-span-1 flex items-center justify-center font-mono text-faint text-xs py-1">
+            <span class="hidden lg:inline">← Node 主动连</span>
+            <span class="lg:hidden">↑ Node 主动外连</span>
+          </div>
+
+          <!-- Nodes -->
+          <div class="lg:col-span-3 rounded-sm bg-panel border border-line p-4 space-y-2">
+            <div class="flex items-center justify-between font-mono text-[11px]">
+              <span class="text-ok uppercase font-semibold">执行端 · sous daemon</span>
+              <span class="text-faint">Mac / Linux / Win</span>
+            </div>
+            <div class="text-sm font-semibold text-ink">你的开发机与部署服务器</div>
+            <ul class="space-y-1 text-muted font-mono text-[11px]">
+              <li>· 通过 ACP 启动本机编程 Agent</li>
+              <li>· 本地二次校验策略与 `floor` 底线</li>
+              <li>· 挂载 `sous mcp` 供子 Agent 报进度/提问</li>
+              <li>· 维护独立 `worktrees/` 与 `outbox.jsonl`</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Supported Agents Section -->
+  <section id="agents" class="border-b border-line py-section bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-8">
+      <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div class="max-w-2xl space-y-2">
+          <div class="font-mono text-xs uppercase tracking-wider text-accent">03 / SUPPORTED AGENTS</div>
+          <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+            开箱支持五大主流编程 Agent，并可扩展任意 ACP Agent
+          </h2>
+          <p class="text-sm sm:text-base text-muted">
+            `sous` 使用你电脑上各 Agent 自己的登录态或 API Key 干活。你可以在网页「设置 → 机器」中远程安装、升级、登录 Agent，或在 `~/.sous/node.json` 的 `custom_agents` 中接入自定义 ACP Agent。
+          </p>
+        </div>
+        <div class="font-mono text-xs text-faint">
+          源码定义：`apps/core/internal/agents/agents.go`
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {supportedAgents.map((ag) => (
+          <div class="rounded-sm bg-panel border border-line p-5 flex flex-col justify-between gap-4">
+            <div class="space-y-3">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2.5">
+                  <AgentMark name={ag.id} size={26} />
+                  <div>
+                    <h3 class="text-base font-semibold text-ink leading-tight">{ag.name}</h3>
+                    <div class="font-mono text-[11px] text-faint">binary: {ag.binary}</div>
+                  </div>
+                </div>
+                <span class="font-mono text-[11px] px-2 py-0.5 rounded-xs bg-sunken border border-line text-muted">
+                  ACP
+                </span>
+              </div>
+
+              <p class="text-xs text-muted leading-relaxed">{ag.note}</p>
+            </div>
+
+            <div class="pt-3 border-t border-line space-y-1.5 font-mono text-[11px]">
+              <div class="flex items-start justify-between gap-2">
+                <span class="text-faint flex-none">启动：</span>
+                <code class="text-ink text-right break-all">{ag.launch}</code>
+              </div>
+              <div class="flex items-start justify-between gap-2">
+                <span class="text-faint flex-none">登录：</span>
+                <code class="text-muted text-right break-all">{ag.loginCmd}</code>
+              </div>
+              <div class="flex items-start justify-between gap-2">
+                <span class="text-faint flex-none">配置：</span>
+                <code class="text-faint text-right break-all">{ag.configPath}</code>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        <!-- Custom ACP Agent Card -->
+        <div class="rounded-sm bg-canvas border border-dashed border-line-strong p-5 flex flex-col justify-between gap-4">
+          <div class="space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2.5">
+                <AgentMark name="sous" size={26} />
+                <div>
+                  <h3 class="text-base font-semibold text-ink leading-tight">自定义 ACP Agent</h3>
+                  <div class="font-mono text-[11px] text-faint">node.json · custom_agents</div>
+                </div>
+              </div>
+              <span class="font-mono text-[11px] px-2 py-0.5 rounded-xs bg-sunken border border-line text-accent">
+                Extensible
+              </span>
+            </div>
+            <p class="text-xs text-muted leading-relaxed">
+              任何实现 Agent Client Protocol (stdio) 的编程 Agent 均可在电脑本机的 `~/.sous/node.json` 中登记接入，与内置 Agent 共享同一套权限策略与预设体系。
+            </p>
+          </div>
+
+          <div class="pt-3 border-t border-line font-mono text-[11px] text-muted space-y-1">
+            <div class="text-faint">~/.sous/node.json 示例：</div>
+            <pre class="p-2 rounded-xs bg-sunken border border-line overflow-x-auto text-[11px] text-ink"><code>{`"custom_agents": [
+  { "name": "my-agent", "command": ["my-agent", "acp"] }
+]`}</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quickstart Section -->
+  <section id="quickstart" class="border-b border-line py-section bg-canvas">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg space-y-8">
+      <div class="max-w-2xl space-y-2">
+        <div class="font-mono text-xs uppercase tracking-wider text-accent">04 / QUICKSTART</div>
+        <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
+          三步接入一台开发机，或在本地从源码构建
+        </h2>
+        <p class="text-sm sm:text-base text-muted">
+          以下命令均为仓库真实可执行命令。服务端 Hub 的完整部署步骤请参见 <a href="/docs/getting-started" class="text-accent underline underline-offset-2">安装与部署 Hub</a>。
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Step 1 & 2: Install and Pair Client -->
+        <div class="rounded-sm bg-page border border-line p-5 space-y-4 min-w-0">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-xs text-accent font-semibold">STEP A · 安装客户端并配对电脑</span>
+            <a href="/docs/connect-machine" class="font-mono text-xs text-muted hover:text-ink">
+              完整指南 →
+            </a>
+          </div>
+
+          <div class="space-y-3 text-xs">
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">1. 一键安装 `sous` 客户端（macOS / Linux，自动校验 SHA-256）：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>curl -fsSL https://raw.githubusercontent.com/XiaoXianThis/Sous/main/work/scripts/install-sous.sh | sh</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">Windows PowerShell：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>irm https://raw.githubusercontent.com/XiaoXianThis/Sous/main/work/scripts/install-sous.ps1 | iex</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">2. 用网页「机器 → 配对新机器」生成的配对码绑定本机并检查 Agent：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>sous pair https://agent.wxian.cc 123456 --name 我的笔记本 --workspace ~/Code
+sous agents</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">3. 注册常驻服务并在终端直接对话：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>sous service install
+sous service start
+sous chat</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step B: Build from Source & Deploy Hub -->
+        <div class="rounded-sm bg-page border border-line p-5 space-y-4 min-w-0">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-xs text-accent font-semibold">STEP B · 从源码构建与本地开发</span>
+            <a href="/docs/getting-started" class="font-mono text-xs text-muted hover:text-ink">
+              部署 Hub 指南 →
+            </a>
+          </div>
+
+          <div class="space-y-3 text-xs">
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">1. 克隆仓库并查看所有应用任务（使用 `wok` 管理工作空间）：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>git clone https://github.com/XiaoXianThis/Sous.git
+cd Sous
+wok ls</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">2. 构建 PWA 前端与 Go 核心二进制（产物输出至 `build/web/` 与 `build/core/`）：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>wok build web
+wok build core</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">3. 交叉编译 Linux 服务器版 `sous-hub`：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>wok run core build-hub-linux
+# 产物：build/core/linux-amd64/sous-hub</code></pre>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="text-muted font-medium">4. 本地启动开发模式（Hub 监听 `127.0.0.1:8787`，Web 监听 `5173`）：</div>
+              <pre class="p-3 rounded-xs bg-sunken border border-line overflow-x-auto font-mono text-ink"><code>wok dev core web</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download & Repository Entry Section -->
+  <section id="download" class="py-section-sm bg-page">
+    <div class="mx-auto max-w-docs px-gutter md:px-gutter-lg">
+      <div class="rounded-md bg-panel border border-line-strong p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div class="space-y-2 max-w-xl">
+          <div class="font-mono text-xs text-accent uppercase">OPEN SOURCE · MIT LICENSE</div>
+          <h2 class="text-xl sm:text-2xl font-semibold text-ink tracking-tight">
+            准备好把你的多台电脑接入同一个副主厨了吗？
+          </h2>
+          <p class="text-sm text-muted">
+            从 GitHub Releases 获取预编译的 `sous` 与 `sous-hub`（支持 macOS arm64/amd64、Linux amd64/arm64、Windows amd64），或直接浏览完整技术文档。
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 flex-none">
+          <a
+            href={RELEASES_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-accent text-accent-ink font-medium text-sm hover:opacity-90 transition-opacity duration-fast"
+          >
+            <span>下载 GitHub Releases</span>
+            <span class="font-mono text-xs">↗</span>
+          </a>
+          <a
+            href="/docs"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-page border border-line hover:border-line-strong text-ink font-medium text-sm transition-colors duration-fast"
+          >
+            <span>进入文档中心</span>
+            <span class="font-mono text-xs">→</span>
+          </a>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-page border border-line hover:border-line-strong text-muted hover:text-ink text-sm transition-colors duration-fast"
+          >
+            <span>XiaoXianThis/Sous</span>
+            <span class="font-mono text-xs">↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

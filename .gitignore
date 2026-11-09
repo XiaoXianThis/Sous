@@ -1,6 +1,7 @@
 # ==== Whitelist section: changes need user approval (AGENTS.md section 1) ====
 /*
 !/AGENTS.md
+!/README.md
 !/.gitignore
 !/.gitattributes
 !/LICENSE

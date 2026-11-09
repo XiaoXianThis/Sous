@@ -1,0 +1,138 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import SearchModal from '../components/SearchModal.astro';
+import { SITE_URL } from '../lib/docs-nav';
+
+interface Props {
+  title: string;
+  description?: string;
+  ogImage?: string;
+}
+
+const {
+  title,
+  description = 'sous：你的副主厨。一个长期运行、随叫随到的私人 AI 助理，通过 ACP 协议调度 Claude Code、Codex、Cursor、OpenCode、Kiro 等编程 agent。',
+  ogImage = '/og-placeholder.svg',
+} = Astro.props;
+
+const fullTitle = title === 'sous' ? 'sous — 你的副主厨 · 私人 AI 编程助理与调度中枢' : `${title} · sous`;
+const canonicalUrl = new URL(Astro.url.pathname, SITE_URL).toString();
+const ogImageUrl = new URL(ogImage, SITE_URL).toString();
+---
+
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="sous 文档与官方网站" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:locale" content="zh_CN" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImageUrl} />
+
+    <script is:inline>
+      (() => {
+        try {
+          const saved = localStorage.getItem('sous.site.theme') || 'system';
+          const prefersLight =
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          const resolved = saved === 'light' ? 'light' : saved === 'dark' ? 'dark' : prefersLight ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.setAttribute('data-theme-mode', saved);
+        } catch {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+  </head>
+  <body class="min-h-dvh flex flex-col bg-page text-ink selection:bg-accent-soft selection:text-ink">
+    <Header currentPath={Astro.url.pathname} />
+    <div class="flex-1">
+      <slot />
+    </div>
+    <Footer />
+    <SearchModal />
+
+    <script is:inline>
+      (() => {
+        const labels = { system: '跟随系统', dark: '深色', light: '浅色' };
+        const order = ['system', 'dark', 'light'];
+
+        function resolveTheme(mode) {
+          if (mode === 'light' || mode === 'dark') return mode;
+          const isLight =
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          return isLight ? 'light' : 'dark';
+        }
+
+        function applyMode(mode) {
+          const resolved = resolveTheme(mode);
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.setAttribute('data-theme-mode', mode);
+          document.querySelectorAll('[data-theme-label]').forEach((el) => {
+            el.textContent = labels[mode] || '系统';
+          });
+        }
+
+        const initial = localStorage.getItem('sous.site.theme') || 'system';
+        applyMode(initial);
+
+        document.querySelectorAll('[data-theme-toggle]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const current = document.documentElement.getAttribute('data-theme-mode') || 'system';
+            const next = order[(order.indexOf(current) + 1) % order.length];
+            try {
+              localStorage.setItem('sous.site.theme', next);
+            } catch {}
+            applyMode(next);
+          });
+        });
+
+        if (window.matchMedia) {
+          window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+            const mode = document.documentElement.getAttribute('data-theme-mode') || 'system';
+            if (mode === 'system') applyMode('system');
+          });
+        }
+
+        // Mobile drawer
+        const drawer = document.getElementById('mobile-nav-drawer');
+        const openBtn = document.querySelector('[data-drawer-open]');
+        function openDrawer() {
+          if (!drawer) return;
+          drawer.classList.remove('hidden');
+          if (openBtn) openBtn.setAttribute('aria-expanded', 'true');
+          document.body.style.overflow = 'hidden';
+        }
+        function closeDrawer() {
+          if (!drawer) return;
+          drawer.classList.add('hidden');
+          if (openBtn) openBtn.setAttribute('aria-expanded', 'false');
+          document.body.style.overflow = '';
+        }
+        if (openBtn) openBtn.addEventListener('click', openDrawer);
+        document
+          .querySelectorAll('[data-drawer-close], [data-drawer-backdrop], [data-drawer-link]')
+          .forEach((el) => el.addEventListener('click', closeDrawer));
+      })();
+    </script>
+  </body>
+</html>
