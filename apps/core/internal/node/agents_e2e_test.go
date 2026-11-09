@@ -189,3 +189,142 @@ func TestMachineLookServerSamples15And16(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentSetDisabled(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.DefaultAgent = "default"
+	e.cfg.DisabledAgents = []string{"first", "last", "first"}
+	e.cfg.CustomAgents = []node.CustomAgent{
+		{Name: "custom", Title: "Custom", Command: []string{"unused"}},
+		{Name: "first", Command: []string{"unused"}},
+		{Name: "last", Command: []string{"unused"}},
+	}
+	if err := node.SaveConfig(e.root, e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, stop := e.startAdminDaemon(filepath.Join(e.root, "settings.json"))
+	defer stop()
+	call := e.api()
+	base := "/api/v1/nodes/" + e.cfg.NodeID + "/agents/"
+	read := func() node.Config {
+		t.Helper()
+		cfg, err := node.LoadConfig(e.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	set := func(agent string, disabled bool) proto.AgentInfo {
+		t.Helper()
+		body, _ := json.Marshal(map[string]bool{"disabled": disabled})
+		var info proto.AgentInfo
+		if code := call("POST", base+agent+"/disabled", string(body), &info); code != 200 {
+			t.Fatalf("set %s disabled=%v: HTTP %d", agent, disabled, code)
+		}
+		if info.Name != agent || info.Disabled != disabled {
+			t.Fatalf("response: %+v", info)
+		}
+		return info
+	}
+	t.Run("DisablePersistsAndReportsInventory", func(t *testing.T) {
+		set("fake", true)
+		if got := strings.Join(read().DisabledAgents, ","); got != "first,last,fake" {
+			t.Fatal(got)
+		}
+		e.waitFor("disabled inventory", func() bool { return e.agentInfo().Disabled })
+	})
+	t.Run("DisableIsIdempotent", func(t *testing.T) {
+		set("fake", true)
+		if got := strings.Join(read().DisabledAgents, ","); got != "first,last,fake" {
+			t.Fatal(got)
+		}
+	})
+	t.Run("EnablePersistsAndReportsInventory", func(t *testing.T) {
+		set("fake", false)
+		if got := strings.Join(read().DisabledAgents, ","); got != "first,last" {
+			t.Fatal(got)
+		}
+		e.waitFor("enabled inventory", func() bool { return !e.agentInfo().Disabled })
+	})
+	t.Run("EnableIsIdempotent", func(t *testing.T) {
+		set("fake", false)
+		if got := strings.Join(read().DisabledAgents, ","); got != "first,last" {
+			t.Fatal(got)
+		}
+	})
+	t.Run("UnknownAgentReturns404", func(t *testing.T) {
+		if code := call("POST", base+"unknown/disabled", `{"disabled":true}`, nil); code != 404 {
+			t.Fatal(code)
+		}
+	})
+	t.Run("CustomAgentCanBeToggled", func(t *testing.T) {
+		if !set("custom", true).Custom {
+			t.Fatal("missing custom flag")
+		}
+		set("custom", false)
+	})
+	t.Run("EmptyDisabledListIsNil", func(t *testing.T) {
+		set("first", false)
+		set("last", false)
+		if read().DisabledAgents != nil {
+			t.Fatal("empty disabled_agents must be nil")
+		}
+	})
+}
+
+func TestAgentSetDisabledProtectsDefault(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.DefaultAgent = "fake"
+	if err := node.SaveConfig(e.root, e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, stop := e.startAdminDaemon(filepath.Join(e.root, "settings.json"))
+	defer stop()
+	path := filepath.Join(e.root, "node.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	code := e.api()("POST", "/api/v1/nodes/"+e.cfg.NodeID+"/agents/fake/disabled", `{"disabled":true}`, &result)
+	if code != 400 || result.Error.Code != proto.ErrCodeInvalid || result.Error.Message != "这台电脑的默认 agent 是 fake，先在 node.json 换掉 default_agent，再停用它" {
+		t.Fatalf("HTTP %d: %+v", code, result)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("default protection changed node.json")
+	}
+	if e.agentInfo().Disabled {
+		t.Fatal("default agent was disabled")
+	}
+}
+
+func TestAgentSetDisabledRequiresRemoteAdminAndOnline(t *testing.T) {
+	e := newEnv(t)
+	off := false
+	e.cfg.RemoteAdmin = &off
+	if err := node.SaveConfig(e.root, e.cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, stop := e.startAdminDaemon(filepath.Join(e.root, "settings.json"))
+	call := e.api()
+	path := "/api/v1/nodes/" + e.cfg.NodeID + "/agents/fake/disabled"
+	code := call("POST", path, `{"disabled":true}`, nil)
+	stop()
+	if code != 403 {
+		t.Fatalf("remote admin off: HTTP %d", code)
+	}
+	cfg, err := node.LoadConfig(e.root)
+	if err != nil || len(cfg.DisabledAgents) != 0 {
+		t.Fatalf("remote admin off changed node.json: %+v %v", cfg.DisabledAgents, err)
+	}
+	e.waitFor("machine offline", func() bool { return !e.hub.Online(e.cfg.NodeID) })
+	if code := call("POST", path, `{"disabled":true}`, nil); code != 409 {
+		t.Fatalf("offline: HTTP %d", code)
+	}
+}
