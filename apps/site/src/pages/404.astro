@@ -1,4 +1,5 @@
 ---
+import { withBase } from '../lib/with-base';
 import BaseLayout from '../layouts/BaseLayout.astro';
 ---
 
@@ -15,13 +16,13 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         </p>
         <div class="pt-2 flex flex-wrap items-center gap-3">
           <a
-            href="/"
+            href={withBase('/')}
             class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-accent text-accent-ink font-medium text-xs"
           >
             <span>返回首页</span>
           </a>
           <a
-            href="/docs"
+            href={withBase('/docs/')}
             class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-page border border-line hover:border-line-strong text-ink font-medium text-xs"
           >
             <span>浏览文档中心</span>

@@ -1,3 +1,5 @@
+import { withBase } from './with-base';
+
 export type DocGroupKey =
   | 'getting-started'
   | 'concepts'
@@ -25,7 +27,7 @@ export interface DocGroupMeta {
 
 export const REPO_URL = 'https://github.com/XiaoXianThis/Sous';
 export const RELEASES_URL = 'https://github.com/XiaoXianThis/Sous/releases';
-export const SITE_URL = 'https://agent.wxian.cc';
+export const SITE_URL = new URL(withBase('/'), import.meta.env.SITE).href;
 
 export const DOC_GROUPS: DocGroupMeta[] = [
   {

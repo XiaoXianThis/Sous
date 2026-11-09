@@ -1,9 +1,9 @@
 ---
+import { withBase } from '../lib/with-base';
 import '../styles/global.css';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import SearchModal from '../components/SearchModal.astro';
-import { SITE_URL } from '../lib/docs-nav';
 
 interface Props {
   title: string;
@@ -18,8 +18,8 @@ const {
 } = Astro.props;
 
 const fullTitle = title === 'sous' ? 'sous — 你的副主厨 · 私人 AI 编程助理与调度中枢' : `${title} · sous`;
-const canonicalUrl = new URL(Astro.url.pathname, SITE_URL).toString();
-const ogImageUrl = new URL(ogImage, SITE_URL).toString();
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site).toString();
+const ogImageUrl = new URL(withBase(ogImage), Astro.site).toString();
 ---
 
 <!doctype html>
@@ -30,8 +30,8 @@ const ogImageUrl = new URL(ogImage, SITE_URL).toString();
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonicalUrl} />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+    <link rel="sitemap" type="application/xml" href={withBase('/sitemap.xml')} />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />

@@ -12,12 +12,12 @@ export const GET: APIRoute = async () => {
 
   const staticPages = [
     { path: '/', lastmod: '2026-11-09', priority: '1.0' },
-    { path: '/docs', lastmod: '2026-11-09', priority: '0.9' },
-    { path: '/changelog', lastmod: '2026-11-09', priority: '0.8' },
+    { path: '/docs/', lastmod: '2026-11-09', priority: '0.9' },
+    { path: '/changelog/', lastmod: '2026-11-09', priority: '0.8' },
   ];
 
   const docPages = sorted.map((entry) => ({
-    path: `/docs/${entry.id}`,
+    path: `/docs/${entry.id}/`,
     lastmod: entry.data.updatedAt || '2026-11-09',
     priority: '0.8',
   }));
@@ -29,7 +29,7 @@ export const GET: APIRoute = async () => {
 ${urls
   .map(
     (u) => `  <url>
-    <loc>${SITE_URL}${u.path}</loc>
+    <loc>${new URL(u.path.replace(/^\//, ''), SITE_URL).href}</loc>
     <lastmod>${u.lastmod}</lastmod>
     <priority>${u.priority}</priority>
   </url>`
