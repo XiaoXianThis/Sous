@@ -16,6 +16,7 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
 
@@ -448,6 +449,19 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		if err != nil {
 			return err
 		}
+		if len(f.Body) > 192<<10 {
+			return fmt.Errorf("approval evidence exceeds limit")
+		}
+		p.Title = redact.Mask(p.Title)
+		p.Detail = redact.Mask(p.Detail)
+		if p.Evidence != nil {
+			for i := range p.Evidence.Scripts {
+				s := &p.Evidence.Scripts[i]
+				s.Content = redact.Mask(s.Content)
+				s.Path = redact.Mask(s.Path)
+				s.Failure = redact.Mask(s.Failure)
+			}
+		}
 		opts := make([]event.ApprovalOption, len(p.Options))
 		for i, o := range p.Options {
 			opts[i] = event.ApprovalOption{OptionID: o.OptionID, Name: o.Name, Kind: o.Kind}
@@ -458,7 +472,7 @@ func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
 		}
 		ev := event.New(event.ApprovalRequested, event.ActorSystem, "", event.ApprovalRequestedPayload{
 			ApprovalID: p.ApprovalID, Title: p.Title, ToolKind: p.ToolKind, Detail: detail, Options: opts,
-			Category: p.Category, Review: p.Review,
+			Category: p.Category, Review: p.Review, Facts: p.Facts, Evidence: p.Evidence,
 		})
 		return c.store(ctx, f, ref.stamp(ev, p.RunID))
 	}

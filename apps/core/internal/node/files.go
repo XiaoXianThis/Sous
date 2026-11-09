@@ -198,6 +198,9 @@ func (a *admin) mergeNodeConfig(content []byte) (Config, error) {
 	// changes them (decision 0024, as 0012 keeps commands off requests).
 	next.CustomAgents = cur.CustomAgents
 	next.SousMCP = cur.SousMCP
+	next.ApprovalInspectDisabled = cur.ApprovalInspectDisabled
+	next.Policy.LegacyShell = cur.Policy.LegacyShell
+	next.Policy.HardReadDisabled = cur.Policy.HardReadDisabled
 	// From the Hub, safety settings only tighten: a server stays a server
 	// (as setRole), the floor rules cannot be turned off or replaced, and
 	// extra rules can be added but not removed. Loosening them takes an

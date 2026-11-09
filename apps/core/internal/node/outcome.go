@@ -1,13 +1,10 @@
 package node
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -154,75 +151,21 @@ const scriptBytes = 4096
 // 4.7). Only files inside workdir or the temporary directory are read
 // (decision 0024), and only text.
 func scriptPreview(cmd, workdir string) string {
-	if workdir == "" {
-		return ""
-	}
-	f := strings.Fields(cmd)
-	if len(f) == 0 {
-		return ""
-	}
-	path := ""
-	switch base := filepath.Base(f[0]); {
-	case base == "sh" || base == "bash" || base == "zsh" || base == "dash" || base == "fish" || interpreters[base]:
-		for _, a := range f[1:] {
-			if !strings.HasPrefix(a, "-") {
-				path = a
-				break
-			}
+	ev, _ := collectEvidence(cmd, workdir, nil)
+	var parts []string
+	for _, s := range ev.Scripts {
+		if s.Failure != "" {
+			continue
 		}
-	case strings.HasPrefix(f[0], "./") || strings.HasSuffix(f[0], ".sh") || strings.HasSuffix(f[0], ".bash"):
-		path = f[0]
-	}
-	path = strings.Trim(path, `"'`)
-	if path == "" || strings.ContainsAny(path, "$`;&|<>") {
-		return ""
-	}
-	abs := path
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(workdir, path)
-	}
-	abs = filepath.Clean(abs)
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return ""
-	}
-	// The working directory, or the system's temporary directory where
-	// agents keep their own scratch scripts.
-	inside := false
-	for _, dir := range []string{workdir, scriptTempDir()} {
-		root, err := filepath.EvalSymlinks(dir)
-		if err != nil {
-			root = dir
+		text := s.Content
+		if len(text) > scriptBytes {
+			text = text[:scriptBytes]
 		}
-		if rel, err := filepath.Rel(root, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			inside = true
+		head := "脚本 " + s.Path + " 的内容"
+		if s.Size > scriptBytes {
+			head += fmt.Sprintf("（共 %d 字节，这里是前 %d 字节）", s.Size, scriptBytes)
 		}
+		parts = append(parts, head+"：\n"+text)
 	}
-	if !inside {
-		return ""
-	}
-	fi, err := os.Stat(real)
-	if err != nil || !fi.Mode().IsRegular() {
-		return ""
-	}
-	fh, err := os.Open(real)
-	if err != nil {
-		return ""
-	}
-	defer fh.Close()
-	buf := make([]byte, scriptBytes)
-	n, _ := io.ReadFull(fh, buf)
-	buf = buf[:n]
-	if bytes.IndexByte(buf, 0) >= 0 {
-		return ""
-	}
-	for len(buf) > 0 && !utf8.Valid(buf) {
-		buf = buf[:len(buf)-1]
-	}
-	text := mask(string(buf))
-	head := "脚本 " + path + " 的内容"
-	if fi.Size() > scriptBytes {
-		head += fmt.Sprintf("（共 %d 字节，这里是前 %d 字节）", fi.Size(), scriptBytes)
-	}
-	return head + "：\n" + text
+	return strings.Join(parts, "\n\n")
 }

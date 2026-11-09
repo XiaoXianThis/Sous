@@ -1,10 +1,28 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestApprovalPolicyDefaultsAndLimits(t *testing.T) {
+	c, err := Load(write(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ApprovalPolicy.AllowMedium || c.ApprovalPolicy.MaxAIAllowsPerRun != 0 {
+		t.Fatal("approval defaults widened")
+	}
+	for _, n := range []int{-1, 0, 149, 150, 151, 299, 300, 301} {
+		_, err := Load(write(t, fmt.Sprintf("approval_policy:\n  max_ai_allows_per_run: %d\n", n)))
+		valid := n == 0 || n >= 150 && n <= 300
+		if (err == nil) != valid {
+			t.Fatalf("limit %d: %v", n, err)
+		}
+	}
+}
 
 func write(t *testing.T, body string) string {
 	t.Helper()

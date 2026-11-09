@@ -133,8 +133,10 @@ type ApprovalRequestedPayload struct {
 	// Category is the node policy's class of the action (read, exec-other,
 	// git-remote, ...). Review says who decides: "user", or "ai" for the
 	// approver agent, which hands what it is unsure of to the user.
-	Category string `json:"category,omitempty"`
-	Review   string `json:"review,omitempty"`
+	Category string                  `json:"category,omitempty"`
+	Review   string                  `json:"review,omitempty"`
+	Facts    *proto.PolicyFacts      `json:"facts,omitempty"`
+	Evidence *proto.ApprovalEvidence `json:"evidence,omitempty"`
 }
 
 type ApprovalDecidedPayload struct {
@@ -148,4 +150,19 @@ type ApprovalDecidedPayload struct {
 type ApprovalEscalatedPayload struct {
 	ApprovalID string `json:"approval_id"`
 	Note       string `json:"note"`
+}
+
+// ApprovalCheckPayload records a once-only bounded inspection and its masked result.
+type ApprovalCheckPayload struct {
+	DurationMS   int64  `json:"duration_ms,omitempty"`
+	Bytes        int    `json:"bytes,omitempty"`
+	ResultDigest string `json:"result_digest,omitempty"`
+	Failed       bool   `json:"failed,omitempty"`
+	Truncated    bool   `json:"truncated,omitempty"`
+	CheckID      string `json:"check_id"`
+	ApprovalID   string `json:"approval_id"`
+	Tool         string `json:"tool"`
+	ArgsDigest   string `json:"args_digest"`
+	Summary      string `json:"summary"`
+	Result       string `json:"result"`
 }

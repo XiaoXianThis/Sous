@@ -366,8 +366,10 @@ type ApprovalRequest struct {
 	Options    []Option `json:"options"`
 	// Category is the node policy's class of the action; Review is "user",
 	// or "ai" when the Hub's approver agent may decide (auto mode).
-	Category string `json:"category,omitempty"`
-	Review   string `json:"review,omitempty"`
+	Category string            `json:"category,omitempty"`
+	Review   string            `json:"review,omitempty"`
+	Facts    *PolicyFacts      `json:"facts,omitempty"`
+	Evidence *ApprovalEvidence `json:"evidence,omitempty"`
 }
 
 type ApprovalDecide struct {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
@@ -319,6 +320,29 @@ func TestCloneOntoServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Server writes are explicitly approved, including directory creation.
+	approvalCtx, stopApprovals := context.WithCancel(ctx)
+	approvalsDone := make(chan struct{})
+	defer func() { stopApprovals(); <-approvalsDone }()
+	go func() {
+		defer close(approvalsDone)
+		for {
+			if approvalCtx.Err() != nil {
+				return
+			}
+			r, _ := te.log.Store.Run(ctx, run.ID)
+			if r.Status == event.RunStatusSucceeded || r.Status == event.RunStatusFailed {
+				return
+			}
+			as, _ := te.log.Store.Approvals(ctx, "pending", run.ID)
+			for _, a := range as {
+				if len(a.Options) > 0 {
+					_ = te.hub.Decide(ctx, a.ID, a.Options[0].OptionID, "server setup approved")
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
 	if r := te.ended(run.ID); r.Status != event.RunStatusSucceeded {
 		t.Fatalf("clone run: %+v", r)
 	}

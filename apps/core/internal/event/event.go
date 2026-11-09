@@ -49,6 +49,7 @@ const (
 	// the session went on as a task (decision 0022).
 	ConsultClosed Type = "consult.closed"
 
+	ApprovalChecked   Type = "approval.checked"
 	ApprovalRequested Type = "approval.requested"
 	ApprovalDecided   Type = "approval.decided"
 	// ApprovalEscalated: the approver agent handed the decision to the user.

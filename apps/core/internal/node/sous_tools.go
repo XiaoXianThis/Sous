@@ -28,10 +28,11 @@ var AskWait = 20 * time.Minute
 
 // sousState is a run's side of the sous MCP server.
 type sousState struct {
-	token  string
-	asks   int
-	ask    chan string // the question waiting for an answer, if any
-	result *sousmcp.Call
+	builtin bool
+	token   string
+	asks    int
+	ask     chan string // the question waiting for an answer, if any
+	result  *sousmcp.Call
 }
 
 // sousServers is the MCP server list for a run's agent sessions.
@@ -50,6 +51,9 @@ func (d *Daemon) sousServers(r *run) []acp.MCPServer {
 		}
 		cmd = []string{exe, "mcp"}
 	}
+	r.mu.Lock()
+	r.sous.builtin = len(d.conf().SousMCP) == 0
+	r.mu.Unlock()
 	args := append(append([]string(nil), cmd[1:]...), "--home", d.root, "--run", r.spec.RunID, "--token", r.sousToken())
 	return []acp.MCPServer{{Name: "sous", Command: cmd[0], Args: args, Env: []acp.EnvVar{}}}
 }
@@ -170,4 +174,45 @@ func resultSection(c *sousmcp.Call) string {
 	line("没做完 / 风险", c.Left)
 	line("需要决定", c.Decide)
 	return b.String()
+}
+
+func (r *run) isBuiltinSousRequest(req acp.PermissionRequest) bool {
+	r.mu.Lock()
+	bound := r.sous.builtin && r.sous.token != ""
+	r.mu.Unlock()
+	if r.spec.Agent != "claude" {
+		return false
+	}
+	if !bound || r.spec.Purpose != proto.PurposeWork || len(req.ToolCall.Locations) > 0 || !oneString(req.ToolCall.Kind, "", "other", "think") {
+		return false
+	}
+	if !oneString(req.ToolCall.Title, "mcp__sous__report_progress", "mcp__sous__report_result", "mcp__sous__ask_supervisor") {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(req.ToolCall.RawInput, &m) != nil {
+		return false
+	}
+	allowed := map[string]bool{}
+	switch req.ToolCall.Title {
+	case "mcp__sous__report_progress":
+		allowed["text"] = true
+	case "mcp__sous__ask_supervisor":
+		allowed["question"] = true
+	case "mcp__sous__report_result":
+		for _, k := range []string{"done", "changed", "verified", "left", "decide"} {
+			allowed[k] = true
+		}
+	}
+	for key, v := range m {
+		if !allowed[key] {
+			return false
+		}
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			return false
+		}
+	}
+
+	return len(m) > 0
 }

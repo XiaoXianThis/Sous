@@ -2,6 +2,10 @@ package task_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +18,53 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
 )
+
+func TestApprovalSample10ScopeDenialPreserved(t *testing.T) {
+	e := newApproveEnv(t, `{"decision":"deny","confidence":"high","reason":"全盘搜索超出范围，请查有限的数据目录"}`)
+	a := e.approve(e.request("outside-worktree", "find / -name hub.db"))
+	if a.OptionID != "no" || a.DecidedBy != event.ActorApprover {
+		t.Fatalf("scope denial lost: %+v", a)
+	}
+}
+
+func TestApprovalFactsEvidenceReplay(t *testing.T) {
+	e := newApproveEnv(t, "")
+	ctx := context.Background()
+	id := ids.New()
+	p := event.ApprovalRequestedPayload{ApprovalID: id, Category: "exec-other", Review: "ai", Facts: &proto.PolicyFacts{Version: 1, PolicyVersion: policy.PolicyVersion, ParseStatus: "ok"}, Evidence: &proto.ApprovalEvidence{Version: 1, Complete: true, Scripts: []proto.ScriptEvidence{{Path: "fixture.sh", Content: "echo fixture", Complete: true, SHA256: "fixture-digest"}}}}
+	ev := event.New(event.ApprovalRequested, event.ActorSystem, "", p)
+	ev.RunID = e.runID
+	ev.TaskID = e.taskID
+	if _, err := e.log.Append(ctx, ev); err != nil {
+		t.Fatal(err)
+	}
+	original, err := e.log.Store.Approval(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	log := eventlog.New(st, event.NewBus())
+	events, err := e.log.Store.EventsSince(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = log.Append(ctx, events...); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := st.Approval(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(original)
+	b, _ := json.Marshal(replayed)
+	if string(a) != string(b) {
+		t.Fatalf("evidence projection changed on replay: %s %s", a, b)
+	}
+}
 
 // canned answers the approver with the same JSON every time and keeps what
 // it was asked.
@@ -165,19 +216,19 @@ func TestApproverFollowsTheUsersEarlierAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := e.approve(e.request("exec-other", "./scripts/gen.sh"))
-	if second.Status != "decided" || second.OptionID != "yes" || e.model.calls() != 0 {
+	if second.Status != "pending" || second.Review != "user" || e.model.calls() != 1 {
 		t.Fatalf("second: %+v, %d model calls", second, e.model.calls())
 	}
 	// The user refused another operation: the same request is refused again.
 	bad := e.request("delete", "rm -rf data")
 	e.eng.Nodes.DecideAs(ctx, bad, "no", "", event.ActorUser)
 	again := e.approve(e.request("delete", "rm -rf data"))
-	if again.OptionID != "no" || e.model.calls() != 0 {
+	if again.OptionID != "no" || e.model.calls() != 1 {
 		t.Fatalf("repeat of a refused operation: %+v", again)
 	}
 	// A different operation still goes to the model.
 	other := e.approve(e.request("exec-other", "./scripts/other.sh"))
-	if other.Status != "pending" || e.model.calls() != 1 {
+	if other.Status != "pending" || e.model.calls() != 2 {
 		t.Fatalf("other: %+v, %d model calls", other, e.model.calls())
 	}
 }
@@ -228,5 +279,154 @@ func TestApproverMediumRefusalIsFinal(t *testing.T) {
 	a := e.approve(e.request("exec-other", "x"))
 	if a.Status != "decided" || a.OptionID != "no" || a.DecidedBy != event.ActorApprover || a.Escalation != "" {
 		t.Fatalf("medium refusal: %+v", a)
+	}
+}
+
+func TestApproverRejectsInvalidVerdicts(t *testing.T) {
+	for _, decision := range []string{"allow", "deny", "ask_user", "", "ALLOW", "other"} {
+		for _, confidence := range []string{"high", "medium", "low", "", "HIGH", "certain"} {
+			e := newApproveEnv(t, `{"decision":"`+decision+`","confidence":"`+confidence+`"}`)
+			a := e.approve(e.request("exec-other", "x"))
+			valid := (decision == "allow" || decision == "deny" || decision == "ask_user") && (confidence == "high" || confidence == "medium" || confidence == "low")
+			if !valid && (a.Status != "pending" || !strings.Contains(a.Escalation, "invalid_verdict")) {
+				t.Fatalf("%s/%s: %+v", decision, confidence, a)
+			}
+		}
+	}
+}
+
+func TestAtomicApprovalLastSlot(t *testing.T) {
+	e := newApproveEnv(t, `{"decision":"allow","confidence":"high"}`)
+	ctx := context.Background()
+	for i := 0; i < 149; i++ {
+		id := e.request("exec-other", "step")
+		if err := e.eng.Nodes.DecideAs(ctx, id, "yes", "", event.ActorApprover); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := []string{e.request("exec-other", "last-a"), e.request("exec-other", "last-b")}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			results <- e.eng.Nodes.DecideAs(ctx, id, "yes", "", event.ActorApprover)
+		}(id)
+	}
+	wg.Wait()
+	close(results)
+	success := 0
+	for err := range results {
+		if err == nil {
+			success++
+		}
+	}
+	if success != 1 {
+		t.Fatalf("last slot granted %d times", success)
+	}
+	allows, _, err := e.log.Store.ApprovalCounts(ctx, e.runID, e.taskID, "exec-other", "")
+	if err != nil || allows != 150 {
+		t.Fatalf("count %d %v", allows, err)
+	}
+}
+
+func (e *approveEnv) boundRequest(key, review, title, description string) string {
+	id := ids.New()
+	ev := event.New(event.ApprovalRequested, event.ActorSystem, "", event.ApprovalRequestedPayload{ApprovalID: id, Title: title, Detail: description, Category: "exec-other", Review: review,
+		Options: []event.ApprovalOption{{OptionID: "one", Kind: "allow_once"}, {OptionID: "forever-custom-id", Kind: "allow_always"}, {OptionID: "no", Kind: "reject_once"}},
+		Facts:   &proto.PolicyFacts{Version: 1, PolicyVersion: policy.PolicyVersion, ParseStatus: "ok", Role: "dev", EffectiveMode: "auto", OperationKey: key, Reusable: true, EvidenceComplete: true}})
+	ev.RunID = e.runID
+	ev.TaskID = e.taskID
+	if _, err := e.log.Append(context.Background(), ev); err != nil {
+		e.t.Fatal(err)
+	}
+	return id
+}
+func TestAllowAlwaysRequiresCompleteIdentityAndLatestUserAnswer(t *testing.T) {
+	for _, review := range []string{"ai", "user"} {
+		t.Run(review, func(t *testing.T) {
+			e := newApproveEnv(t, `{"decision":"ask_user","confidence":"high","reason":"check"}`)
+			ctx := context.Background()
+			first := e.boundRequest("key-v1", review, "script", "description one")
+			if err := e.eng.Nodes.Decide(ctx, first, "forever-custom-id", ""); err != nil {
+				t.Fatal(err)
+			}
+			same := e.approve(e.boundRequest("key-v1", review, "script", "different description"))
+			if same.OptionID != "one" || !strings.Contains(same.Note, first) {
+				t.Fatalf("allow_always not reused once: %+v", same)
+			}
+			changed := e.approve(e.boundRequest("key-v2", review, "script", "changed script"))
+			if changed.Status != "pending" {
+				t.Fatal("changed identity reused")
+			}
+			once := e.boundRequest("key-v1", review, "script", "third description")
+			if err := e.eng.Nodes.Decide(ctx, once, "one", ""); err != nil {
+				t.Fatal(err)
+			}
+			newer := e.approve(e.boundRequest("key-v1", review, "script", "fourth description"))
+			if newer.Status != "pending" {
+				t.Fatal("older always overrode newer once")
+			}
+			no := e.boundRequest("key-v1", review, "script", "fifth description")
+			if err := e.eng.Nodes.Decide(ctx, no, "no", ""); err != nil {
+				t.Fatal(err)
+			}
+			denied := e.approve(e.boundRequest("key-v1", review, "script", "sixth description"))
+			if denied.OptionID != "no" {
+				t.Fatal("newer refusal not followed")
+			}
+		})
+	}
+}
+func TestBudgetCountsBeyond500AndSupports300(t *testing.T) {
+	for _, limit := range []int{150, 300} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			e := newApproveEnv(t, `{"decision":"allow","confidence":"high"}`)
+			e.eng.Nodes.MaxAIAllowsPerRun = limit
+			ctx := context.Background()
+			for i := 0; i < 501; i++ {
+				id := e.request("exec-other", "manual")
+				if err := e.eng.Nodes.Decide(ctx, id, "yes", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < limit; i++ {
+				id := e.request("exec-other", "automatic")
+				if err := e.eng.Nodes.DecideAs(ctx, id, "yes", "", event.ActorApprover); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a := e.approve(e.request("exec-other", "over"))
+			if a.Status != "pending" || a.Review != "user" || e.model.calls() != 0 {
+				t.Fatalf("budget %d: %+v", limit, a)
+			}
+		})
+	}
+}
+func TestOnlyOneConcurrentDecisionWins(t *testing.T) {
+	e := newApproveEnv(t, "")
+	ctx := context.Background()
+	id := e.request("exec-other", "race")
+	var wg sync.WaitGroup
+	out := make(chan error, 2)
+	for _, by := range []string{event.ActorUser, event.ActorApprover} {
+		wg.Add(1)
+		go func(by string) { defer wg.Done(); out <- e.eng.Nodes.DecideAs(ctx, id, "yes", "", by) }(by)
+	}
+	wg.Wait()
+	close(out)
+	n := 0
+	for err := range out {
+		if err == nil {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d concurrent decisions accepted", n)
+	}
+	var events int
+	if err := e.log.Store.DB().QueryRowContext(ctx, `SELECT count(*) FROM events WHERE type='approval.decided'`).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("decision events %d %v", events, err)
 	}
 }

@@ -149,6 +149,12 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		return nil, nodeErr(proto.ErrCodeDisabled, "这台机器在 node.json 里关闭了远程管理（remote_admin: false）")
 	}
 	switch req.Op {
+	case proto.OpApprovalRead:
+		var args proto.ApprovalReadArgs
+		if err := json.Unmarshal(req.Args, &args); err != nil {
+			return nil, err
+		}
+		return a.approvalRead(ctx, args)
 	case proto.OpDetect:
 		return a.d.sendInventory(ctx), nil
 	case proto.OpProbe:

@@ -465,6 +465,12 @@ UPDATE tasks SET
 	// of event.ToolNote).
 	`ALTER TABLE messages ADD COLUMN tools TEXT NOT NULL DEFAULT '';
 `,
+	// Approval evidence is separate from the display detail and is replayable.
+	`ALTER TABLE approvals ADD COLUMN facts TEXT NOT NULL DEFAULT '';
+ ALTER TABLE approvals ADD COLUMN evidence TEXT NOT NULL DEFAULT '';
+ CREATE TABLE approval_checks (id TEXT PRIMARY KEY, approval_id TEXT NOT NULL, run_id TEXT NOT NULL, tool TEXT NOT NULL, args_digest TEXT NOT NULL, summary TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL);
+ CREATE INDEX approval_checks_run ON approval_checks(run_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

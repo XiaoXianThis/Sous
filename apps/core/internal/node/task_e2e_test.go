@@ -60,7 +60,7 @@ func newTaskEnv(t *testing.T, review ...string) *taskEnv {
 		t.Skip("the fake gh is a shell script")
 	}
 	e := newEnv(t)
-	te := &taskEnv{env: e, reviewer: &verdicts{answers: review}, approver: &verdicts{answers: []string{`{"decision":"allow","reason":"构建需要"}`}}}
+	te := &taskEnv{env: e, reviewer: &verdicts{answers: review}, approver: &verdicts{answers: []string{`{"decision":"allow","confidence":"high","reason":"构建需要"}`}}}
 	if len(review) == 0 {
 		te.reviewer.answers = []string{`{"pass":true,"reason":"新增了 hello.txt"}`}
 	}
@@ -221,6 +221,11 @@ func TestTaskCoreLoop(t *testing.T) {
 	}
 	// The reviewer passes it, and the task is done: no push was asked for.
 	done := te.waitStatus(tk.ID, event.TaskDone, event.TaskBlocked, event.TaskFailed)
+	// TaskDone and the following GitState projection are separate events.
+	// Wait for the latter before asserting both, also under the race detector.
+	if done.Status == event.TaskDone {
+		te.waitFor("the unmerged state", func() bool { done = te.task(tk.ID); return done.GitState == event.GitUnmerged })
+	}
 	if done.Status != event.TaskDone || done.PRURL != "" || !strings.HasPrefix(done.Branch, "sous/add-hello-") ||
 		done.GitState != event.GitUnmerged || !strings.Contains(done.StatusReason, "还没合并") || done.BaseCommit == "" {
 		t.Fatalf("task: %+v", done)
@@ -396,7 +401,7 @@ func ptr[T any](v T) *T { return &v }
 
 func TestApproverEscalatesToUser(t *testing.T) {
 	te := newTaskEnv(t)
-	te.approver.answers = []string{`{"decision":"ask_user","reason":"和任务无关"}`}
+	te.approver.answers = []string{`{"decision":"ask_user","confidence":"high","reason":"和任务无关"}`}
 	defer te.startDaemon("write")()
 	tk, _ := te.tasks.Create(context.Background(), te.code(task.Input{Title: "x", Mode: "auto", Dispatch: true}))
 	a := te.approveNext(tk.ID)

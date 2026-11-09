@@ -93,6 +93,8 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	role := func(r string) task.Model { return task.Model{Provider: h.Models.For(r), Name: r} }
 	h.Watchdog = watchdog.New()
 	h.Tasks = task.New(h.Log, h.Nodes)
+	h.Tasks.ApprovalPolicy = task.ApprovalPolicy{AllowMedium: cfg.ApprovalPolicy.AllowMedium, MaxAIAllowsPerRun: cfg.ApprovalPolicy.MaxAIAllowsPerRun}
+	h.Nodes.MaxAIAllowsPerRun = cfg.ApprovalPolicy.MaxAIAllowsPerRun
 	h.Tasks.Reviewer, h.Tasks.Approver = role(config.RoleReviewer), role(config.RoleApprover)
 	h.Tasks.Beat = h.Watchdog.Loop("task engine", 5*time.Minute)
 

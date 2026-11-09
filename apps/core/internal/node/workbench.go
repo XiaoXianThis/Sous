@@ -173,7 +173,9 @@ func (r *run) permit(ask, command, dir, detail string) (bool, error) {
 	raw, _ := json.Marshal(map[string]string{"command": command})
 	req := policy.Request{ToolKind: "execute", RawInput: raw, Workdir: dir}
 	cat, why := r.d.pol().Classify(req)
-	act, assess, reason := r.judge(req, cat)
+	facts, evidence, newCat, assess := r.approvalEvidence(req, cat)
+	cat = newCat
+	act, reason := policy.Judge(r.d.role(), r.spec.PermissionMode, cat, assess)
 	if note := assess.Note(); note != "" && act != policy.Allow {
 		detail = note + "\n\n" + detail
 	}
@@ -186,10 +188,16 @@ func (r *run) permit(ask, command, dir, detail string) (bool, error) {
 		return true, nil
 	case policy.AskAI:
 		r.status("等审批 agent 判断能否" + ask)
-		return r.askOK(ask, detail, cat, "ai"), nil
+		return r.askEvidenceOK(ask, detail, cat, "ai", facts, evidence), nil
 	}
 	r.status("等你批准" + ask)
-	return r.askOK(ask, detail, cat, "user"), nil
+	return r.askEvidenceOK(ask, detail, cat, "user", facts, evidence), nil
+}
+
+func (r *run) askEvidenceOK(ask, detail string, cat policy.Category, review string, facts *proto.PolicyFacts, evidence *proto.ApprovalEvidence) bool {
+	options := []proto.Option{{OptionID: "allow", Name: "批准", Kind: "allow_once"}, {OptionID: "reject", Name: "拒绝", Kind: "reject_once"}}
+	opt, _ := r.askWithEvidence(ask, "execute", detail, cat, review, options, facts, evidence)
+	return opt == "allow" && revalidateEvidence(evidence, facts.CWD)
 }
 
 func (r *run) askOK(ask, detail string, cat policy.Category, review string) bool {

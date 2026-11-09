@@ -110,9 +110,10 @@ const (
 	OpPRState       = "gh.pr_state"         // {url} -> PRState
 	OpScan          = "repos.scan"          // -> NodeRepos
 	// Decision 0022.
-	OpGitStatus   = "git.status"   // {root} -> GitStatus
-	OpProjectGrep = "project.grep" // {root, rel, pattern} -> GrepResult
-	OpLook        = "machine.look" // {dir, command} -> LookResult
+	OpGitStatus    = "git.status"   // {root} -> GitStatus
+	OpProjectGrep  = "project.grep" // {root, rel, pattern} -> GrepResult
+	OpApprovalRead = "approval.read_file"
+	OpLook         = "machine.look" // {dir, command} -> LookResult
 )
 
 type WorkspacesArgs struct {
@@ -221,8 +222,10 @@ type GrepArgs struct {
 // LookArgs runs one read-only command on a machine for the supervisor
 // (decision 0024): Dir is where it runs (empty: the home directory).
 type LookArgs struct {
-	Dir     string `json:"dir,omitempty"`
-	Command string `json:"command"`
+	Dir        string `json:"dir,omitempty"`
+	Command    string `json:"command"`
+	RunID      string `json:"run_id,omitempty"`
+	ApprovalID string `json:"approval_id,omitempty"`
 }
 
 // LookResult is what the command printed (stdout and stderr together).

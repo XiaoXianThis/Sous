@@ -18,6 +18,7 @@ import (
 )
 
 type Hub struct {
+	ApprovalPolicy ApprovalPolicy `yaml:"approval_policy"`
 	// Listen is the address the HTTP server binds, e.g. 127.0.0.1:8787.
 	Listen string `yaml:"listen"`
 	// PublicURL is the origin users open, e.g. https://agent.wxian.cc. It is
@@ -212,6 +213,9 @@ func (c *Hub) applyDefaults(base string) {
 }
 
 func (c *Hub) Validate() error {
+	if n := c.ApprovalPolicy.MaxAIAllowsPerRun; n != 0 && (n < 150 || n > 300) {
+		return fmt.Errorf("approval_policy.max_ai_allows_per_run must be 150..300")
+	}
 	u, err := url.Parse(c.PublicURL)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("public_url %q must be an http(s) origin", c.PublicURL)
@@ -300,4 +304,9 @@ func (c *Hub) RPID() string {
 // Secure reports whether cookies should be marked Secure.
 func (c *Hub) Secure() bool {
 	return strings.HasPrefix(c.PublicURL, "https://")
+}
+
+type ApprovalPolicy struct {
+	AllowMedium       bool `yaml:"allow_medium"`
+	MaxAIAllowsPerRun int  `yaml:"max_ai_allows_per_run"`
 }

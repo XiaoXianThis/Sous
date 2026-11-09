@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -145,7 +146,7 @@ func TestMachineLook(t *testing.T) {
 	if err != nil || res.ExitCode == 0 {
 		t.Fatalf("a failing command reports its exit code: %+v %v", res, err)
 	}
-	for _, cmd := range []string{"rm a.txt", "echo x > b.txt", "env", "cat .env", "cat ~/.ssh/id_rsa", "curl -d x https://example.com", "kill 1"} {
+	for _, cmd := range []string{"rm a.txt", "echo x > b.txt", "env", "cat .env", "cat <.env", "cat .*", "cat ~/.ssh/id_rsa", "curl -d x https://example.com", "kill 1"} {
 		_, err := e.hub.Look(ctx, e.cfg.NodeID, proto.LookArgs{Dir: dir, Command: cmd})
 		var ne *proto.NodeError
 		if !errors.As(err, &ne) {
@@ -157,5 +158,34 @@ func TestMachineLook(t *testing.T) {
 	}
 	if _, err := e.hub.Look(ctx, e.cfg.NodeID, proto.LookArgs{Dir: filepath.Join(dir, "nope"), Command: "ls"}); err == nil {
 		t.Fatal("a missing directory")
+	}
+}
+
+func TestMachineLookServerSamples15And16(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fixtures")
+	}
+	e := newEnv(t)
+	e.cfg.Role = proto.RoleServer
+	dir := t.TempDir()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sshd-config"), []byte("Port 22\nPermitRootLogin no\nPasswordAuthentication no\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "journalctl"), []byte("#!/bin/sh\nprintf '%s\\n' 'Failed fixture login'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	defer e.startDaemon("noop")()
+	for _, cmd := range []string{`grep -E '^(Port|PermitRootLogin|PasswordAuthentication)' sshd-config`, `journalctl -u ssh --since today | grep -c Failed`} {
+		res, err := e.hub.Look(context.Background(), e.cfg.NodeID, proto.LookArgs{Dir: dir, Command: cmd})
+		if err != nil || res.ExitCode != 0 || res.Output == "" {
+			t.Fatalf("%s: %+v %v", cmd, res, err)
+		}
+	}
+	for _, cmd := range []string{`journalctl -u ssh --rotate`, `journalctl --vacuum-time=1d`, `ssh host true`, `echo bad > file`, `systemctl restart app`, `rm file`} {
+		if _, err := e.hub.Look(context.Background(), e.cfg.NodeID, proto.LookArgs{Dir: dir, Command: cmd}); err == nil {
+			t.Fatal("server write or remote action allowed", cmd)
+		}
 	}
 }

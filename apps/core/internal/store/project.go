@@ -13,6 +13,8 @@ func project(w *Writer, ev event.Event) error {
 		return err
 	}
 	switch ev.Type {
+	case event.ApprovalChecked:
+		return projectApprovalCheck(w, ev)
 	case event.ThreadCreated:
 		var p event.ThreadCreatedPayload
 		if err := ev.Decode(&p); err != nil {

@@ -282,6 +282,8 @@ func runFake(mode string) {
 		update(sid, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{{"content": "创建 hello.txt", "priority": "high", "status": "in_progress"}}})
 		kind, input := "execute", map[string]string{"command": "./scripts/make-hello.sh hello.txt"}
 		switch mode {
+		case "approval-guard":
+			input = map[string]string{"command": "env -u SOUS_SIGN_CERT_P12_PASSWORD sh scripts/make-hello.sh hello.txt"}
 		case "edit":
 			kind, input = "edit", map[string]string{"path": "hello.txt"}
 		case "floor":
