@@ -1,4 +1,5 @@
 ---
+import { withBase } from '../lib/with-base';
 import BaseLayout from './BaseLayout.astro';
 import { DOC_GROUPS, GROUP_LABELS, REPO_URL, type DocGroupKey } from '../lib/docs-nav';
 
@@ -47,7 +48,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
     <!-- Mobile Doc Navigation & TOC Bar -->
     <div class="lg:hidden py-3 border-b border-line flex flex-col gap-2">
       <div class="flex items-center justify-between gap-2">
-        <a href="/docs" class="inline-flex items-center gap-1.5 text-xs text-muted hover:text-ink font-mono">
+        <a href={withBase('/docs/')} class="inline-flex items-center gap-1.5 text-xs text-muted hover:text-ink font-mono">
           <span>←</span>
           <span>文档索引</span>
           <span class="text-faint">/</span>
@@ -92,7 +93,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
                   {g.items.map((item) => (
                     <li>
                       <a
-                        href={`/docs/${item.slug}`}
+                        href={withBase(`/docs/${item.slug}/`)}
                         aria-current={item.slug === currentSlug ? 'page' : undefined}
                         class:list={[
                           'block py-0.5',
@@ -117,7 +118,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
         <div class="sticky top-20 space-y-6 max-h-[calc(100dvh-6rem)] overflow-y-auto pr-1">
           <div class="space-y-2">
             <div class="flex items-center justify-between">
-              <a href="/docs" class="font-mono text-xs uppercase tracking-wider text-faint hover:text-ink transition-colors duration-fast">
+              <a href={withBase('/docs/')} class="font-mono text-xs uppercase tracking-wider text-faint hover:text-ink transition-colors duration-fast">
                 DOCS INDEX
               </a>
               <span class="font-mono text-[11px] text-faint">7 Groups</span>
@@ -146,7 +147,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
                     return (
                       <li data-sidebar-item data-title={`${item.title} ${item.description}`.toLowerCase()}>
                         <a
-                          href={`/docs/${item.slug}`}
+                          href={withBase(`/docs/${item.slug}/`)}
                           aria-current={active ? 'page' : undefined}
                           class:list={[
                             'block px-2.5 py-1.5 rounded-sm text-xs transition-colors duration-fast',
@@ -171,7 +172,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
       <main class="lg:col-span-9 xl:col-span-6 min-w-0">
         <article class="max-w-prose">
           <div class="flex flex-wrap items-center gap-2 font-mono text-xs text-faint mb-3">
-            <a href="/docs" class="hover:text-ink">文档</a>
+            <a href={withBase('/docs/')} class="hover:text-ink">文档</a>
             <span>/</span>
             <span class="text-accent">{GROUP_LABELS[group]}</span>
             {updatedAt && (
@@ -236,7 +237,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
           >
             {prevDoc ? (
               <a
-                href={`/docs/${prevDoc.slug}`}
+                href={withBase(`/docs/${prevDoc.slug}/`)}
                 class="group p-4 rounded-md bg-panel border border-line hover:border-line-strong transition-colors duration-fast flex flex-col gap-1"
               >
                 <span class="font-mono text-xs text-faint">← 上一篇 · {GROUP_LABELS[prevDoc.group]}</span>
@@ -246,7 +247,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
               </a>
             ) : (
               <a
-                href="/docs"
+                href={withBase('/docs/')}
                 class="group p-4 rounded-md bg-panel border border-line hover:border-line-strong transition-colors duration-fast flex flex-col gap-1"
               >
                 <span class="font-mono text-xs text-faint">← 返回索引</span>
@@ -258,7 +259,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
 
             {nextDoc ? (
               <a
-                href={`/docs/${nextDoc.slug}`}
+                href={withBase(`/docs/${nextDoc.slug}/`)}
                 class="group p-4 rounded-md bg-panel border border-line hover:border-line-strong transition-colors duration-fast flex flex-col gap-1 sm:text-right"
               >
                 <span class="font-mono text-xs text-faint">下一篇 · {GROUP_LABELS[nextDoc.group]} →</span>
@@ -268,7 +269,7 @@ const editUrl = `${REPO_URL}/edit/main/apps/site/src/content/docs/${currentSlug}
               </a>
             ) : (
               <a
-                href="/docs"
+                href={withBase('/docs/')}
                 class="group p-4 rounded-md bg-panel border border-line hover:border-line-strong transition-colors duration-fast flex flex-col gap-1 sm:text-right"
               >
                 <span class="font-mono text-xs text-faint">浏览更多 →</span>

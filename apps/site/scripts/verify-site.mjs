@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import config from '../astro.config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const buildDir = process.env.WOK_OUT || path.resolve(__dirname, '../../../build/site');
+const base = `${(config.base || '/').replace(/\/+$/, '')}/`;
+const siteUrl = new URL(base, config.site);
 
 const requiredFiles = [
   'index.html',
@@ -52,6 +55,17 @@ const pageIds = new Map();
 const seenTitles = new Map();
 const seenDescriptions = new Map();
 
+function pageUrl(file) {
+  // Astro renders its special 404.html output using the /404/ route pathname.
+  const route = path.relative(buildDir, file).split(path.sep).join('/').replace(/index\.html$/, '').replace(/^404\.html$/, '404/');
+  return new URL(route, siteUrl);
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
 for (const file of htmlFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const relFile = path.relative(buildDir, file);
@@ -85,56 +99,74 @@ for (const file of htmlFiles) {
     process.exit(1);
   }
   seenDescriptions.set(desc, relFile);
+
+  const canonical = content.match(/<link\s+rel="canonical"\s+href="([^"]+)"/i)?.[1];
+  const ogUrl = content.match(/<meta\s+property="og:url"\s+content="([^"]+)"/i)?.[1];
+  const expected = pageUrl(file).href;
+  if (canonical !== expected || ogUrl !== expected) {
+    fail(`Incorrect canonical/og:url in ${relFile}: expected ${expected}, got ${canonical} / ${ogUrl}`);
+  }
 }
 
 function resolveRouteToFile(routePath) {
-  const clean = routePath.replace(/\/+$/, '') || '/';
+  if (!routePath.startsWith(base)) return null;
+  const clean = `/${decodeURIComponent(routePath.slice(base.length))}`.replace(/\/+$/, '') || '/';
   if (clean === '/') return path.join(buildDir, 'index.html');
   if (clean === '/404') return path.join(buildDir, '404.html');
   const candidateIndex = path.join(buildDir, clean.slice(1), 'index.html');
-  if (fs.existsSync(candidateIndex)) return candidateIndex;
+  if (fs.existsSync(candidateIndex) && fs.statSync(candidateIndex).isFile()) return candidateIndex;
   const candidateDirect = path.join(buildDir, clean.slice(1));
-  if (fs.existsSync(candidateDirect)) return candidateDirect;
+  if (fs.existsSync(candidateDirect) && fs.statSync(candidateDirect).isFile()) return candidateDirect;
   return null;
 }
 
 let checkedLinks = 0;
-for (const file of htmlFiles) {
-  const content = fs.readFileSync(file, 'utf8');
-  const relFile = path.relative(buildDir, file);
-  for (const m of content.matchAll(/\bhref="([^"]+)"/g)) {
-    const href = m[1];
-    checkedLinks++;
-    if (href.startsWith('http://') || href.startsWith('https://')) {
-      new URL(href);
-      continue;
-    }
-    if (href.startsWith('#')) {
-      const anchor = decodeURIComponent(href.slice(1));
-      if (anchor && !pageIds.get(file)?.has(anchor)) {
-        console.error(`Broken in-page anchor ${href} in ${relFile}`);
-        process.exit(1);
-      }
-      continue;
-    }
-    if (href.startsWith('/')) {
-      const [routePart, hashPart] = href.split('#');
-      const targetFile = resolveRouteToFile(routePart);
-      if (!targetFile) {
-        console.error(`Dead internal link ${href} in ${relFile}`);
-        process.exit(1);
-      }
-      if (hashPart && targetFile.endsWith('.html')) {
-        const anchor = decodeURIComponent(hashPart);
-        if (anchor && !pageIds.get(targetFile)?.has(anchor)) {
-          console.error(`Broken cross-page anchor ${href} in ${relFile}`);
-          process.exit(1);
-        }
-      }
+function verifyLink(href, file, context = path.relative(buildDir, file)) {
+  checkedLinks++;
+  const url = new URL(href.replaceAll('&amp;', '&'), pageUrl(file));
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== siteUrl.origin) return;
+  if (!url.pathname.startsWith(base)) {
+    fail(`Internal URL escapes base ${base}: ${href} in ${context}`);
+  }
+  const targetFile = resolveRouteToFile(url.pathname);
+  if (!targetFile) fail(`Dead internal link ${href} in ${context}`);
+  if (url.hash && targetFile.endsWith('.html')) {
+    const anchor = decodeURIComponent(url.hash.slice(1));
+    if (anchor && !pageIds.get(targetFile)?.has(anchor)) {
+      fail(`Broken anchor ${href} in ${context}`);
     }
   }
 }
 
+for (const file of htmlFiles) {
+  const content = fs.readFileSync(file, 'utf8');
+  // Ignore JavaScript templates, whose href values are populated from the search index.
+  const markup = content.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+  for (const m of markup.matchAll(/\b(?:href|src)="([^"]+)"/g)) {
+    verifyLink(m[1], file);
+  }
+  const searchIndex = content.match(/const searchIndex = (\[[\s\S]*?\]);/)?.[1];
+  if (!searchIndex) fail(`Missing search index in ${path.relative(buildDir, file)}`);
+  for (const item of JSON.parse(searchIndex)) {
+    verifyLink(item.href, file);
+  }
+  for (const m of content.matchAll(/<meta\s+(?:property="og:image"|name="twitter:image")\s+content="([^"]+)"/g)) {
+    verifyLink(m[1], file);
+  }
+}
+
+const sitemap = fs.readFileSync(path.join(buildDir, 'sitemap.xml'), 'utf8');
+const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+const expectedPages = htmlFiles.filter((file) => path.basename(file) !== '404.html').map((file) => pageUrl(file).href);
+if (locations.length !== expectedPages.length || expectedPages.some((url) => !locations.includes(url))) {
+  fail(`Sitemap must list all ${expectedPages.length} public pages under ${siteUrl.href}`);
+}
+for (const url of locations) verifyLink(url, path.join(buildDir, 'index.html'), 'sitemap.xml');
+const robots = fs.readFileSync(path.join(buildDir, 'robots.txt'), 'utf8');
+if (!robots.split(/\r?\n/).includes(`Sitemap: ${new URL('sitemap.xml', siteUrl).href}`)) {
+  fail('robots.txt Sitemap does not match the configured site + base');
+}
+
 console.log(
-  `Verified ${htmlFiles.length} HTML pages (unique titles & descriptions) and ${checkedLinks} links in ${buildDir}. All reachable.`
+  `Verified ${htmlFiles.length} HTML pages (unique titles & descriptions, canonical & og:url) and ${checkedLinks} links/assets/search/sitemap URLs in ${buildDir}. Base ${base}: all reachable; anchors valid.`
 );

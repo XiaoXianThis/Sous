@@ -1,4 +1,5 @@
 ---
+import { withBase } from '../lib/with-base';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
 
@@ -134,7 +135,7 @@ const releases: ReleaseEntry[] = [
           <span class="font-mono">↗</span>
         </a>
         <a
-          href="/docs/getting-started"
+          href={withBase('/docs/getting-started/')}
           class="inline-flex items-center gap-2 h-9 px-3.5 rounded-sm bg-panel border border-line hover:border-line-strong text-xs text-ink font-medium transition-colors duration-fast"
         >
           <span>查看安装与升级指南</span>

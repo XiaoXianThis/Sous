@@ -1,4 +1,5 @@
 ---
+import { withBase } from '../lib/with-base';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import AgentMark from '../components/AgentMark.astro';
 import { REPO_URL, RELEASES_URL } from '../lib/docs-nav';
@@ -196,7 +197,7 @@ const supportedAgents: Array<{
             <span class="font-mono text-xs">→</span>
           </a>
           <a
-            href="/docs"
+            href={withBase('/docs/')}
             class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-panel border border-line hover:border-line-strong text-ink font-medium text-sm transition-colors duration-fast"
           >
             <span>阅读文档</span>
@@ -513,7 +514,7 @@ const supportedAgents: Array<{
           <div class="font-mono text-xs text-ink font-medium">
             HUB ↔ NODE 安全边界与通信拓扑（零入站端口）
           </div>
-          <a href="/docs/architecture-overview" class="font-mono text-xs text-accent hover:underline">
+          <a href={withBase('/docs/architecture-overview/')} class="font-mono text-xs text-accent hover:underline">
             查看完整架构文档 →
           </a>
         </div>
@@ -670,7 +671,7 @@ const supportedAgents: Array<{
           三步接入一台开发机，或在本地从源码构建
         </h2>
         <p class="text-sm sm:text-base text-muted">
-          以下命令均为仓库真实可执行命令。服务端 Hub 的完整部署步骤请参见 <a href="/docs/getting-started" class="text-accent underline underline-offset-2">安装与部署 Hub</a>。
+          以下命令均为仓库真实可执行命令。服务端 Hub 的完整部署步骤请参见 <a href={withBase('/docs/getting-started/')} class="text-accent underline underline-offset-2">安装与部署 Hub</a>。
         </p>
       </div>
 
@@ -679,7 +680,7 @@ const supportedAgents: Array<{
         <div class="rounded-sm bg-page border border-line p-5 space-y-4 min-w-0">
           <div class="flex items-center justify-between">
             <span class="font-mono text-xs text-accent font-semibold">STEP A · 安装客户端并配对电脑</span>
-            <a href="/docs/connect-machine" class="font-mono text-xs text-muted hover:text-ink">
+            <a href={withBase('/docs/connect-machine/')} class="font-mono text-xs text-muted hover:text-ink">
               完整指南 →
             </a>
           </div>
@@ -714,7 +715,7 @@ sous chat</code></pre>
         <div class="rounded-sm bg-page border border-line p-5 space-y-4 min-w-0">
           <div class="flex items-center justify-between">
             <span class="font-mono text-xs text-accent font-semibold">STEP B · 从源码构建与本地开发</span>
-            <a href="/docs/getting-started" class="font-mono text-xs text-muted hover:text-ink">
+            <a href={withBase('/docs/getting-started/')} class="font-mono text-xs text-muted hover:text-ink">
               部署 Hub 指南 →
             </a>
           </div>
@@ -774,7 +775,7 @@ wok build core</code></pre>
             <span class="font-mono text-xs">↗</span>
           </a>
           <a
-            href="/docs"
+            href={withBase('/docs/')}
             class="inline-flex items-center gap-2 h-10 px-4 rounded-sm bg-page border border-line hover:border-line-strong text-ink font-medium text-sm transition-colors duration-fast"
           >
             <span>进入文档中心</span>

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://agent.wxian.cc/sitemap.xml
+Sitemap: https://xiaoxianthis.github.io/Sous/sitemap.xml

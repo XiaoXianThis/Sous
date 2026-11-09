@@ -1,4 +1,5 @@
 ---
+import { withBase } from '../lib/with-base';
 import AgentMark from './AgentMark.astro';
 import { DOC_GROUPS, REPO_URL, RELEASES_URL } from '../lib/docs-nav';
 
@@ -7,15 +8,15 @@ interface Props {
 }
 
 const { currentPath = Astro.url.pathname } = Astro.props;
-const isDocs = currentPath.startsWith('/docs');
-const isChangelog = currentPath.startsWith('/changelog');
+const isDocs = currentPath.startsWith(withBase('/docs/'));
+const isChangelog = currentPath.startsWith(withBase('/changelog/'));
 ---
 
 <header class="sticky top-0 z-40 h-nav-h bg-page/90 backdrop-blur-md border-b border-line">
   <div class="mx-auto flex h-full max-w-docs items-center justify-between px-gutter md:px-gutter-lg gap-3">
     <div class="flex items-center gap-6 min-w-0">
       <a
-        href="/"
+        href={withBase('/')}
         class="inline-flex items-center gap-2.5 text-ink font-semibold tracking-tight hover:opacity-90 transition-opacity duration-fast focus:outline-none"
       >
         <AgentMark name="sous" size={24} />
@@ -27,25 +28,25 @@ const isChangelog = currentPath.startsWith('/changelog');
 
       <nav aria-label="主导航" class="hidden md:flex items-center gap-5 text-sm">
         <a
-          href="/"
+          href={withBase('/')}
           class:list={[
             'transition-colors duration-fast',
-            currentPath === '/' ? 'text-ink font-medium' : 'text-muted hover:text-ink',
+            currentPath === withBase('/') ? 'text-ink font-medium' : 'text-muted hover:text-ink',
           ]}
         >
           首页
         </a>
-        <a href="/#scenarios" class="text-muted hover:text-ink transition-colors duration-fast">
+        <a href={withBase('/#scenarios')} class="text-muted hover:text-ink transition-colors duration-fast">
           使用场景
         </a>
-        <a href="/#capabilities" class="text-muted hover:text-ink transition-colors duration-fast">
+        <a href={withBase('/#capabilities')} class="text-muted hover:text-ink transition-colors duration-fast">
           核心能力
         </a>
-        <a href="/#agents" class="text-muted hover:text-ink transition-colors duration-fast">
+        <a href={withBase('/#agents')} class="text-muted hover:text-ink transition-colors duration-fast">
           支持 Agent
         </a>
         <a
-          href="/docs"
+          href={withBase('/docs/')}
           class:list={[
             'transition-colors duration-fast',
             isDocs ? 'text-accent font-medium' : 'text-muted hover:text-ink',
@@ -54,7 +55,7 @@ const isChangelog = currentPath.startsWith('/changelog');
           文档
         </a>
         <a
-          href="/changelog"
+          href={withBase('/changelog/')}
           class:list={[
             'transition-colors duration-fast',
             isChangelog ? 'text-accent font-medium' : 'text-muted hover:text-ink',
@@ -135,7 +136,7 @@ const isChangelog = currentPath.startsWith('/changelog');
   <aside class="fixed top-0 right-0 bottom-0 w-[min(84vw,320px)] bg-page border-l border-line flex flex-col justify-between overflow-y-auto p-5">
     <div class="space-y-6">
       <div class="flex items-center justify-between pb-4 border-b border-line">
-        <a href="/" class="inline-flex items-center gap-2 text-ink font-semibold">
+        <a href={withBase('/')} class="inline-flex items-center gap-2 text-ink font-semibold">
           <AgentMark name="sous" size={22} />
           <span>sous</span>
         </a>
@@ -153,25 +154,25 @@ const isChangelog = currentPath.startsWith('/changelog');
 
       <nav aria-label="移动端主导航" class="space-y-1">
         <p class="font-mono text-[11px] uppercase tracking-wider text-faint px-2 pb-1">站点导航</p>
-        <a href="/" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-ink hover:bg-hover">
+        <a href={withBase('/')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-ink hover:bg-hover">
           首页
         </a>
-        <a href="/#scenarios" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+        <a href={withBase('/#scenarios')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           三个使用场景
         </a>
-        <a href="/#capabilities" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+        <a href={withBase('/#capabilities')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           核心能力
         </a>
-        <a href="/#workflow" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+        <a href={withBase('/#workflow')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           五步工作流
         </a>
-        <a href="/#agents" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+        <a href={withBase('/#agents')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           支持的编程 Agent
         </a>
-        <a href="/docs" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-accent font-medium hover:bg-hover">
+        <a href={withBase('/docs/')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-accent font-medium hover:bg-hover">
           文档中心 (/docs)
         </a>
-        <a href="/changelog" data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
+        <a href={withBase('/changelog/')} data-drawer-link class="block px-2.5 py-2 rounded-sm text-sm text-muted hover:text-ink hover:bg-hover">
           版本更新日志 (/changelog)
         </a>
       </nav>
@@ -188,7 +189,7 @@ const isChangelog = currentPath.startsWith('/changelog');
               {group.items.map((item) => (
                 <li>
                   <a
-                    href={`/docs/${item.slug}`}
+                    href={withBase(`/docs/${item.slug}/`)}
                     data-drawer-link
                     class="block py-1 text-xs text-muted hover:text-accent"
                   >
