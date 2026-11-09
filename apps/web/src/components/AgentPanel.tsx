@@ -7,10 +7,11 @@ import ConfigEditor from './ConfigEditor'
 const JobLog = lazy(() => import('./JobLog'))
 import Icon from './Icon'
 import Sheet from './Sheet'
+import AgentSwitch from './AgentSwitch'
 
 const catName: Record<string, string> = { model: '模型', thought_level: '思考强度' }
 
-export default function AgentPanel({ node, name, onClose }: { node: Node; name: string; onClose: () => void }) {
+export default function AgentPanel({ node, name, onClose, onSetDisabled, switching = false, actionError = '' }: { node: Node; name: string; onClose: () => void; onSetDisabled?: (disabled: boolean) => void; switching?: boolean; actionError?: string }) {
   const chatState = useChat()
   const [, force] = useReducer((x: number) => x + 1, 0)
   const agent = node.agents?.find((a) => a.name === name)
@@ -265,6 +266,10 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
             </section>
           ) : null}
 
+          {onSetDisabled && <div className="flex items-center justify-between gap-3 text-[13px]">
+            <span>{agent.disabled ? 'node.json 的 disabled_agents 停用了它：这台电脑不会用它执行任务。' : '允许这台电脑用它执行任务'}</span>
+            <AgentSwitch agent={agent} disabled={!canAdmin || switching} onChange={onSetDisabled} />
+          </div>}
           {agent.installed && agent.configs?.length ? (
             <section className="grid gap-2">
               <h3 className="mt-1.5 mb-0 text-[15px]">配置文件</h3>
@@ -278,13 +283,12 @@ export default function AgentPanel({ node, name, onClose }: { node: Node; name: 
               </ul>
               {agent.launch_override && <p className="text-muted text-[13px] m-0">node.json 覆盖了它的启动命令（agents 字段）。</p>}
               {agent.default && <p className="text-muted text-[13px] m-0">这是这台电脑的默认 agent（node.json 的 default_agent）：任务、预设和项目都没指定 agent 时用它。</p>}
-              {agent.disabled && <p className="text-muted text-[13px] m-0">node.json 的 disabled_agents 停用了它：这台电脑不会用它执行任务。</p>}
               {agent.custom && <p className="text-muted text-[13px] m-0">它是 node.json 的 custom_agents 里添加的 agent；启动命令只能在这台电脑上改。</p>}
             </section>
           ) : null}
         </>
       )}
-      {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}
+      {(error || actionError) && <p className="text-danger text-[13px] m-0" role="alert">{error || actionError}</p>}
       </div>
       {!node.online && (
         <div className="absolute inset-0 z-[2] grid place-items-center p-6 text-center rounded-[14px] bg-[color-mix(in_srgb,var(--panel)_55%,transparent)]" role="status">

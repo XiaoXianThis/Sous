@@ -154,6 +154,8 @@ export const api = {
     request<{ options: ConfigOption[] | null; at: number }>('POST', `/api/v1/nodes/${id}/agents/${agent}/probe`),
   agentJob: (id: string, agent: string, what: 'install' | 'login' | 'logout', size: { cols: number; rows: number }, upgrade = false) =>
     request<JobStarted>('POST', `/api/v1/nodes/${id}/agents/${agent}/${what}`, { ...size, upgrade }),
+  setAgentDisabled: (id: string, agent: string, disabled: boolean) =>
+    request<AgentInfo>('POST', `/api/v1/nodes/${id}/agents/${agent}/disabled`, { disabled }),
   setAgentDefaults: (id: string, agent: string, options: Record<string, string>) =>
     request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/defaults`, { options }),
   setAgentEnv: (id: string, agent: string, name: string, value: string) =>

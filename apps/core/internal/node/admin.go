@@ -165,6 +165,21 @@ func (a *admin) do(ctx context.Context, req proto.NodeRequest) (any, error) {
 		var args proto.AgentArgs
 		json.Unmarshal(req.Args, &args)
 		return a.startJob(req.Op, args)
+	case proto.OpSetDisabled:
+		var args proto.AgentArgs
+		if err := json.Unmarshal(req.Args, &args); err != nil {
+			return nil, nodeErr(proto.ErrCodeInvalid, "无效的参数：%v", err)
+		}
+		if err := a.setDisabled(args.Agent, args.Disabled); err != nil {
+			return nil, err
+		}
+		spec, _ := a.spec(args.Agent)
+		for _, info := range a.describe(agents.Detect(ctx, []agents.Spec{spec})) {
+			if info.Name == args.Agent {
+				return info, nil
+			}
+		}
+		return nil, nodeErr(proto.ErrCodeNotFound, "agent 不存在：%s", args.Agent)
 	case proto.OpSetDefaults:
 		var args proto.AgentArgs
 		json.Unmarshal(req.Args, &args)
@@ -451,6 +466,32 @@ func isForced(spec agents.Spec, id string) bool {
 	return ask || open
 }
 
+func (a *admin) setDisabled(agent string, disabled bool) error {
+	if _, err := a.spec(agent); err != nil {
+		return err
+	}
+	return a.updateConfig(func(c *Config) {
+		var names []string
+		for _, name := range c.DisabledAgents {
+			if name == agent && !disabled {
+				continue
+			}
+			if !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+		if disabled && !slices.Contains(names, agent) {
+			names = append(names, agent)
+		}
+		c.DisabledAgents = names
+	}, func(c *Config) error {
+		if disabled && c.DefaultAgent == agent {
+			return nodeErr(proto.ErrCodeInvalid, "这台电脑的默认 agent 是 %s，先在 node.json 换掉 default_agent，再停用它", agent)
+		}
+		return nil
+	})
+}
+
 func (a *admin) setDefaults(agent string, options map[string]string) error {
 	spec, err := a.spec(agent)
 	if err != nil {
@@ -500,13 +541,18 @@ func (a *admin) setEnv(agent, name, value string) error {
 	})
 }
 
-// updateConfig changes node.json on disk, applies it, and reports.
-func (a *admin) updateConfig(change func(*Config)) error {
+// updateConfig validates and changes node.json under one lock, applies it, and reports.
+func (a *admin) updateConfig(change func(*Config), checks ...func(*Config) error) error {
 	a.fileMu.Lock()
 	defer a.fileMu.Unlock()
 	cfg, err := LoadConfig(a.d.root)
 	if err != nil {
 		return err
+	}
+	for _, check := range checks {
+		if err := check(&cfg); err != nil {
+			return err
+		}
 	}
 	change(&cfg)
 	if err := SaveConfig(a.d.root, cfg); err != nil {

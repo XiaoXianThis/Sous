@@ -94,6 +94,7 @@ func (h *Hub) adminRoutes(protect func(string, http.HandlerFunc)) {
 	protect("POST /api/v1/nodes/{id}/agents/{agent}/login", h.adminJob(proto.OpLogin))
 	protect("POST /api/v1/nodes/{id}/agents/{agent}/logout", h.adminJob(proto.OpLogout))
 	protect("PUT /api/v1/nodes/{id}/agents/{agent}/defaults", h.adminDefaults)
+	protect("POST /api/v1/nodes/{id}/agents/{agent}/disabled", h.adminDisabled)
 	protect("PUT /api/v1/nodes/{id}/agents/{agent}/env", h.adminEnv)
 	protect("GET /api/v1/nodes/{id}/jobs/{job}", h.adminJobOp(proto.OpJobTail))
 	protect("POST /api/v1/nodes/{id}/jobs/{job}/input", h.adminJobOp(proto.OpJobInput))
@@ -250,6 +251,27 @@ func (h *Hub) adminJobOp(op string) http.HandlerFunc {
 
 func (h *Hub) configChanged(ctx context.Context, nodeID, agent, what string) {
 	h.log.Append(ctx, event.New(event.NodeConfigChanged, event.ActorUser, "", event.NodeConfigPayload{NodeID: nodeID, Agent: agent, What: what}))
+}
+
+func (h *Hub) adminDisabled(w http.ResponseWriter, r *http.Request) {
+	if !h.known(w, r) {
+		return
+	}
+	var body struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	nodeID, agent := r.PathValue("id"), r.PathValue("agent")
+	res, err := h.Request(r.Context(), nodeID, proto.OpSetDisabled, proto.AgentArgs{Agent: agent, Disabled: body.Disabled}, requestTimeout)
+	if err != nil {
+		adminError(w, err)
+		return
+	}
+	h.configChanged(r.Context(), nodeID, agent, "disabled")
+	relay(w, res)
 }
 
 func (h *Hub) adminDefaults(w http.ResponseWriter, r *http.Request) {

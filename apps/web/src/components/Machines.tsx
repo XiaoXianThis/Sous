@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { usePhone } from '../lib/phone'
+import AgentSwitch from './AgentSwitch'
 import { ago } from '../lib/time'
 import { api } from '../lib/api'
 import { useChat } from '../lib/app'
@@ -6,7 +9,7 @@ import { jobTitle, latestJob } from '../lib/jobs'
 import type { AgentInfo, Node, Updates } from '../lib/types'
 import AgentIcon from './AgentIcon'
 import AgentPanel from './AgentPanel'
-import { SheetPlaceContext } from './Sheet'
+import Sheet, { SheetPlaceContext } from './Sheet'
 import Icon from './Icon'
 import ConfigEditor from './ConfigEditor'
 
@@ -27,6 +30,12 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   const [wsBusy, setWsBusy] = useState(false)
   const [panel, setPanel] = useState<{ node: string; agent: string } | null>(null)
   const [nodeFile, setNodeFile] = useState<string | null>(null)
+  const [inactive, setInactive] = useState<{ id: string; left: number; top: number } | null>(null)
+  const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
+  const [agentErrors, setAgentErrors] = useState<Record<string, string>>({})
+  const popover = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  const phone = usePhone()
   const [detecting, setDetecting] = useState<Record<string, boolean>>({})
 
   async function loadUpdates(refresh = false) {
@@ -69,11 +78,43 @@ export default function Machines({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !panel && !nodeFile) onClose()
+      if (e.key === 'Escape' && !panel && !nodeFile) {
+        if (inactive) { setInactive(null); trigger.current?.focus() }
+        else onClose()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [panel, nodeFile, onClose])
+  }, [panel, nodeFile, inactive, onClose])
+
+  useEffect(() => {
+    if (!inactive || phone) return
+    popover.current?.focus()
+    const outside = (e: PointerEvent) => {
+      if (!popover.current?.contains(e.target as globalThis.Node) && !trigger.current?.contains(e.target as globalThis.Node)) setInactive(null)
+    }
+    document.addEventListener('pointerdown', outside)
+    return () => document.removeEventListener('pointerdown', outside)
+  }, [inactive, phone])
+
+  async function setDisabled(n: Node, a: AgentInfo, disabled: boolean) {
+    if (agentBusy[n.id]) return
+    setAgentBusy((busy) => ({ ...busy, [n.id]: true }))
+    setAgentErrors((errors) => ({ ...errors, [n.id]: '' }))
+    const patch = (value: boolean) => setNodes((ns) => ns.map((x) => x.id === n.id
+      ? { ...x, agents: x.agents?.map((agent) => agent.name === a.name ? { ...agent, disabled: value } : agent) ?? null } : x))
+    patch(disabled)
+    try {
+      await api.setAgentDisabled(n.id, a.name, disabled)
+      await load()
+      patch(disabled)
+    } catch (e) {
+      patch(!!a.disabled)
+      setAgentErrors((errors) => ({ ...errors, [n.id]: (e as Error).message }))
+    } finally {
+      setAgentBusy((busy) => ({ ...busy, [n.id]: false }))
+    }
+  }
 
   async function pair() {
     try {
@@ -160,6 +201,25 @@ export default function Machines({ onClose }: { onClose: () => void }) {
     return a.job
   }
 
+  const inactiveNode = nodes.find((n) => n.id === inactive?.id)
+  const inactiveRows = inactiveNode && (
+    <div className="grid gap-1">
+      {sortAgents(inactiveNode.agents ?? []).filter((a) => !a.installed || a.disabled).map((a) => (
+        <div key={a.name} className="flex items-center gap-3 min-h-16 px-1">
+          <AgentIcon name={a.name} size={22} />
+          <div className="flex-1 min-w-0">
+            <span className="text-[14px] font-medium">{a.title}</span>
+            <p className="m-0 text-muted text-[12px]">{!a.installed ? '未安装 · 请先安装' : '已停用'}</p>
+          </div>
+          <AgentSwitch agent={a} disabled={!inactiveNode.online || inactiveNode.admin !== 'on' || agentBusy[inactiveNode.id]} onChange={(disabled) => void setDisabled(inactiveNode, a, disabled)} />
+          <button className="link text-[13px]" onClick={() => { setPanel({ node: inactiveNode.id, agent: a.name }); setInactive(null) }}>{!a.installed && a.install ? '安装' : '管理'}</button>
+        </div>
+      ))}
+      {!inactiveNode.agents?.some((a) => !a.installed || a.disabled) && <p className="text-muted text-[13px]">全部已启用</p>}
+      {agentErrors[inactiveNode.id] && <p className="text-danger text-[13px] m-0" role="alert">{agentErrors[inactiveNode.id]}</p>}
+    </div>
+  )
+
   const pairCommand = code ? `sous pair ${location.origin} ${code.code}` : ''
   return (
     <SheetPlaceContext.Provider value="nested">
@@ -230,12 +290,11 @@ export default function Machines({ onClose }: { onClose: () => void }) {
               {n.agents?.length ? (
                 <table className="border-collapse text-[13px] w-full">
                   <tbody>
-                    {sortAgents(n.agents).map((a) => (
+                    {sortAgents(n.agents.filter((a) => a.installed && !a.disabled)).map((a) => (
                       <tr key={a.name}>
                         <td className={`py-1.5 pr-3 ${a.installed ? 'font-medium' : 'text-muted'}`}>
                           <span className={`inline-flex items-center gap-2 whitespace-nowrap ${a.installed ? '' : 'grayscale opacity-60'}`}><AgentIcon name={a.name} size={22} />{a.title}</span>
                           {a.default && <span className="pill tone-accent ml-1.5" title="这台电脑的默认 agent（node.json 的 default_agent）">默认</span>}
-                          {a.disabled && <span className="pill ml-1.5" title="node.json 的 disabled_agents 停用了它，这台电脑不会用它">已停用</span>}
                           {a.custom && <span className="pill ml-1.5" title="node.json 的 custom_agents 里添加的">自定义</span>}
                         </td>
                         <td className="py-1.5 pr-3 text-muted max-[760px]:hidden">{a.installed ? (a.version ?? '') : ''}{summary(a) ? ` ${summary(a)}` : ''}</td>
@@ -250,9 +309,12 @@ export default function Machines({ onClose }: { onClose: () => void }) {
                         </td>
                         <td className="py-1.5 text-right pr-0 whitespace-nowrap">
                           {jobOf(n, a) && <span className="text-muted text-[13px] mr-2">正在{jobTitle[jobOf(n, a)?.kind ?? '']}…</span>}
-                          <button className="link accent" onClick={() => setPanel({ node: n.id, agent: a.name })}>
-                            {n.admin === 'on' && n.online && !a.installed && a.install ? '安装' : n.admin === 'on' && n.online && a.installed && a.logged_in === false && a.login ? '登录' : '管理'}
-                          </button>
+                          <span className="inline-flex items-center gap-3">
+                            <AgentSwitch agent={a} disabled={!n.online || n.admin !== 'on' || agentBusy[n.id]} onChange={(disabled) => void setDisabled(n, a, disabled)} />
+                            <button className="link accent" onClick={() => setPanel({ node: n.id, agent: a.name })}>
+                              {n.admin === 'on' && n.online && a.logged_in === false && a.login ? '登录' : '管理'}
+                            </button>
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -293,7 +355,15 @@ export default function Machines({ onClose }: { onClose: () => void }) {
               </div>
               {n.online && n.admin === 'off' && <p className="text-muted text-[13px] m-0">这台机器关闭了远程管理（node.json 里的 remote_admin）。</p>}
               {n.online && n.admin === 'unsupported' && <p className="text-muted text-[13px] m-0">更新这台机器上的 sous 后，就能在这里安装、登录和配置 agent。</p>}
+              {agentErrors[n.id] && <p className="text-danger text-[13px] m-0" role="alert">{agentErrors[n.id]}</p>}
               <div className="flex justify-end items-center gap-0.5 -mb-1.5 -mr-1.5">
+                {n.agents?.some((a) => !a.installed || a.disabled) && (
+                  <button className="link mr-auto text-[13px]" aria-haspopup="dialog" aria-expanded={inactive?.id === n.id} onClick={(e) => {
+                    trigger.current = e.currentTarget
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    setInactive(inactive?.id === n.id ? null : { id: n.id, left: Math.max(8, Math.min(rect.left, window.innerWidth - 368)), top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - 328)) })
+                  }}>+ {n.agents.filter((a) => !a.installed || a.disabled).length} 个未启用</button>
+                )}
                 {n.online && n.admin === 'on' && (
                   <>
                     <button className="icon-btn" aria-label="重新检测 agent" data-tip="重新检测" data-tip-pos="bottom" disabled={detecting[n.id]} onClick={() => void detect(n)}><Icon name="refresh" size={16} className={detecting[n.id] ? 'spin' : ''} /></button>
@@ -316,8 +386,19 @@ export default function Machines({ onClose }: { onClose: () => void }) {
         </ul>
       </div>
 
+      {inactive && inactiveNode && (phone ? (
+        <Sheet title="未启用的 agent" onClose={() => setInactive(null)}>{inactiveRows}</Sheet>
+      ) : createPortal(
+        <div ref={popover} tabIndex={-1} role="dialog" aria-label="未启用的 agent" className="fixed z-[60] w-[360px] max-w-[calc(100vw-16px)] max-h-[320px] overflow-y-auto rounded-[14px] bg-panel shadow-pop p-3" style={{ left: inactive.left, top: inactive.top }}>
+          <header className="flex items-center justify-between gap-3 mb-1">
+            <strong className="text-[14px]">未启用的 agent</strong>
+            <button className="icon-btn w-7 h-7" aria-label="关闭未启用的 agent" onClick={() => { setInactive(null); trigger.current?.focus() }}><Icon name="x" size={14} /></button>
+          </header>
+          {inactiveRows}
+        </div>, document.body
+      ))}
       {/* Opened from a machine, on top of this sheet. */}
-      {panel && panelNode && <AgentPanel node={panelNode} name={panel.agent} onClose={() => setPanel(null)} />}
+      {panel && panelNode && <AgentPanel node={panelNode} name={panel.agent} actionError={agentErrors[panelNode.id]} switching={agentBusy[panelNode.id]} onSetDisabled={(disabled) => { const agent = panelNode.agents?.find((a) => a.name === panel.agent); if (agent) void setDisabled(panelNode, agent, disabled) }} onClose={() => setPanel(null)} />}
       {nodeFile && fileNode && <ConfigEditor nodeId={fileNode.id} agent="sous" file="node" title={`${fileNode.name} · node.json`} onClose={() => setNodeFile(null)} />}
     </SheetPlaceContext.Provider>
   )

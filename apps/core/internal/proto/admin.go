@@ -22,6 +22,7 @@ const (
 	OpInstall      = "agents.install"      // {agent, upgrade, cols, rows} -> JobStarted
 	OpLogin        = "agents.login"        // {agent, cols, rows} -> JobStarted
 	OpLogout       = "agents.logout"       // {agent, cols, rows} -> JobStarted
+	OpSetDisabled  = "agents.set_disabled" // {agent, disabled} -> AgentInfo
 	OpSetDefaults  = "agents.set_defaults" // {agent, options} -> AgentInfo
 	OpSetEnv       = "agents.set_env"      // {agent, name, value} -> AgentInfo
 	OpJobInput     = "job.input"           // {job_id, data}
@@ -68,13 +69,14 @@ type NodeResponse struct {
 
 // AgentArgs names the agent an op is about; the other fields depend on the op.
 type AgentArgs struct {
-	Agent   string            `json:"agent"`
-	Upgrade bool              `json:"upgrade,omitempty"`
-	Cols    int               `json:"cols,omitempty"`
-	Rows    int               `json:"rows,omitempty"`
-	Options map[string]string `json:"options,omitempty"` // set_defaults: config option id -> value
-	Name    string            `json:"name,omitempty"`    // set_env
-	Value   string            `json:"value,omitempty"`   // set_env: empty removes it
+	Agent    string            `json:"agent"`
+	Disabled bool              `json:"disabled"`
+	Upgrade  bool              `json:"upgrade,omitempty"`
+	Cols     int               `json:"cols,omitempty"`
+	Rows     int               `json:"rows,omitempty"`
+	Options  map[string]string `json:"options,omitempty"` // set_defaults: config option id -> value
+	Name     string            `json:"name,omitempty"`    // set_env
+	Value    string            `json:"value,omitempty"`   // set_env: empty removes it
 }
 
 type JobArgs struct {
