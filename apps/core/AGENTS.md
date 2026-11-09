@@ -11,12 +11,13 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 | task | command | windows |
 |---|---|---|
 | install | go mod download | |
-| dev | go run ./cmd/sous-hub -config configs/hub.dev.yaml | |
+| dev | go build -trimpath -o bin/ ./cmd/sous-hub && SOUS_SIGN="${SOUS_SIGN:-auto}" sh scripts/sign-darwin.sh bin/sous-hub && exec bin/sous-hub -config configs/hub.dev.yaml | go run ./cmd/sous-hub -config configs/hub.dev.yaml |
 | test | go test ./... | |
 | vet | go vet ./... | |
 | fmt | gofmt -l -w . | |
-| build | go build -trimpath -o "$WOK_OUT/" ./cmd/... | |
+| build | go build -trimpath -o "$WOK_OUT/" ./cmd/... && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-hub" | go build -trimpath -o "$WOK_OUT/" ./cmd/... |
 | release-snapshot | goreleaser release --snapshot --clean | |
+| setup-signing | sh scripts/setup-macos-signing.sh | echo setup-signing is for macOS only |
 | build-hub-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub |
 
 ## Conventions
@@ -46,6 +47,7 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 - 本地试客户端：用 `--home` 指定一个临时目录，避免碰到 `~/.sous`。例如 `go run ./cmd/sous pair http://localhost:8787 <配对码> --home /tmp/sous-node`，然后 `go run ./cmd/sous daemon --home /tmp/sous-node`。在 `node.json` 的 `agents` 字段里可以覆盖某个 agent 的启动命令。
 - opencode 的权限靠 `internal/agents` 里的 `OPENCODE_CONFIG_CONTENT` 设成 `ask`，否则它不经 sous 的策略直接执行。在 `node.json` 里覆盖 opencode 的启动命令时，不要再设 `OPENCODE_CONFIG_CONTENT`（会把这些规则覆盖掉）；选模型用 `["env", "OPENCODE_CONFIG=<含 model 的 json 文件>", "opencode", "acp"]`。
 - 发布：打 `v*` tag 触发 `.github/workflows/release.yml`，用 `.goreleaser.yaml` 构建并发布到 GitHub Releases；压缩包名必须是 `<二进制>_<版本>_<系统>_<架构>`，`internal/update` 按这个名字找安装包。本地先 `wok build web`，再 `wok run core release-snapshot` 试构建（产物在 `dist/`，已忽略）。
+- macOS 签名（`docs/guides/macos-signing-and-permissions.md`）：Go 链接器给 darwin 二进制的是 ad-hoc 签名（identifier `a.out`，designated requirement 是 cdhash），每次重建都会让 macOS 的隐私授权（TCC）失效。`build` 和 `dev` 在 macOS 上用 `scripts/sign-darwin.sh` 以本机的自签名身份「Sous Dev Signing」重签（identifier `cc.wxian.<文件名>`），身份用 `wok run core setup-signing` 建一次，放在专用钥匙串 `~/Library/Keychains/sous-signing.keychain-db`。`build` 缺身份时报错（`SOUS_SIGN=auto` 只警告，`SOUS_SIGN=off` 跳过；设了 `CI` 时默认跳过），`dev` 只警告。goreleaser 的 build hook 也调它：Linux 上的发布构建什么都不做，发布产物仍是 ad-hoc 签名。
 - 本地试更新：让 daemon 带上 `SOUS_UPDATE_API=<假的 GitHub API 地址>`，服务端按 `/repos/<owner>/<name>/releases/{latest,tags/<tag>}` 返回 release JSON，资产指向 `dist/` 里的文件。
 - daemon 的本地接口在 `<home>/daemon.sock`：同一个 home 只能跑一个 daemon。`sous chat --home <同一个目录>` 连它。
 - ACP 的通知在读循环里同步处理（保证顺序），通知回调不能阻塞；会阻塞的只有请求（权限）。

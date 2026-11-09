@@ -97,6 +97,8 @@ sous service start
 sous status
 ```
 
+macOS：项目在 `~/Documents`、`~/Desktop` 这类受保护目录下时，LaunchAgent 启动的 sous 一访问就会弹窗要权限，没人点任务就停住。给 `sous` 开「完全磁盘访问权限」，并用固定身份签名，让授权在重建之后依然有效（Release 的更新要再重签一次），见 [macos-signing-and-permissions.md](macos-signing-and-permissions.md)。
+
 **Windows**：`sous service install` 会注册成 Windows 服务，但它以 SYSTEM 账户运行，读不到你账户下各个 agent 的登录信息，所以暂时不要用它。改用“任务计划程序”，在登录时运行 `sous daemon`（PowerShell）：
 
 ```powershell
