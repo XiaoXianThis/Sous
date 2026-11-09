@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/XiaoXianThis/Sous/main/work/scripts/instal
 
 也可以手动安装：从 GitHub Releases 下载对应平台的 `sous_<版本>_<系统>_<架构>`（macOS、Linux 是 `.tar.gz`，Windows 是 `.zip`），解压后把 `sous`（Windows 上是 `sous.exe`）放进 `PATH`。可以用同一个 Release 里的 `checksums.txt` 校验下载的文件。
 
-- macOS 上第一次运行会被系统拦下（没有代码签名，见 docs/decisions/0008）：在“系统设置 → 隐私与安全性”里允许它，或者执行 `xattr -d com.apple.quarantine sous`。之后 sous 自己下载的更新不会再被拦。
+- macOS 上第一次运行会被系统拦下（只有自签名、没有公证，见 docs/decisions/0026）：在“系统设置 → 隐私与安全性”里允许它，或者执行 `xattr -d com.apple.quarantine sous`。之后 sous 自己下载的更新不会再被拦。
 - Windows 上会出现 SmartScreen 提示，选“仍要运行”。
 
 也可以在仓库根目录自己构建：`wok build core`，产物在 `build/core/` 下。

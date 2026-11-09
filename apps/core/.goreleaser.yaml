@@ -5,17 +5,19 @@
 version: 2
 project_name: sous
 
-# macOS signing (docs/guides/macos-signing-and-permissions.md): the hook below
-# re-signs darwin binaries with the local self-signed "Sous Dev Signing"
-# identity, which only means something on the developer's own Mac (a local
-# snapshot used to test updates). It is a no-op where it cannot apply:
-#   - on Linux (the release workflow runs on ubuntu-latest) the script exits at once;
-#   - non-Mach-O targets are skipped;
+# macOS signing (decision 0026, docs/guides/macos-signing-and-permissions.md):
+# the hook below re-signs darwin binaries with the self-signed "Sous Dev Signing"
+# identity before they are archived, so archives and checksums.txt hold the
+# signed files. Where it cannot apply it does nothing:
+#   - on Linux and Windows hosts the script exits at once;
+#   - non-Mach-O targets (the Linux and Windows builds) are skipped;
 #   - with CI set, signing is off unless SOUS_SIGN says otherwise.
-# So published darwin archives keep the Go linker's ad-hoc signature. No
-# certificate, keychain or path from this machine is part of the release.
-# On a Mac without the identity a local snapshot fails with instructions;
-# SOUS_SIGN=off goreleaser release --snapshot --clean skips signing.
+# The release workflow runs on macOS with SOUS_SIGN=require and
+# SOUS_SIGN_KEYCHAIN pointing at a throwaway keychain it fills from the
+# repository secrets, so published darwin binaries carry the same designated
+# requirement as local builds. Locally the identity comes from
+# ~/Library/Keychains/sous-signing.keychain-db; on a Mac without it a snapshot
+# fails with instructions, and SOUS_SIGN=off skips signing.
 builds:
   - id: sous
     main: ./cmd/sous

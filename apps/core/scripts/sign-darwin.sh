@@ -9,7 +9,8 @@
 #          systems the script does nothing.
 # Env:     SOUS_SIGN           require (default): fail when the identity is missing;
 #                              auto: warn and keep the linker's ad-hoc signature; off: skip.
-#                              When CI is set (GitHub Actions) the default is off.
+#                              When CI is set (GitHub Actions) the default is off;
+#                              the release workflow sets require.
 #          SOUS_SIGN_DRY_RUN   1: print the codesign command instead of running it
 #          SOUS_SIGN_IDENTITY  certificate name (default: Sous Dev Signing)
 #          SOUS_SIGN_KEYCHAIN  keychain file (default: ~/Library/Keychains/sous-signing.keychain-db)
@@ -27,7 +28,7 @@ set -eu
 if [ -n "${SOUS_SIGN:-}" ]; then
   MODE="$SOUS_SIGN"
 elif [ -n "${CI:-}" ]; then
-  MODE=off # CI machines have no local identity; release signing is a separate decision
+  MODE=off # CI machines have no local identity; the release workflow sets SOUS_SIGN=require
 else
   MODE=require
 fi
