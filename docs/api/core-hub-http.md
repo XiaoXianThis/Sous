@@ -2,7 +2,7 @@
 
 - Provider: core（`sous-hub`）
 - Consumers: web、desktop
-- Status: 草案，随 sous-mvp 评审定稿。定稿后补充 OpenAPI 描述，以描述文件为准。
+- Status: 已实现（M2 起，M3–M5 陆续增补），以代码为准；没有单独的 OpenAPI 描述。
 
 ## 约定
 
@@ -10,7 +10,7 @@
 - 认证：Passkey 登录后下发 HttpOnly 会话 Cookie；会改动数据的请求要带 `X-CSRF-Token` 头。
 - 数据格式：JSON；时间用 Unix 毫秒；ID 用 ULID 字符串。
 - 错误格式：`{"error": {"code": "not_found", "message": "..."}}`。
-- 近期登录：少数危险操作（打开终端、已登录时再加一个 Passkey）要求会话在 15 分钟内用 Passkey 验证过，否则返回 401 `reauth`。页面重新走一遍 `/auth/passkey/login/*`（开发模式下是 `/auth/dev-login`）后重试：已登录时再次验证只刷新当前会话的验证时间，会话和属于它的终端不变。
+- 近期登录：少数危险操作（打开终端、增改模型供应商或 MCP 服务、已登录时再加一个 Passkey）要求会话在 15 分钟内用 Passkey 验证过，否则返回 401 `reauth`。页面重新走一遍 `/auth/passkey/login/*`（开发模式下是 `/auth/dev-login`）后重试：已登录时再次验证只刷新当前会话的验证时间，会话和属于它的终端不变。
 - Passkey 要求用户验证（`userVerification: required`：指纹、面容或 PIN），只碰一下不算。
 - 安全响应头：每个回答都带 `Content-Security-Policy`（只允许本站的脚本、连接和 Worker，禁止内联脚本和被嵌入 iframe）、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`public_url` 是 https 时加 HSTS。请求体最大 4 MB。
 

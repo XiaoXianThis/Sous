@@ -10,9 +10,9 @@
 ## Decision
 
 - 远程管理默认开启。每台机器可以在本地 node.json 里设置 `remote_admin: false` 关掉，远程不能把它重新打开。
-- 请求只带 agent 名和文件 id。要运行的安装、升级、登录、退出命令和能编辑的配置文件，都写死在 `internal/agents` 里；API Key 只能设置每个 agent 列出的变量名。不提供网页终端，也不能指定任意命令或路径。
+- 请求只带 agent 名和文件 id。要运行的安装、升级、登录、退出命令和能编辑的配置文件，都写死在 `internal/agents` 里；API Key 只能设置每个 agent 列出的变量名。不提供网页终端，也不能指定任意命令或路径（网页终端后来由 0015 作为单独的、更严格的能力加上）。
 - 安装和登录在伪终端里运行，页面用 xterm.js 显示，用户可以像在终端里一样回答提示（选菜单、粘贴授权码）。优先使用不需要本机浏览器的登录方式（设备码、打印链接）。
-- 模型和思考强度走 ACP 的 `configOptions` / `session/set_config_option`，每台机器每个 agent 一组默认值，存在 node.json。不按任务单独选模型。
+- 模型和思考强度走 ACP 的 `configOptions` / `session/set_config_option`，每台机器每个 agent 一组默认值，存在 node.json。不按任务单独选模型（0024 起任务可以带自己的模型和思考强度，盖在预设的选项上）。
 - 设备令牌和 API Key 不离开机器：inventory 只报告变量名，编辑 node.json 时显示成 `***`。事件日志记录谁在哪台机器上做了什么，不记录密钥和文件内容。
 
 ## Alternatives
