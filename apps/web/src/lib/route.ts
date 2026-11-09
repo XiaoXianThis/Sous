@@ -11,7 +11,7 @@ export interface Route {
 export const home: Route = { view: 'overview', id: '' }
 
 /** Parses #/, #/projects, #/project=<id>, #/task=<id>, #/inbox and the push forms. */
-export function parseRoute(hash: string): Route & { thread?: string } {
+export function parseRoute(hash: string): Route & { thread?: string; topic?: string } {
   const h = hash.replace(/^#\/?/, '')
   if (h === '' ) return home
   if (h === 'inbox' || h === 'approvals') return { view: 'inbox', id: '' }
@@ -21,6 +21,7 @@ export function parseRoute(hash: string): Route & { thread?: string } {
   if (k === 'project' && v) return { view: 'project', id: v }
   if (k === 'task' && v) return { view: 'task', id: v }
   if (k === 'thread' && v) return { ...home, thread: v }
+  if (k === 'topic' && v) return { ...home, topic: v }
   return home
 }
 

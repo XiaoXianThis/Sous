@@ -32,6 +32,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/router"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 )
 
 const (
@@ -321,6 +322,14 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 	if (in.Place == event.PlaceWorktree || in.Place == event.PlaceInPlace) && (in.ProjectID == "" || in.ProjectID == projectkey.MiscID) {
 		return store.Task{}, fmt.Errorf("%w: %s需要指定项目", ErrInvalid, placeLabel[in.Place])
 	}
+	// Reject incomplete dispatch requests before creating a task or taking
+	// over a consultant's session. Otherwise a retry creates another task.
+	if in.Dispatch {
+		if err := e.ready(ctx, store.Task{Place: in.Place, ProjectID: in.ProjectID,
+			BaseBranch: strings.TrimSpace(in.BaseBranch), BaseFrom: in.BaseFrom}); err != nil {
+			return store.Task{}, err
+		}
+	}
 	var handoff *event.Handoff
 	if in.FromConsult {
 		h, err := e.takeConsultant(ctx, in.ProjectID)
@@ -343,9 +352,16 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		}
 		archived = p.Archived()
 	}
+	// The task belongs to the topic it was asked for in (chat-topics): its
+	// parent's, else the supervisor turn's.
+	topic := tool.TurnFrom(ctx).TopicID
 	if in.ParentID != "" {
-		if _, err := e.store().Task(ctx, in.ParentID); err != nil {
+		parent, err := e.store().Task(ctx, in.ParentID)
+		if err != nil {
 			return store.Task{}, fmt.Errorf("%w: 父任务 %s 不存在", ErrInvalid, in.ParentID)
+		}
+		if parent.TopicID != "" {
+			topic = parent.TopicID
 		}
 	}
 	for _, d := range in.DependsOn {
@@ -364,7 +380,7 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		ParentID: in.ParentID, Kind: in.Kind, Title: in.Title, Detail: strings.TrimSpace(in.Detail), Priority: in.Priority,
 		ProjectID: in.ProjectID, AgentPref: in.Agent, NodePref: in.Node, PermissionMode: in.Mode, PersonaID: in.Persona, DependsOn: in.DependsOn, Status: status,
 		Place: in.Place, Review: in.Review, OnFail: in.OnFail, BaseBranch: strings.TrimSpace(in.BaseBranch), BaseFrom: in.BaseFrom,
-		Handoff: handoff, DeployCommit: in.DeployCommit, Options: in.Options,
+		Handoff: handoff, DeployCommit: in.DeployCommit, Options: in.Options, TopicID: topic,
 	})
 	ev.TaskID = ids.New()
 	if archived {
@@ -378,7 +394,11 @@ func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
 		return store.Task{}, err
 	}
 	if in.Dispatch {
-		return e.Dispatch(ctx, ev.TaskID, "", "", in.Actor)
+		t, err := e.Dispatch(ctx, ev.TaskID, "", "", in.Actor)
+		if err != nil {
+			return store.Task{}, fmt.Errorf("任务 %s 已创建，但派发未完成：%w；先用 task_list 核对，再对这个 id 用 task_update / task_dispatch，不要重复创建", ev.TaskID, err)
+		}
+		return t, nil
 	}
 	return e.store().Task(ctx, ev.TaskID)
 }

@@ -75,6 +75,11 @@ type TriggerPayload struct {
 	Content string `json:"content"`
 	// At is when the trigger fired, by the scheduler's clock (ms).
 	At int64 `json:"at,omitempty"`
+	// TopicID is the topic the trigger belongs to (a task's); empty starts
+	// a topic of its own (chat-topics).
+	TopicID string `json:"topic_id,omitempty"`
+	// Quote is the agent's own words for a question it asks (ask:...).
+	Quote string `json:"quote,omitempty"`
 }
 
 // Severities and actions of an inspector finding.

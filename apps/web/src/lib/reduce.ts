@@ -2,6 +2,7 @@
 // UI so it can be unit tested.
 import { applyJobEvent, type JobView } from './jobs'
 import { applyRunEvent, type RunView } from './runs'
+import { topicOfEvent } from './topics'
 import type { HubEvent, Message, Thread } from './types'
 
 export interface ChatState {
@@ -23,13 +24,19 @@ export interface ChatState {
   runsRev: number
   /** Bumped when a thread's context segment changes (thread.compacted). */
   contextRev: number
+  /** Bumped when a topic may have changed: its messages, its tasks or itself. */
+  topicsRev: number
+  /** The topic the supervisor is working on, by thread (message.seen). */
+  answering: Record<string, string>
+  /** Messages the supervisor attached to another topic, by id: the topic they started. */
+  moved: Record<string, string>
   runs: Record<string, RunView>
   /** Installs and logins on machines, by job id. */
   jobs: Record<string, JobView>
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, contextRev: 0, runs: {}, jobs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, contextRev: 0, topicsRev: 0, answering: {}, moved: {}, runs: {}, jobs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -102,6 +109,7 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
   }
   if (ev.type.startsWith('task.') || ev.type.startsWith('project.')) {
     state.tasksRev++
+    if (ev.type.startsWith('task.')) state.topicsRev++
     if (ev.type === 'task.status' || ev.type === 'task.updated' || ev.type === 'task.git') state.inboxRev++
     return true
   }
@@ -143,6 +151,8 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     }
     case 'message.user':
     case 'message.assistant': {
+      const role = ev.type === 'message.user' ? 'user' : 'assistant'
+      const topic = topicOfEvent(role, p.kind || undefined, p.message_id, p.topic_id)
       upsertMessage(state, {
         id: p.message_id,
         thread_id: ev.thread_id!,
@@ -155,12 +165,41 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         context: p.context || undefined,
         source: p.source || undefined,
         tools: p.tools?.length ? p.tools : undefined,
+        ...(topic && { topic_id: topic }),
+        ...(ev.task_id && { task_id: ev.task_id }),
         seq: ev.seq,
         created_at: ev.ts,
       })
+      // A reply that ends a turn: the supervisor is off that topic.
+      if (role === 'assistant' && p.kind !== 'step' && p.reply_to && state.answering[ev.thread_id!] === topic) delete state.answering[ev.thread_id!]
+      state.topicsRev++
       touch(state, ev.thread_id!, ev.ts)
       break
     }
+    case 'message.moved': {
+      const msgs = list(state, ev.thread_id!)
+      const i = msgs.findIndex((x) => x.id === p.message_id)
+      if (i >= 0) msgs[i] = { ...msgs[i], topic_id: p.topic_id }
+      if (p.topic_id === p.message_id) delete state.moved[p.message_id]
+      else state.moved[p.message_id] = p.from
+      state.topicsRev++
+      break
+    }
+    case 'message.seen': {
+      const msgs = list(state, ev.thread_id!)
+      for (const id of p.message_ids ?? []) {
+        const i = msgs.findIndex((x) => x.id === id)
+        if (i >= 0) {
+          msgs[i] = { ...msgs[i], seen: true }
+          // The first one names the topic the turn is on.
+          if (!state.answering[ev.thread_id!] && msgs[i].topic_id) state.answering[ev.thread_id!] = msgs[i].topic_id!
+        }
+      }
+      break
+    }
+    case 'topic.updated':
+      state.topicsRev++
+      break
     case 'message.tools': {
       // The supervisor's tool calls after one of its messages (the full list so far).
       const msgs = list(state, ev.thread_id!)
@@ -176,9 +215,12 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
         role: 'user',
         content: p.content,
         kind: 'trigger',
+        topic_id: p.topic_id || p.message_id,
+        ...(ev.task_id && { task_id: ev.task_id }),
         seq: ev.seq,
         created_at: ev.ts,
       })
+      state.topicsRev++
       touch(state, ev.thread_id!, ev.ts)
       if (p.schedule_id) state.schedulesRev++
       break

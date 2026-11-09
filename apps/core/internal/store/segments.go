@@ -52,7 +52,7 @@ func (s *Store) LatestSegment(ctx context.Context, threadID string) (Segment, er
 // first.
 func (s *Store) MessagesAfter(ctx context.Context, threadID string, after int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools, topic_id, task_id
 		 FROM messages WHERE thread_id = ? AND event_seq > ? ORDER BY event_seq`, threadID, after)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (s *Store) MessagesAround(ctx context.Context, threadID string, seq int64, 
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools, topic_id, task_id
 		 FROM messages WHERE thread_id = ? AND event_seq > ? ORDER BY event_seq LIMIT ?`, threadID, seq, after)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (s *Store) SearchMessages(ctx context.Context, threadID, query string, limi
 		args = append(args, t)
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools, topic_id, task_id
 		 FROM messages WHERE `+where+`kind != 'silent' AND (`+strings.Join(conds, " OR ")+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ func (s *Store) RecentThreadUsage(ctx context.Context, threadID, role string, n 
 // MessageBySeq returns the message stored by the event seq.
 func (s *Store) MessageBySeq(ctx context.Context, seq int64) (Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools
+		`SELECT id, thread_id, role, content, error, reply_to, kind, event_seq, created_at, context, attachments, source, tools, topic_id, task_id
 		 FROM messages WHERE event_seq = ?`, seq)
 	if err != nil {
 		return Message{}, err

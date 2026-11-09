@@ -50,8 +50,12 @@ func projectAuto(w *Writer, ev event.Event) error {
 			}
 		}
 		// The supervisor reads it like a user message of its thread.
-		if err := exec(`INSERT INTO messages(id, thread_id, role, content, kind, event_seq, created_at) VALUES (?,?,?,?,?,?,?)`,
-			p.MessageID, ev.ThreadID, "user", p.Content, event.KindTrigger, ev.Seq, ev.TS); err != nil {
+		topic, err := topicOfMessage(w, ev, p.MessageID, "user", event.KindTrigger, p.TopicID, p.Title, p.Content)
+		if err != nil {
+			return err
+		}
+		if err := exec(`INSERT INTO messages(id, thread_id, role, content, kind, event_seq, created_at, topic_id, task_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			p.MessageID, ev.ThreadID, "user", p.Content, event.KindTrigger, ev.Seq, ev.TS, topic, ev.TaskID); err != nil {
 			return err
 		}
 		return exec(`UPDATE threads SET updated_at = ? WHERE id = ?`, ev.TS, ev.ThreadID)

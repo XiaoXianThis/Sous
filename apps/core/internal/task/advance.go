@@ -634,9 +634,20 @@ func (e *Engine) post(ctx context.Context, t store.Task, text string, notify boo
 	}
 	msgID := ids.New()
 	ev := event.New(event.MessageAssistant, event.ActorSupervisor, thread,
-		event.MessagePayload{MessageID: msgID, Content: text, Kind: event.KindReport, Notify: notify})
+		event.MessagePayload{MessageID: msgID, Content: text, Kind: event.KindReport, Notify: notify,
+			TopicID: t.TopicID, TopicTitle: t.Title})
 	ev.TaskID = t.ID
-	if _, err := e.Log.Append(ctx, ev); err != nil {
+	evs := []event.Event{ev}
+	if t.TopicID == "" && t.ID != "" {
+		// A task without a topic (made on the workbench, or by the engine)
+		// gets the one its first report starts (chat-topics).
+		topic := msgID
+		up := event.New(event.TaskUpdated, event.ActorSystem, thread, event.TaskUpdatedPayload{TopicID: &topic})
+		up.TaskID = t.ID
+		evs = append(evs, up)
+		t.TopicID = topic
+	}
+	if _, err := e.Log.Append(ctx, evs...); err != nil {
 		slog.Error("task: post report", "task", t.ID, "err", err)
 		return
 	}

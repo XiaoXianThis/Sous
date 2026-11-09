@@ -184,7 +184,12 @@ func (n *Notifier) message(ctx context.Context, ev event.Event, kind string) (Me
 		if p.Reason != "" {
 			body += "：" + p.Reason
 		}
-		return Message{Title: title, Body: clip(body), URL: "/#task=" + ev.TaskID, Tag: "task-" + ev.TaskID, Kind: kind}, true
+		url, tag := "/#task="+ev.TaskID, "task-"+ev.TaskID
+		if t, err := st.Task(ctx, ev.TaskID); err == nil && t.TopicID != "" {
+			// One notification per topic: news of the same topic replaces it.
+			url, tag = "/#topic="+t.TopicID, "topic-"+t.TopicID
+		}
+		return Message{Title: title, Body: clip(body), URL: url, Tag: tag, Kind: kind}, true
 	case event.InspectorFinding:
 		var p event.FindingPayload
 		ev.Decode(&p)
@@ -200,7 +205,14 @@ func (n *Notifier) message(ctx context.Context, ev event.Event, kind string) (Me
 	case event.MessageAssistant:
 		var p event.MessagePayload
 		ev.Decode(&p)
-		return Message{Title: "sous", Body: clip(p.Content), URL: "/#thread=" + ev.ThreadID, Tag: "msg-" + p.MessageID, Kind: kind}, true
+		url, tag := "/#thread="+ev.ThreadID, "msg-"+p.MessageID
+		if topic := p.TopicID; topic != "" || p.Kind == event.KindReport || p.Kind == event.KindNotice {
+			if topic == "" {
+				topic = p.MessageID // the message started its topic
+			}
+			url, tag = "/#topic="+topic, "topic-"+topic
+		}
+		return Message{Title: "sous", Body: clip(p.Content), URL: url, Tag: tag, Kind: kind}, true
 	}
 	return Message{}, false
 }

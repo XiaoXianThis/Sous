@@ -33,6 +33,7 @@ var ConsultWait = 10 * time.Minute
 type consultAsk struct {
 	ThreadID string
 	ReplyTo  int64
+	TopicID  string
 }
 
 // ConsultInput is one question for a project's consultant.
@@ -43,6 +44,7 @@ type ConsultInput struct {
 	NodeID    string
 	ThreadID  string
 	ReplyTo   int64
+	TopicID   string
 	// Agent and Options (model, effort) pick who answers a new session
 	// (decision 0024); a session going on keeps its own.
 	Agent   string
@@ -99,7 +101,7 @@ func (e *Engine) Consult(ctx context.Context, in ConsultInput) (ConsultAnswer, e
 		e.closeConsultant(ctx, p.ID, cur, "换了一个话题")
 		has = false
 	}
-	ask := consultAsk{ThreadID: in.ThreadID, ReplyTo: in.ReplyTo}
+	ask := consultAsk{ThreadID: in.ThreadID, ReplyTo: in.ReplyTo, TopicID: in.TopicID}
 	ch := make(chan event.Event, 8)
 	var runID string
 	if has && (cur.Status == event.RunStatusRunning || cur.Status == event.RunStatusQueued) {
@@ -231,7 +233,7 @@ func (e *Engine) postAnswer(ctx context.Context, r store.Run, p store.Project, a
 	e.dropAsk(r.ID)
 	thread := firstNonEmpty(ask.ThreadID, r.ThreadID)
 	ev := event.New(event.MessageAssistant, event.ActorSystem, thread, event.MessagePayload{
-		MessageID: ids.New(), Content: text, Kind: event.KindConsult, ReplyTo: ask.ReplyTo,
+		MessageID: ids.New(), Content: text, Kind: event.KindConsult, ReplyTo: ask.ReplyTo, TopicID: ask.TopicID,
 		Source: &event.MessageSource{RunID: r.ID, Agent: r.Agent, ProjectID: p.ID, Project: p.Name, NodeID: r.NodeID},
 	})
 	ev.RunID = r.ID

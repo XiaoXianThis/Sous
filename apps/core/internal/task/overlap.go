@@ -109,12 +109,13 @@ func (e *Engine) checkOverlap(ctx context.Context, t store.Task, r store.Run) {
 // followup wakes the supervisor with a note only it reads (a trigger in the
 // task's thread, else the main thread), once per key.
 func (e *Engine) followup(ctx context.Context, t store.Task, key, title, content string) {
-	e.fire(ctx, t.OriginThreadID, event.TriggerFollowup, key, title, content)
+	e.fire(ctx, t, event.TriggerFollowup, key, title, content)
 }
 
 // fire appends a trigger for the supervisor of a thread (the main thread
 // when empty), once per key.
-func (e *Engine) fire(ctx context.Context, thread, kind, key, title, content string) {
+func (e *Engine) fire(ctx context.Context, t store.Task, kind, key, title, content string) {
+	thread := t.OriginThreadID
 	if at, err := e.store().TriggerFiredAt(ctx, key); err != nil || at > 0 {
 		return
 	}
@@ -126,8 +127,9 @@ func (e *Engine) fire(ctx context.Context, thread, kind, key, title, content str
 	}
 	ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
 		Kind: kind, Key: key, MessageID: ids.New(), Title: title, Content: content,
-		At: time.Now().UnixMilli(),
+		At: time.Now().UnixMilli(), TopicID: e.topicOf(ctx, t),
 	})
+	ev.TaskID = t.ID
 	if _, err := e.Log.Append(ctx, ev); err != nil {
 		slog.Error("task: trigger", "key", key, "err", err)
 	}
@@ -135,7 +137,7 @@ func (e *Engine) fire(ctx context.Context, thread, kind, key, title, content str
 
 // tell is a task trigger whose content already says what to do.
 func (e *Engine) tell(ctx context.Context, t store.Task, key, title, content string) {
-	e.fire(ctx, t.OriginThreadID, event.TriggerTask, key, title, content)
+	e.fire(ctx, t, event.TriggerTask, key, title, content)
 }
 
 // wakeNote ends every task trigger: what the supervisor is to do with it.
@@ -146,5 +148,17 @@ const wakeNote = "\n\n（这是 sous 的自动通知，不是用户发的消息�
 // wake tells the supervisor about a task's news (decision 0025): the
 // report the user just got, or why the task stopped.
 func (e *Engine) wake(ctx context.Context, t store.Task, key, title, content string) {
-	e.fire(ctx, t.OriginThreadID, event.TriggerTask, key, title, content+wakeNote)
+	e.fire(ctx, t, event.TriggerTask, key, title, content+wakeNote)
+}
+
+// topicOf is the topic of a task as stored now: a report earlier in the
+// same pass may have just given it one.
+func (e *Engine) topicOf(ctx context.Context, t store.Task) string {
+	if t.ID == "" {
+		return t.TopicID
+	}
+	if cur, err := e.store().Task(ctx, t.ID); err == nil {
+		return cur.TopicID
+	}
+	return t.TopicID
 }

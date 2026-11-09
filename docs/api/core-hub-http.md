@@ -25,16 +25,20 @@
 | GET | `/me` | `{logged_in, has_passkey, dev_login}`，不需要登录 |
 | GET/POST | `/threads` | 列出、创建线程。`GET /threads` 只列一般线程（主线和普通对话）；`GET /threads?project_id=<id>` 列这个项目的项目对话。`POST /threads {"title", "project_id"?}` 带 `project_id` 时建项目对话（`kind: project`，项目不存在返回 404）。线程对象带 `project_id`（只在项目对话上有） |
 | GET/PATCH | `/threads/{id}` | 读取、改名或归档 |
-| GET | `/threads/{id}/messages?before=&limit=` | 分页读取历史消息（按 seq 从旧到新；用户消息带 `attachments: [{id, name, mime, size}]`）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点 |
+| GET | `/threads/{id}/messages?before=&limit=&topic=` | 分页读取历史消息（按 seq 从旧到新；用户消息带 `attachments: [{id, name, mime, size}]`；消息带 `topic_id`（话题）、汇报带 `task_id`）；返回 `{messages, last_seq}`，`last_seq` 是全局最新的事件序号，客户端用它作为 `/ws?since=` 的起点。带 `topic=<id>` 只取这个话题的消息，`topic=`（空）取话题出现之前的旧消息 |
+| GET | `/threads/{id}/topics` | 话题列表（见下文“话题”）：`{topics: [{id, thread_id, title, summary, status, first_seq, created_at, updated_at, count, last?, tasks}], earlier: {count, last?}}`，按 `updated_at` 倒序，最多 200 个。`summary` 是主管维护的当前结论（关闭时是总结），`last` 是最新一条有内容的消息，`tasks` 是这个话题的任务（完整的 Task）；`earlier` 是没有话题的旧消息 |
+| GET/PATCH | `/topics/{id}` | 读取话题；用户改标题、关闭和重新打开 `{title?, status?: "open"\|"closed"}`，推送 `topic.updated` |
+| POST | `/messages/{id}/move` | 撤销并入 `{topic_id}`：只能把用户消息移回它自己开的话题（`topic_id` 等于消息 id，否则 400），推送 `message.moved`；移回后它没被回复，主管会单独回答 |
 | GET | `/threads/{id}/context` | 对话的上下文（见下文“上下文”）：`{segment, covers_up_to, summary, profile, reason?, compacted_at?, used, window, soft, hard, cache: {calls, input_tokens, cached_tokens, last_input}}`。`segment` 为 0 表示还没有第一段；`used` 是下一轮输入 token 的估算；`cache` 汇总主管在这条对话里最近 20 次调用 |
 | POST | `/threads/{id}/compact` | 立即把较早的消息整理进摘要（原因 `manual`），返回 202 `{queued: true}`；在这条对话正在进行的回合结束后执行，完成时 `/ws` 推送 `thread.compacted` |
 | PUT | `/threads/{id}/summary` | 用户改写摘要 `{"summary": "..."}`（最多 20000 字），返回 202；开始新的一段（原因 `edit`），覆盖的消息不变 |
-| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?, mentions?: [{project_id, name}]}, "attachments"?: [附件 id]}`（只有附件、`content` 为空也可以；附件 id 必须是 `POST /attachments` 返回的，最多 8 个，否则 400 `bad_attachment`），返回 202 `{message_id, seq}`；回复通过 `/ws` 推送。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么。`context.mentions` 是用户在正文里用 `@名字` 引用的项目（`name` 是正文 @ 后面的文字）：Hub 去掉没有 `project_id` 的和重复的，最多留 16 个，原样存进消息的 `context`，并在给主管的这条用户消息前注明每个 @ 对应的项目和 id；只有 `mentions` 时不算“正在看”的项目。项目对话里主管的作用域限定在这个项目：环境只列这个项目和它的任务，`task_create` 不填 `project` 时归到这个项目，动别的项目或别的项目的任务会被拒绝 |
+| POST | `/threads/{id}/messages` | 发送消息 `{"content": "...", "context"?: {project_id?, task_id?, mentions?: [{project_id, name}]}, "attachments"?: [附件 id]}`（只有附件、`content` 为空也可以；附件 id 必须是 `POST /attachments` 返回的，最多 8 个，否则 400 `bad_attachment`），返回 202 `{message_id, seq, topic_id}`；回复通过 `/ws` 推送。`topic_id`（可选）是要继续的话题，必须属于这个线程（否则 404）；不填就开一个新话题，它的 id 就是消息 id。`context` 是用户写这条消息时在工作台上看的项目或任务，主管据此理解“这个”指什么。`context.mentions` 是用户在正文里用 `@名字` 引用的项目（`name` 是正文 @ 后面的文字）：Hub 去掉没有 `project_id` 的和重复的，最多留 16 个，原样存进消息的 `context`，并在给主管的这条用户消息前注明每个 @ 对应的项目和 id；只有 `mentions` 时不算“正在看”的项目。项目对话里主管的作用域限定在这个项目：环境只列这个项目和它的任务，`task_create` 不填 `project` 时归到这个项目，动别的项目或别的项目的任务会被拒绝 |
 | POST | `/attachments?name=<文件名>` | 上传一个文件：请求体是文件本身的字节（不是 JSON），最多 20 MB。返回 201 `{id, name, mime, size}`。类型由 Hub 按内容判断，不信客户端：PNG / JPEG / GIF / WebP 是图片（`image/*`），UTF-8 文本是 `text/plain`，PDF 是 `application/pdf`，其余（包括 SVG、HTML）一律 `application/octet-stream`。文件名里的路径分隔符会被换成 `_` |
 | GET | `/attachments/{id}` | 取回附件。图片 `inline` 显示，其余带 `Content-Disposition: attachment` 下载，永远不会当页面运行 |
 | GET | `/tasks?status=a,b&project_id=&thread_id=&parent_id=` | 列出任务（优先级高的在前，同级按创建时间） |
 | POST | `/tasks` | 创建 `{title, detail?, kind?, project_id?, persona_id?, priority?, agent_pref?, node_pref?, permission_mode?, parent_id?, depends_on?, thread_id?, dispatch?, place?, review?, on_fail?, base_branch?, base_from?}`，返回 201。决策 0022：`place`（`worktree` / `in_place` / `scratch`）、`base_branch` + `base_from`（`local` / `remote`，`place: worktree` 时需要）没有默认值：可以先不填，但派发前必须定下（否则 400）。决策 0024：`review`（`none` / `model` / `agent` / `user`）不填就是 `none`；要验收时 `on_fail`（`rework` / `ask`）不填就是 `rework`。`kind` 只是标签（`code` / `general` / `ops`），缺省时 `scratch` 是 `general`、其余是 `code`。`worktree` 和 `in_place` 必须指定项目；没有项目的任务归到内置项目 `misc`（杂项）。用户创建且不派发的进 `inbox` |
-| GET | `/tasks/{id}` | `{task, runs, subtasks}` |
+| GET | `/tasks/{id}` | `{task, runs, subtasks}`；任务带 `topic_id`（所属的话题） |
+| GET | `/tasks/{id}/talk` | 主管（或用户）和这个任务的 agent 之间说了什么，按顺序：`{talk: [{seq, ts, from, to, kind, title, text, run_id?, agent?}]}`。`kind`：`prompt`（派发、返工、验收、交付的提示词）、`message`（追加指令）、`progress`（agent 的进度）、`ask`（agent 的提问，原话）、`result`（Run 的总结，失败时带原因）、`review`（验收结论）、`report`（汇报）；`from` / `to` 是 `supervisor`、`user`、`agent`、`reviewer`、`sous`。git 和顾问的 Run 不列出 |
 | PATCH | `/tasks/{id}` | 修改字段（只改出现的字段），`depends_on` 整体替换（成环时 400）；`dismissed: true` 表示用户看过了（从首页移除）；`status` 只能手动改成 `inbox`/`planned`/`blocked`/`done`/`cancelled`，执行中的任务要先取消（409） |
 | POST | `/tasks/{id}/dispatch` | 派发或重试 `{"node_id"?, "agent"?}`（会记到任务上）。有空闲机器就开始，否则排队（`queued`）；缺少上面那些属性时 400；分支已经合并、丢弃或开了 PR 的任务 409 |
 | POST | `/tasks/{id}/verdict` | 用户对等验收任务的结论 `{pass, reason?}`：通过就结束，不通过（要写 `reason`）就照着返工；任务不在等验收时 409 |
@@ -136,6 +140,8 @@
 **推送**：通知点开后打开 PWA 的哈希路由：`/#approvals`、`/#task=<id>`、`/#thread=<id>`。M5 起工作台自己的路由是 `/#/`、`/#/projects`、`/#/project=<id>`、`/#/task=<id>`、`/#/inbox`，旧的三种链接仍然有效。
 
 **记忆**：`{id, kind: "profile"|"project"|"lesson"|"note", content, created_at, updated_at}`。记忆变化时，`/ws` 推送 `memory.put` / `memory.deleted` 事件。
+
+**话题**（决策 0027，`work/specs/chat-topics`）：一条对话的消息按话题整理。没有 `topic_id` 的用户消息、trigger、汇报、通知、巡检提示自己开一个话题，话题 id 就是消息 id，标题取消息的 `topic_title` 或正文第一行（最多 30 字）；主管自己的回复不开话题。用户消息、trigger 和这几类通知会把关闭的话题重新打开。任务属于建它的回合的话题，子任务属于父任务的话题；没有话题的任务第一次汇报时，汇报开的话题就是它的话题。主管一轮只回答一个话题（最早有未回复消息的那个）；回合中途发来的同一话题的消息插进这一轮，自成新话题的消息由主管判断是否并入（`message.moved`）。事件：`topic.updated`（`{topic_id, title?, summary?, status?}`）；`message.moved`（`{message_id, topic_id, from}`）；临时事件 `message.seen`（`{message_ids}`，主管开始处理或插进当前回合，不入库）。消息和 trigger 的 payload 多了 `topic_id`、`topic_title`；agent 提问的 trigger 带 `quote`（原话）并带上任务和 Run。推送：消息和任务状态有话题时 tag 是 `topic-<id>`（同一话题的通知互相替换），链接是 `/#topic=<id>`。`topic.updated` 不发给设备令牌。
 
 **上下文**：一条对话的上下文分成若干段。每段开头是用户画像记忆的快照和一份摘要，摘要代替 `covers_up_to` 及以前的消息；之后的消息原样发给模型。占用超过窗口的 60%（`soft`）时，回合结束后自动整理一次；超过 85%（`hard`）时先整理再回复。整理先让模型把值得记住的写进记忆，再生成新摘要，然后推送 `thread.compacted`（`{segment, covers_up_to, summary, profile, reason, input_tokens?, model?}`，`reason` 是 `start` / `soft` / `hard` / `overflow` / `manual` / `edit`）。消息本身不删不改，`/threads/{id}/messages` 照样能翻到全部历史。
 

@@ -471,6 +471,26 @@ UPDATE tasks SET
  CREATE TABLE approval_checks (id TEXT PRIMARY KEY, approval_id TEXT NOT NULL, run_id TEXT NOT NULL, tool TEXT NOT NULL, args_digest TEXT NOT NULL, summary TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL);
  CREATE INDEX approval_checks_run ON approval_checks(run_id);
 `,
+	// Topics within a thread (work/specs/chat-topics); messages and tasks
+	// belong to one. Events are looked up by task for the conversation
+	// between the supervisor and a task's agents.
+	`CREATE TABLE topics (
+  id         TEXT PRIMARY KEY,
+  thread_id  TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  summary    TEXT NOT NULL DEFAULT '',
+  status     TEXT NOT NULL DEFAULT 'open',
+  first_seq  INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX topics_thread ON topics(thread_id, updated_at);
+ALTER TABLE messages ADD COLUMN topic_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN task_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX messages_topic ON messages(thread_id, topic_id, event_seq);
+ALTER TABLE tasks ADD COLUMN topic_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX events_task ON events(task_id, seq);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

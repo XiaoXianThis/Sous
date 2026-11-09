@@ -39,3 +39,4 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0024](0024-presets-machine-agents-and-a-lighter-supervisor.md) | 预设、每台电脑的 agent，以及更顺手的主管 | Accepted |
 | [0025](0025-supervisor-loop.md) | 主管的闭环：任务进展叫醒主管、结构化结果、子 agent 能问能报、路由只是偏好 | Accepted |
 | [0026](0026-self-signed-darwin-releases.md) | 发布的 macOS 二进制用自签名证书签名 | Accepted |
+| [0027](0027-chat-topics.md) | 对话按话题整理：一份上下文，按话题分轮和显示 | Accepted |

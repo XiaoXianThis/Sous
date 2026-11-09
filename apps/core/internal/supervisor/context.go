@@ -118,15 +118,10 @@ func plain(m store.Message) store.Message {
 // clipAnswered clips every message the thread has already answered; the
 // messages of the coming turn are shown in full.
 func clipAnswered(msgs []store.Message) []store.Message {
-	var answered int64
-	for _, m := range msgs {
-		if m.Role == "assistant" && m.Kind != event.KindStep && m.Kind != event.KindConsult && m.ReplyTo > answered {
-			answered = m.ReplyTo
-		}
-	}
+	answered := answers(msgs)
 	out := make([]store.Message, len(msgs))
 	for i, m := range msgs {
-		if m.Seq <= answered || m.Role == "assistant" {
+		if m.Seq <= answered[m.TopicID] || m.Role == "assistant" {
 			m = clip(m)
 		}
 		out[i] = m
@@ -244,7 +239,7 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 		b.head = 0
 		msgs = append(msgs, provider.Text(provider.RoleUser, h))
 	}
-	msgs = append(msgs, toProviderWith(s.opt.Attachments, clipAnswered(history), func(c event.MessageContext) string {
+	msgs = append(msgs, toProviderWith(s.opt.Attachments, s.topicLabels(ctx, clipAnswered(history)), func(c event.MessageContext) string {
 		if s.opt.DescribeContext == nil {
 			return ""
 		}
@@ -262,6 +257,7 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 			Now:      s.opt.Now(),
 			Machines: s.environment(ctx, thread.ID),
 			Memories: s.recall(ctx, history, seg.Profile, changed), ProfileChanged: changed, ProfileGone: gone,
+			Topic: s.topicEnv(ctx, tool.TurnFrom(ctx).TopicID),
 		})
 		m := msgs[b.lastUser]
 		parts := append(append([]provider.Part{}, m.Parts...), provider.Part{Text: "\n\n" + tail})
@@ -273,7 +269,7 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 			ThreadTitle: thread.Title, ThreadKind: thread.Kind, Project: project,
 		}),
 		Messages: msgs,
-		Tools:    append(s.opt.Tools.Specs(), silentSpec),
+		Tools:    append(append(s.opt.Tools.Specs(), silentSpec), topicSpecs...),
 	}
 	b.cacheAt()
 	return b
@@ -309,7 +305,7 @@ func (s *Supervisor) trim(ctx context.Context, thread store.Thread, seg store.Se
 	if over <= 0 {
 		return history, b
 	}
-	upTo := unanswered(history)
+	upTo := oldestPending(history)
 	drop := 0
 	for drop < len(history) && over > 0 {
 		m := history[drop]

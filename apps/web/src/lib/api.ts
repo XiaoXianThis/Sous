@@ -1,7 +1,7 @@
 // REST client for docs/api/core-hub-http.md.
 import type {
   AgentInfo, Attachment, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
-  Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, McpView, Settings, ThreadContext, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext,
+  Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, McpView, Settings, ThreadContext, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext, Topic, Talk,
 } from './types'
 
 export interface McpInput {
@@ -193,8 +193,25 @@ export const api = {
   readFile: (id: string, agent: string, file: string) => request<ConfigFile>('GET', `/api/v1/nodes/${id}/files/${agent}/${file}`),
   writeFile: (id: string, agent: string, file: string, content: string, base: string) =>
     request<ConfigFile>('PUT', `/api/v1/nodes/${id}/files/${agent}/${file}`, { content, base_sha256: base }),
-  send: (threadId: string, content: string, context?: MessageContext, attachments?: string[]) =>
-    request<{ message_id: string; seq: number }>('POST', `/api/v1/threads/${threadId}/messages`, { content, context, attachments }),
+  /** Sends a message; without a topic it starts one (its id is the message id). */
+  send: (threadId: string, content: string, context?: MessageContext, attachments?: string[], topicId = '') =>
+    request<{ message_id: string; seq: number; topic_id: string }>('POST', `/api/v1/threads/${threadId}/messages`, {
+      content, context, attachments, ...(topicId && { topic_id: topicId }),
+    }),
+  topics: (threadId: string) =>
+    request<{ topics: Topic[]; earlier: { count: number; last?: Message } }>('GET', `/api/v1/threads/${threadId}/topics`),
+  topic: (id: string) => request<Topic>('GET', `/api/v1/topics/${encodeURIComponent(id)}`),
+  /** A topic's messages; '' is the thread's messages from before topics. */
+  topicMessages: (threadId: string, topicId: string, before = 0) =>
+    request<{ messages: Message[]; last_seq: number }>(
+      'GET',
+      `/api/v1/threads/${threadId}/messages?limit=200&topic=${encodeURIComponent(topicId)}${before ? `&before=${before}` : ''}`,
+    ),
+  patchTopic: (id: string, patch: { title?: string; status?: 'open' | 'closed' }) =>
+    request<Topic>('PATCH', `/api/v1/topics/${encodeURIComponent(id)}`, patch),
+  /** Takes an attached message back into the topic it started. */
+  moveMessage: (id: string, topicId: string) => request<Message>('POST', `/api/v1/messages/${encodeURIComponent(id)}/move`, { topic_id: topicId }),
+  taskTalk: (id: string) => request<{ talk: Talk[] }>('GET', `/api/v1/tasks/${encodeURIComponent(id)}/talk`),
   /** Stores a file for a message to refer to; the Hub decides its type from the bytes. */
   upload: (file: Blob, name: string) => upload(file, name),
 

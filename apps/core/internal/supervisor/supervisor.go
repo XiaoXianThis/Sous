@@ -35,6 +35,9 @@ const (
 	// DefaultTaskBatch is how long task news waits for more before the
 	// supervisor takes it up, so a burst is one turn.
 	DefaultTaskBatch = 20 * time.Second
+	// DefaultGather is how long the Hub lets an idle thread wait for more
+	// quick messages before a turn (Options.Gather).
+	DefaultGather = 1500 * time.Millisecond
 )
 
 // wrapUpNote is added to the results before the last step of a turn.
@@ -66,6 +69,10 @@ type Options struct {
 	// TaskBatch is how long task triggers wait before a turn; 0 means
 	// DefaultTaskBatch, negative means no wait.
 	TaskBatch time.Duration
+	// Gather is how long an idle thread waits after a user message before
+	// its turn starts, so a few quick messages are one turn (chat-topics);
+	// 0 means no wait. A thread in a turn takes new messages in at once.
+	Gather time.Duration
 }
 
 type Supervisor struct {
@@ -78,6 +85,7 @@ type Supervisor struct {
 	ops      map[string][]func() // run by a thread's worker after its turn
 	failures map[string]int      // failed compactions in a row, by thread
 	batches  map[string]bool     // threads with task news waiting to be taken up
+	gathers  map[string]bool     // idle threads waiting for more user messages
 }
 
 func New(opt Options) *Supervisor {
@@ -90,7 +98,7 @@ func New(opt Options) *Supervisor {
 	if opt.TaskBatch == 0 {
 		opt.TaskBatch = DefaultTaskBatch
 	}
-	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}}
+	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}, gathers: map[string]bool{}}
 }
 
 // Start subscribes to stored events. Turns run until ctx is cancelled; Wait
@@ -108,6 +116,14 @@ func (s *Supervisor) Start(ctx context.Context) {
 					return
 				}
 			}
+			if ev.Type == event.MessageUser && s.opt.Gather > 0 {
+				s.gather(ev.ThreadID)
+				return
+			}
+			s.signal(ev.ThreadID)
+		}
+		if ev.Type == event.MessageMoved && ev.ThreadID != "" {
+			// A message taken back out of a topic waits for its own turn.
 			s.signal(ev.ThreadID)
 		}
 	})
@@ -126,6 +142,33 @@ func (s *Supervisor) later(threadID string) {
 	time.AfterFunc(s.opt.TaskBatch, func() {
 		s.mu.Lock()
 		delete(s.batches, threadID)
+		s.mu.Unlock()
+		if s.ctx.Err() == nil {
+			s.signal(threadID)
+		}
+	})
+}
+
+// gather starts an idle thread's turn after Gather, so messages sent in
+// quick succession are one turn. A thread in a turn is signalled at once:
+// the turn takes the message in, or the next one answers it.
+func (s *Supervisor) gather(threadID string) {
+	s.mu.Lock()
+	_, busy := s.queues[threadID]
+	if busy {
+		s.mu.Unlock()
+		s.signal(threadID)
+		return
+	}
+	if s.gathers[threadID] {
+		s.mu.Unlock()
+		return
+	}
+	s.gathers[threadID] = true
+	s.mu.Unlock()
+	time.AfterFunc(s.opt.Gather, func() {
+		s.mu.Lock()
+		delete(s.gathers, threadID)
 		s.mu.Unlock()
 		if s.ctx.Err() == nil {
 			s.signal(threadID)
@@ -158,7 +201,13 @@ func (s *Supervisor) worker(threadID string, ch chan struct{}) {
 	for {
 		select {
 		case <-ch:
-			s.turn(threadID)
+			if s.turn(threadID) {
+				// Another topic is waiting: it gets the next turn.
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
 			s.runOps(threadID)
 			if s.ctx.Err() == nil {
 				s.maybeCompact(threadID)
@@ -206,40 +255,86 @@ func (s *Supervisor) runOps(threadID string) {
 
 func newID() string { return ids.New() }
 
-func (s *Supervisor) turn(threadID string) {
+// turnState is what a turn keeps track of while it runs.
+type turnState struct {
+	thread string
+	topic  string
+	// upTo is the newest user message the turn answers; follow-ups taken
+	// in move it on.
+	upTo int64
+	// cursor is the newest message the turn has looked at.
+	cursor int64
+	// attachable are messages that started a topic of their own during the
+	// turn and may be follow-ups (topic_attach), by id.
+	attachable map[string]int64
+}
+
+// turn answers the topic that has waited longest, and reports whether
+// another one is waiting now.
+func (s *Supervisor) turn(threadID string) bool {
+	before, ok := s.answerTopic(threadID)
+	if !ok || s.ctx.Err() != nil {
+		return false
+	}
+	seg, err := s.opt.Log.Store.LatestSegment(s.ctx, threadID)
+	if err != nil {
+		return false
+	}
+	history, err := s.opt.Log.Store.MessagesAfter(s.ctx, threadID, seg.CoversUpTo)
+	if err != nil {
+		return false
+	}
+	next := pendingTopics(history)
+	// Only go on when something changed, so input a turn cannot answer
+	// does not spin.
+	return len(next) > 0 && (next[0].ID != before.ID || next[0].Oldest != before.Oldest || next[0].Newest != before.Newest)
+}
+
+// answerTopic runs one turn and returns the topic it took up.
+func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 	ctx := s.ctx
 	st := s.opt.Log.Store
 	thread, err := st.Thread(ctx, threadID)
 	if err != nil {
 		slog.Error("supervisor: load thread", "thread", threadID, "err", err)
-		return
+		return pendingTopic{}, false
 	}
 	seg, err := s.segment(ctx, threadID)
 	if err != nil {
 		slog.Error("supervisor: load segment", "thread", threadID, "err", err)
-		return
+		return pendingTopic{}, false
 	}
-	history, err := st.MessagesAfter(ctx, threadID, seg.CoversUpTo)
+	all, err := st.MessagesAfter(ctx, threadID, seg.CoversUpTo)
 	if err != nil {
 		slog.Error("supervisor: load messages", "thread", threadID, "err", err)
-		return
+		return pendingTopic{}, false
 	}
-	upTo := unanswered(history)
-	if upTo == 0 {
-		return // every user message already has a reply
+	waiting := pendingTopics(all)
+	if len(waiting) == 0 {
+		return pendingTopic{}, false // every user message already has a reply
 	}
-	if streak, auto := autoStreak(history); auto && streak >= MaxAutoTurns {
+	pick := waiting[0]
+	tr := &turnState{thread: threadID, topic: pick.ID, upTo: pick.Newest, attachable: map[string]int64{}}
+	for _, m := range all {
+		tr.cursor = max(tr.cursor, m.Seq)
+	}
+	history := forTopic(all, tr.topic)
+	if streak, auto := autoStreak(all, tr.topic); auto && streak >= MaxAutoTurns {
 		// Carrying on by itself this long without the user: stop here, so
 		// tasks and triggers cannot keep each other going (decision 0025).
-		s.reply(threadID, ids.New(), upTo, event.KindSilent, fmt.Sprintf("没有用户参与时已经连续自动推进了 %d 轮，暂停自动推进", streak), nil)
+		s.reply(threadID, tr.topic, ids.New(), tr.upTo, event.KindSilent, fmt.Sprintf("没有用户参与时已经连续自动推进了 %d 轮，暂停自动推进", streak), nil)
 		if streak == MaxAutoTurns {
-			s.notice(ctx, fmt.Sprintf("我已经连续自动推进了 %d 轮（任务的进展和跟进），先停下来，等你看一下再继续。", streak))
+			s.notice(ctx, threadID, tr.topic, fmt.Sprintf("我已经连续自动推进了 %d 轮（任务的进展和跟进），先停下来，等你看一下再继续。", streak))
 		}
-		return
+		return pick, true
 	}
+	s.seen(threadID, pick.MsgIDs)
 
 	mainID, _ := st.MainThreadID(ctx)
-	ctx = tool.WithTurn(ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: upTo})
+	turnCtx := func() context.Context {
+		return tool.WithTurn(s.ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: tr.upTo, TopicID: tr.topic})
+	}
+	ctx = turnCtx()
 	// load rebuilds the request from the current segment, compacting
 	// first (reason) when it would not fit, and leaving out the oldest
 	// messages when it still does not.
@@ -251,7 +346,7 @@ func (s *Supervisor) turn(threadID string) {
 			}
 			if g, err := s.segment(ctx, threadID); err == nil {
 				if h, err := st.MessagesAfter(ctx, threadID, g.CoversUpTo); err == nil {
-					seg, history = g, h
+					seg, history = g, forTopic(h, tr.topic)
 				}
 			}
 		}
@@ -262,6 +357,11 @@ func (s *Supervisor) turn(threadID string) {
 	if estimateRequest(req) > hard {
 		req = load(event.CompactHard)
 	}
+	if tr.topic != "" {
+		offer, ids := offerFresh(all, tr, pick)
+		addNote(&req, offer)
+		s.seen(threadID, ids)
+	}
 	retried := false
 	messageID := ids.New()
 	// The tools called are shown under the turn's last stored message
@@ -269,7 +369,7 @@ func (s *Supervisor) turn(threadID string) {
 	// go with the next message.
 	var anchor string
 	var anchorTools, pending []event.ToolNote
-	reply := func(text string, err error) { s.store(threadID, messageID, upTo, "", text, err, pending) }
+	reply := func(text string, err error) { s.store(threadID, tr.topic, messageID, tr.upTo, "", text, err, pending) }
 	var texts []string // said since the last stored step
 	spoke := false     // said anything this turn
 	emit := func(d provider.Delta) {
@@ -279,13 +379,32 @@ func (s *Supervisor) turn(threadID string) {
 		s.opt.Log.Emit(event.New(event.MessageAssistantDelta, event.ActorSupervisor, threadID,
 			event.DeltaPayload{MessageID: messageID, Delta: d.Text + d.Thinking, Thinking: d.Text == ""}))
 	}
+	// takeIn adds what the user wrote meanwhile to the end of the request.
+	takeIn := func() string {
+		in := s.absorb(ctx, tr)
+		s.seen(threadID, in.seen)
+		return in.note
+	}
 
 	seen := map[string]int{} // tool calls made this turn
+	checkDispatch := hasDispatchTools(req.Tools)
+	dispatched, checkedDispatch := false, false
 	for step := 0; step < MaxSteps; step++ {
+		if step > 0 {
+			addNote(&req, takeIn())
+		}
 		if len(texts) > 0 {
 			emit(provider.Delta{Text: "\n\n"})
 		}
-		resp, err := s.opt.Provider.Stream(ctx, req, emit)
+		// Hold text until explicit dispatch claims can be checked. Thinking
+		// still streams; rejected claims never appear as successful actions.
+		holdText := checkDispatch && !dispatched
+		stream := func(d provider.Delta) {
+			if !holdText || d.Text == "" {
+				emit(d)
+			}
+		}
+		resp, err := s.opt.Provider.Stream(ctx, req, stream)
 		if err != nil && step == 0 && !retried && isOverflow(err) {
 			retried = true
 			slog.Warn("supervisor: context overflow, compacting", "thread", threadID, "err", err)
@@ -295,53 +414,86 @@ func (s *Supervisor) turn(threadID string) {
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return pick, false
 			}
 			slog.Warn("supervisor: model call failed", "thread", threadID, "err", err)
 			reply(strings.Join(texts, "\n\n"), err)
-			return
+			return pick, true
 		}
 		s.record(threadID, "supervisor", provider.ModelOf(resp, s.opt.Model), s.opt.Provider, resp)
-		if t := resp.Message.PlainText(); t != "" {
+		calls := resp.Message.ToolCalls()
+		t := resp.Message.PlainText()
+		if checkDispatch && !dispatched && claimsDispatch(t) {
+			slog.Warn("supervisor: unverified dispatch claim", "thread", threadID, "reply_to", tr.upTo, "step", step)
+			if len(calls) == 0 {
+				if !checkedDispatch && step < MaxSteps-1 {
+					checkedDispatch = true
+					req.Messages = append(req.Messages, resp.Message, provider.Text(provider.RoleUser, dispatchCheckNote))
+					continue
+				}
+				emit(provider.Delta{Text: dispatchUnconfirmed})
+				reply(dispatchUnconfirmed, nil)
+				return pick, true
+			}
+			// A claim made before its tool call is premature. Execute the
+			// calls, then let the next model step report their actual result.
+			t = ""
+		}
+		if t != "" {
+			if holdText {
+				emit(provider.Delta{Text: t})
+			}
 			texts = append(texts, t)
 			spoke = true
 		}
-		calls := resp.Message.ToolCalls()
 		if len(calls) == 0 {
 			reply(strings.Join(texts, "\n\n"), nil)
-			return
+			return pick, true
 		}
 		if reason, ok := silentOnly(calls); ok && !spoke {
-			s.reply(threadID, messageID, upTo, event.KindSilent, reason, nil)
-			return
+			s.reply(threadID, tr.topic, messageID, tr.upTo, event.KindSilent, reason, nil)
+			return pick, true
 		}
 		if len(texts) > 0 {
 			// Store what was said before the tools run, so their results
 			// (task chips, reports) come after it, and stream the rest of
 			// the turn as a new message.
-			s.store(threadID, messageID, upTo, event.KindStep, strings.Join(texts, "\n\n"), nil, pending)
+			s.store(threadID, tr.topic, messageID, tr.upTo, event.KindStep, strings.Join(texts, "\n\n"), nil, pending)
 			anchor, anchorTools, pending = messageID, pending, nil
 			messageID, texts = ids.New(), nil
 		}
 		if step == MaxSteps-1 {
 			break // the last step was asked to report and still called tools
 		}
+		// The user wrote while the model decided: anything that changes
+		// something waits until the model has read it (R4).
+		note := takeIn()
+		hold := note != "" && hasSideEffects(calls)
+		ctx = turnCtx()
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
 		var notes []event.ToolNote
 		for _, c := range calls {
 			var r provider.ToolResult
 			key := c.Name + "\x00" + string(c.Args)
-			seen[key]++
+			if !hold {
+				seen[key]++
+			}
 			switch {
+			case hold:
+				r = provider.ToolResult{CallID: c.ID, Content: heldNote, IsError: true}
 			case c.Name == silentSpec.Name:
 				r = provider.ToolResult{CallID: c.ID, Content: "stay_silent 只能单独调用；本轮已经发言，请直接回复。", IsError: true}
 			case seen[key] > maxSameCall:
 				r = provider.ToolResult{CallID: c.ID, IsError: true,
 					Content: "这一轮已经用完全相同的参数调用过它了，结果不会变。换个办法，或者根据已有的结果回答。"}
+			case isTopicTool(c.Name):
+				r = s.topicCall(ctx, tr, c)
+				ctx = turnCtx() // an attached message moves upTo on
 			default:
 				r = s.opt.Tools.Call(ctx, c)
 			}
+			dispatched = dispatched || dispatchReceipt(c, r)
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
 			notes = append(notes, toolNote(c, r))
 		}
@@ -356,16 +508,18 @@ func (s *Supervisor) turn(threadID string) {
 			last.Content += wrapUpNote
 		}
 		req.Messages = append(req.Messages, results)
+		addNote(&req, note)
 		req.CacheAt = append(req.CacheAt[:0:0], req.CacheAt...)
 		if n := len(req.CacheAt); n > 0 {
 			req.CacheAt[n-1] = len(req.Messages) - 1 // the end moves with the steps
 		}
 	}
 	reply(strings.Join(texts, "\n\n")+"\n\n（这一轮调用工具的次数达到上限，已停止。）", nil)
+	return pick, true
 }
 
-func (s *Supervisor) reply(threadID, messageID string, replyTo int64, kind, text string, callErr error) {
-	s.store(threadID, messageID, replyTo, kind, text, callErr, nil)
+func (s *Supervisor) reply(threadID, topic, messageID string, replyTo int64, kind, text string, callErr error) {
+	s.store(threadID, topic, messageID, replyTo, kind, text, callErr, nil)
 }
 
 // tools records the supervisor's tool calls shown under a stored message.
@@ -377,8 +531,8 @@ func (s *Supervisor) tools(threadID, messageID string, notes []event.ToolNote) {
 }
 
 // store is reply that also shows tool calls under the message.
-func (s *Supervisor) store(threadID, messageID string, replyTo int64, kind, text string, callErr error, tools []event.ToolNote) {
-	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo, Kind: kind, Tools: tools}
+func (s *Supervisor) store(threadID, topic, messageID string, replyTo int64, kind, text string, callErr error, tools []event.ToolNote) {
+	p := event.MessagePayload{MessageID: messageID, Content: text, ReplyTo: replyTo, Kind: kind, Tools: tools, TopicID: topic}
 	if callErr != nil {
 		p.Error = true
 		if p.Content != "" {
@@ -401,35 +555,42 @@ func (s *Supervisor) store(threadID, messageID string, replyTo int64, kind, text
 }
 
 // autoStreak counts the turns answered since the user last wrote, and
-// reports whether all the input waiting now is triggers.
-func autoStreak(msgs []store.Message) (int, bool) {
+// reports whether all the input waiting in topic is triggers.
+func autoStreak(msgs []store.Message, topic string) (int, bool) {
 	var human int64
 	for _, m := range msgs {
 		if m.Role == "user" && m.Kind != event.KindTrigger {
 			human = m.Seq
 		}
 	}
-	turns := map[int64]bool{}
-	var answered int64
+	waiting := false // the user wrote in topic and is still waiting
+	answered := answers(msgs)
 	for _, m := range msgs {
-		if m.Role == "assistant" && m.ReplyTo > 0 && m.Kind != event.KindStep && m.Kind != event.KindConsult {
-			if m.ReplyTo > human {
-				turns[m.ReplyTo] = true
-			}
-			answered = max(answered, m.ReplyTo)
+		if m.Role == "user" && m.Kind != event.KindTrigger && m.TopicID == topic && m.Seq > answered[topic] {
+			waiting = true
 		}
 	}
-	return len(turns), human <= answered
+	turns := map[int64]bool{}
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.ReplyTo > 0 && m.Kind != event.KindStep && m.Kind != event.KindConsult && m.ReplyTo > human {
+			turns[m.ReplyTo] = true
+		}
+	}
+	return len(turns), !waiting
 }
 
 // notice posts a note to the main thread that pushes to the user's devices.
-func (s *Supervisor) notice(ctx context.Context, text string) {
+// It goes into the turn's topic when the turn is the main thread's.
+func (s *Supervisor) notice(ctx context.Context, threadID, topic, text string) {
 	main, err := s.opt.Log.Store.MainThreadID(ctx)
 	if err != nil {
 		return
 	}
+	if threadID != main {
+		topic = ""
+	}
 	ev := event.New(event.MessageAssistant, event.ActorSupervisor, main,
-		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindNotice, Notify: true})
+		event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindNotice, Notify: true, TopicID: topic})
 	if _, err := s.opt.Log.Append(ctx, ev); err != nil {
 		slog.Error("supervisor: notice", "err", err)
 	}
@@ -450,25 +611,6 @@ func (s *Supervisor) hasStep(threadID string, replyTo int64) bool {
 		}
 	}
 	return false
-}
-
-// unanswered returns the seq of the newest user message that no assistant
-// reply covers yet, or 0. Steps do not answer: a turn interrupted after a
-// step is answered again.
-func unanswered(msgs []store.Message) int64 {
-	var answered, newest int64
-	for _, m := range msgs {
-		if m.Role == "assistant" && m.Kind != event.KindStep && m.Kind != event.KindConsult && m.ReplyTo > answered {
-			answered = m.ReplyTo
-		}
-		if m.Role == "user" {
-			newest = m.Seq
-		}
-	}
-	if newest > answered {
-		return newest
-	}
-	return 0
 }
 
 // toProvider converts stored messages to model messages. Each reply is placed

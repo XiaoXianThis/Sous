@@ -31,10 +31,16 @@ func setupBatch(t *testing.T, p provider.Provider, batch time.Duration) (*eventl
 	return log, main
 }
 
+// taskNews fires task news; all of it is about tasks of one topic, the
+// one the first news started.
 func taskNews(t *testing.T, log *eventlog.Log, thread, key, content string) {
 	t.Helper()
+	topic := ""
+	if ts, _ := log.Store.Topics(context.Background(), thread, 100); len(ts) > 0 {
+		topic = ts[len(ts)-1].ID
+	}
 	ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
-		Kind: event.TriggerTask, Key: key, MessageID: key, Title: "任务有新进展", Content: content,
+		Kind: event.TriggerTask, Key: key, MessageID: key, Title: "任务有新进展", Content: content, TopicID: topic,
 	})
 	if _, err := log.Append(context.Background(), ev); err != nil {
 		t.Fatal(err)

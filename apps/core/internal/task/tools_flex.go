@@ -284,7 +284,7 @@ func (t consultTool) Call(ctx context.Context, raw json.RawMessage) (string, err
 	}
 	turn := tool.TurnFrom(ctx)
 	ans, err := t.e.Consult(ctx, ConsultInput{ProjectID: p.ID, Question: a.Question, NewTopic: a.NewTopic, NodeID: node,
-		ThreadID: turn.ThreadID, ReplyTo: turn.ReplyTo, Agent: a.Agent, Options: map[string]string{"model": a.Model, "effort": a.Effort}})
+		ThreadID: turn.ThreadID, ReplyTo: turn.ReplyTo, TopicID: turn.TopicID, Agent: a.Agent, Options: map[string]string{"model": a.Model, "effort": a.Effort}})
 	if err != nil {
 		return "", err
 	}

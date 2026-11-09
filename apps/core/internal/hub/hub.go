@@ -152,6 +152,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		ContextWindow: func(ctx context.Context) int {
 			return h.Models.ContextWindow(ctx, config.RoleSupervisor)
 		},
+		Gather: supervisor.DefaultGather,
 	})
 
 	vapid, err := notify.LoadVAPID(cfg.DataDir)

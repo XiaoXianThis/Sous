@@ -48,6 +48,41 @@ export interface Message {
   source?: MessageSource
   /** The supervisor's own tool calls after this message of its turn. */
   tools?: ToolNote[]
+  /** The topic the message belongs to (work/specs/chat-topics); absent before topics. */
+  topic_id?: string
+  /** The task a report is about. */
+  task_id?: string
+  /** The supervisor has started on it (message.seen); never sent by the server. */
+  seen?: boolean
+}
+
+/** A topic of a thread, as the topic cards show it. */
+export interface Topic {
+  id: string
+  thread_id: string
+  title: string
+  /** The current conclusion the supervisor keeps, or the closing note. */
+  summary: string
+  status: 'open' | 'closed'
+  first_seq: number
+  created_at: number
+  updated_at: number
+  count: number
+  last?: Message
+  tasks: Task[]
+}
+
+/** One thing said between the supervisor (or the user) and a task's agents. */
+export interface Talk {
+  seq: number
+  ts: number
+  from: 'supervisor' | 'user' | 'agent' | 'reviewer' | 'sous' | string
+  to: string
+  kind: 'prompt' | 'message' | 'progress' | 'ask' | 'result' | 'review' | 'report'
+  title: string
+  text: string
+  run_id?: string
+  agent?: string
 }
 
 /** One tool call of the supervisor; the Hub summarizes and masks the arguments. */
@@ -342,6 +377,8 @@ export interface Task {
   last_node?: string
   /** The task's own session settings over its preset's (decision 0024). */
   options?: { model?: string; effort?: string }
+  /** The conversation topic the task belongs to. */
+  topic_id?: string
 }
 
 export type TaskPlace = 'worktree' | 'in_place' | 'scratch'

@@ -116,8 +116,11 @@ func (h *Hub) askTrigger(ctx context.Context, ref runRef, p proto.RunAsk) event.
 	content := fmt.Sprintf("【agent 的问题】%s的 %s 在执行中问：\n%s\n\n它停在这里等回答：用 run_message（task 填 %s）回答它；"+
 		"自己能判断的直接答，要用户拿主意时用 notify 提醒用户（用户也可以在任务页的“追加指令”里直接回答）。%d 分钟内没有回答，它会按自己的判断继续。"+
 		"（这是 sous 的自动通知，不是用户发的消息。）", subject, who, p.Question, target, AskWaitMinutes)
-	return event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
+	ev := event.New(event.TriggerFired, event.ActorTrigger, thread, event.TriggerPayload{
 		Kind: event.TriggerTask, Key: fmt.Sprintf("ask:%s:%d", p.RunID, p.Seq), MessageID: ids.New(),
 		Title: "agent 在问问题", Content: content, At: time.Now().UnixMilli(),
+		TopicID: h.log.Store.TaskTopic(ctx, thread, ref.task), Quote: p.Question,
 	})
+	ev.TaskID, ev.RunID = ref.task, p.RunID
+	return ev
 }

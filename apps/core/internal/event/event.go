@@ -58,7 +58,7 @@ const (
 
 // Ephemeral reports whether events of this type are published but never stored.
 func (t Type) Ephemeral() bool {
-	return t == MessageAssistantDelta || t == RunOutput || t == AgentJobOutput
+	return t == MessageAssistantDelta || t == RunOutput || t == AgentJobOutput || t == MessageSeen
 }
 
 // Actors.
@@ -145,6 +145,12 @@ type MessagePayload struct {
 	// calls made earlier in the turn, before anything was stored to hang
 	// them on. Later calls come as message.tools.
 	Tools []ToolNote `json:"tools,omitempty"`
+	// TopicID is the topic the message belongs to (chat-topics). A user
+	// message, a trigger or a report, notice or inspector note without one
+	// starts a topic whose id is the message id, titled TopicTitle (or the
+	// first line of the content).
+	TopicID    string `json:"topic_id,omitempty"`
+	TopicTitle string `json:"topic_title,omitempty"`
 }
 
 // ToolNote is one tool call of the supervisor as the chat shows it: the

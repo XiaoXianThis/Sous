@@ -593,7 +593,7 @@ func (h *Hub) stuck(ctx context.Context, ref runRef, runID, what string) {
 		}
 		text := fmt.Sprintf("「%s」的 agent %s，已经暂停。可以发一句话告诉它换个办法（会接着做），或者换一个 agent 重试。", firstNonEmpty(r.Title, "这个任务"), what)
 		msg := event.New(event.MessageAssistant, event.ActorInspector, main,
-			event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindInspector})
+			event.MessagePayload{MessageID: ids.New(), Content: text, Kind: event.KindInspector, TopicID: h.log.Store.TaskTopic(ctx, main, r.TaskID)})
 		msg.RunID, msg.TaskID = runID, r.TaskID
 		_, err := w.Append(msg)
 		return err

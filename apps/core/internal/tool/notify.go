@@ -34,7 +34,12 @@ func (t Notify) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	if a.Text == "" {
 		return "", errors.New("text is empty")
 	}
-	main := TurnFrom(ctx).MainThreadID
+	turn := TurnFrom(ctx)
+	main := turn.MainThreadID
+	topic := ""
+	if turn.ThreadID == main {
+		topic = turn.TopicID // the topic the turn is about, if it is the main thread's
+	}
 	if main == "" {
 		var err error
 		if main, err = t.Log.Store.MainThreadID(ctx); err != nil {
@@ -42,7 +47,7 @@ func (t Notify) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 		}
 	}
 	ev := event.New(event.MessageAssistant, event.ActorSupervisor, main,
-		event.MessagePayload{MessageID: ids.New(), Content: a.Text, Kind: event.KindNotice})
+		event.MessagePayload{MessageID: ids.New(), Content: a.Text, Kind: event.KindNotice, TopicID: topic})
 	if _, err := t.Log.Append(ctx, ev); err != nil {
 		return "", err
 	}

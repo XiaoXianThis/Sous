@@ -41,6 +41,8 @@ export default function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
       onPick={openThread}
       onNew={newThread}
       onSend={send}
+      onSendIn={(topic, text) => send(text, [], [], topic)}
+      inbox
       context={context}
       onDropContext={() => {
         ui.state.dropContext = true

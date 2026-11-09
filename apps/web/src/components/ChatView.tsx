@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { api } from '../lib/api'
-import { useChat, useUi, useWb } from '../lib/app'
+import { ui as uiStore, useChat, useUi, useWb } from '../lib/app'
 import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
 import { usePhone } from '../lib/phone'
 import { scrollAfterResize } from '../lib/gesture'
@@ -14,10 +14,22 @@ import ModelSwitch from './ModelSwitch'
 import Icon from './Icon'
 import MessageView from './Message'
 import RunChip from './RunChip'
+import TopicList from './TopicList'
 
 type Item = { kind: 'message'; seq: number; message: Message } | { kind: 'run'; seq: number; run: RunView }
 
 const statusText = { connecting: '连接中', online: '在线', offline: '离线，正在重连' }
+
+type ChatMode = 'topics' | 'timeline'
+const MODE_KEY = 'sous.chatView'
+
+function storedMode(): ChatMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'timeline' ? 'timeline' : 'topics'
+  } catch {
+    return 'topics'
+  }
+}
 
 export interface ChatContext {
   icon: string
@@ -30,7 +42,7 @@ export interface ChatContext {
  * the project chats share it; they differ in which threads they list and how
  * a message is sent.
  */
-export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, context, onDropContext, placeholder, empty, actions, leading, label }: {
+export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, onSendIn, inbox = false, context, onDropContext, placeholder, empty, actions, leading, label }: {
   /** The shown thread; '' before a project chat's first message. */
   threadId: string
   threads: Thread[]
@@ -40,7 +52,12 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   threadIcon: (t: Thread) => string
   onPick: (id: string) => void | Promise<void>
   onNew: () => void | Promise<unknown>
-  onSend: (text: string, attachments: string[], mentions: Mention[]) => Promise<void>
+  /** Sends from the main input; may return the topic the message started. */
+  onSend: (text: string, attachments: string[], mentions: Mention[]) => Promise<unknown>
+  /** Replies inside a topic; without it the chat has no topic view. */
+  onSendIn?: (topicId: string, text: string) => Promise<unknown>
+  /** The topic view starts with what needs the user. */
+  inbox?: boolean
   context?: ChatContext | null
   onDropContext?: () => void
   placeholder: string
@@ -78,6 +95,17 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const nextCaret = useRef<number | null>(null)
   const layer = useRef<HTMLDivElement>(null)
   const listId = useId()
+  const [mode, setModeState] = useState<ChatMode>(storedMode)
+  const topics = !!onSendIn && mode === 'topics'
+  function setMode(m: ChatMode) {
+    stick.current = true // the timeline opens at its end
+    setModeState(m)
+    try {
+      localStorage.setItem(MODE_KEY, m)
+    } catch {
+      /* a convenience only */
+    }
+  }
 
   // Phone: the composer floats over the timeline, which scrolls under it; keep its height as padding.
   useEffect(() => {
@@ -122,8 +150,10 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     Object.values(chatState.runs).reduce((n, r) => n + r.approvals.length + r.run.status.length, 0)
 
   useEffect(() => {
+    // The topic list reads from the top; only the timeline follows the end.
+    if (topics) return
     if (stick.current && scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight })
-  }, [threadId, messages.length, lastLength, uiState.tab, uiState.chatOpen, answering])
+  }, [topics, threadId, messages.length, lastLength, uiState.tab, uiState.chatOpen, answering])
 
   useLayoutEffect(() => {
     resize()
@@ -251,7 +281,12 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     setSending(true)
     setSendError('')
     try {
-      await onSend(text, ids, mentions)
+      const topic = await onSend(text, ids, mentions)
+      if (typeof topic === 'string' && topic && topics) {
+        // Show the topic the message started, open.
+        uiStore.state.openTopic = topic
+        uiStore.emit()
+      }
       setDraft('')
       setPicked([])
       setMq(null)
@@ -344,6 +379,12 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         </div>
         {phone ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
+          {onSendIn && (
+            <button className="icon-btn" aria-label={topics ? '按时间看' : '按话题看'} data-tip={topics ? '按时间看' : '按话题看'} data-tip-pos="bottom"
+              aria-pressed={!topics} onClick={() => setMode(topics ? 'timeline' : 'topics')}>
+              <Icon name={topics ? 'list' : 'layers'} size={17} />
+            </button>
+          )}
           {ctxView && ctxView.segment > 0 && <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />}
           <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
           {actions}
@@ -351,6 +392,11 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       </header>
 
       <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
+        {topics && onSendIn ? (
+          <div className="mx-auto max-w-[820px] px-3 pt-3 pb-4 grid grid-cols-[minmax(0,1fr)]">
+            <TopicList threadId={threadId} sendIn={onSendIn} empty={empty} inbox={inbox} />
+          </div>
+        ) : (
         <div className="mx-auto max-w-[820px] px-4 pt-4 pb-4 grid grid-cols-[minmax(0,1fr)] gap-5">
           {timeline.length === 0 && !answering && <div className="grid justify-items-center gap-3 text-center pt-[14dvh] px-2 rise">{empty}</div>}
           {timeline.map((item, i) => (
@@ -383,6 +429,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             </div>
           )}
         </div>
+        )}
       </div>
 
       <form ref={composer} className="chat-composer px-3 pt-1 pb-[calc(12px+var(--safe-b))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
@@ -478,7 +525,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               ref={input}
               value={draft}
               rows={1}
-              placeholder={placeholder}
+              placeholder={topics ? `${placeholder.replace(/…$/, '')}（开一个新话题）…` : placeholder}
               title={touch ? undefined : 'Enter 发送，Shift+Enter 换行，@ 引用项目'}
               onChange={(e) => { setDraft(e.target.value); syncMention() }}
               onSelect={syncMention}

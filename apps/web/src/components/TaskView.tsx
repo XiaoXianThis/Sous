@@ -9,6 +9,7 @@ import { agentTitle } from './AgentIcon'
 import Icon from './Icon'
 import RunCard from './RunCard'
 import StageBar from './StageBar'
+import TalkLog from './TalkLog'
 import TaskDetail from './TaskDetail'
 
 /**
@@ -180,6 +181,9 @@ export default function TaskView({ id }: { id: string }) {
                   />
                 </div>
               )}
+
+              {/* What the supervisor and the agents said to each other, folded. */}
+              {views.length > 0 && <TalkLog taskId={id} />}
 
               {/* Every run of the task, newest first. */}
               <section className="grid grid-cols-[minmax(0,1fr)] gap-3" aria-label="执行记录">

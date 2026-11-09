@@ -333,7 +333,7 @@ func (in *Inspector) record(ctx context.Context, s Suspect, f event.FindingPaylo
 			return nil
 		}
 		msg := event.New(event.MessageAssistant, event.ActorInspector, main,
-			event.MessagePayload{MessageID: ids.New(), Content: note(f), Kind: event.KindInspector})
+			event.MessagePayload{MessageID: ids.New(), Content: note(f), Kind: event.KindInspector, TopicID: in.Log.Store.TaskTopic(ctx, main, s.Run.TaskID)})
 		msg.RunID, msg.TaskID = s.Run.ID, s.Run.TaskID
 		_, err := w.Append(msg)
 		return err

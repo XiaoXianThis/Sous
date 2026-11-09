@@ -43,6 +43,37 @@ func call(t *testing.T, e *task.Engine, name string, args any) (string, error) {
 	return "", nil
 }
 
+func TestCreateValidatesDispatchBeforePersisting(t *testing.T) {
+	e, log := engine(t)
+	ctx := context.Background()
+	name := "dispatch-check"
+	p, err := e.PutProject(ctx, task.ProjectInput{Name: &name}, event.ActorUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []task.Input{
+		{Title: "missing place", Dispatch: true},
+		{Title: "missing branch", ProjectID: p.ID, Place: event.PlaceWorktree, Dispatch: true},
+		{Title: "blank branch", ProjectID: p.ID, Place: event.PlaceWorktree, BaseBranch: "  ", BaseFrom: "local", Dispatch: true},
+	} {
+		if _, err := e.Create(ctx, in); err == nil {
+			t.Fatalf("incomplete request succeeded: %+v", in)
+		}
+	}
+	if tasks, err := log.Store.Tasks(ctx, store.TaskFilter{}); err != nil || len(tasks) != 0 {
+		t.Fatalf("failed requests left tasks behind: %+v, %v", tasks, err)
+	}
+	// Planning an incomplete task is still allowed, and a valid dispatch
+	// with no online machine is durably queued rather than reported failed.
+	if _, err := e.Create(ctx, task.Input{Title: "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := e.Create(ctx, task.Input{Title: "wait", Place: event.PlaceScratch, Dispatch: true})
+	if err != nil || queued.Status != event.TaskQueued || queued.StatusReason == "" {
+		t.Fatalf("offline dispatch: %+v, %v", queued, err)
+	}
+}
+
 func TestSeedAndPersonas(t *testing.T) {
 	e, log := engine(t)
 	ctx := context.Background()

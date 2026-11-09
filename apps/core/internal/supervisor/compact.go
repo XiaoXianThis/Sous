@@ -38,7 +38,7 @@ func (s *Supervisor) foldRange(ctx context.Context, msgs []store.Message, prevCu
 	case event.CompactOverflow:
 		keepUsers, keepRatio = OverflowKeepUsers, 0
 	}
-	upTo := unanswered(msgs)
+	upTo := oldestPending(msgs)
 	keepFrom, users, tokens := len(msgs), 0, 0
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if users >= keepUsers && float64(tokens) >= keepRatio*w && (upTo == 0 || msgs[i].Seq < upTo) {

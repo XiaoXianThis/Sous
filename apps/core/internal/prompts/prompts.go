@@ -45,7 +45,8 @@ const supervisor = `你的角色：主管。你在对话里和用户讨论需求
   - 验收（review）默认不做，agent 的总结就是汇报；调研、提问、小改动不验收。改动大、风险高或用户要求时：model 看 diff，agent 跑测试，user 用户自己看。不通过照意见返工，返工两次仍不过才 on_fail=ask。
   - 用户说过的偏好（“这种小改动不用验”“做完跑测试给我看”）照做，并用 memory_save 记下来。
 - detail 写清楚目标、范围和完成标准，agent 看不到这段对话。大的需求可以拆成几个子任务（parent），有先后顺序的用 depends_on。
-- 派发后用一句话说明：哪个预设或模型、哪台电脑、在哪儿做、从哪个分支开始，验收的话怎么验。然后结束这一轮，不需要轮询：任务完成、失败、受阻、等验收、派不出去时，sous 会把汇报发给用户，再用【任务进展】叫醒你，由你决定要不要接着推进。
+- 必须先调用 task_create / task_dispatch 并核对结果，才能说已派发；文字不会创建任务。失败就修正或如实说明，已创建但未派出时复用原 id。排队只说排队和原因，有 run.started 才说 agent 已启动。
+- 派发后用一句话说明任务 id、实际状态、哪个预设或模型、哪台电脑、在哪儿做、从哪个分支开始，验收的话怎么验。然后结束这一轮，不需要轮询：任务完成、失败、受阻、等验收、派不出去时，sous 会把汇报发给用户，再用【任务进展】叫醒你，由你决定要不要接着推进。
 - 汇报只是摘要。要判断下一步、回答细节、决定返工时，用 task_result 看完整的总结、diff 或执行过程。
 - 任务执行期间，用户对这个任务的补充和纠正，用 run_message 转给 agent；和它无关的新需求另建任务。
 - 任务失败或受阻时，根据原因决定：重试（task_dispatch，可以换 agent 或机器）、修改任务、或者问用户。能重试、换 agent 或机器、改任务解决的，先自己解决，最多两轮，仍不行再问用户。
@@ -89,6 +90,11 @@ MCP：
 - 对话开头的【长期记忆和对话摘要】是系统整理的：更早的对话已经折叠成那份摘要，原文都还在。摘要里的 [#数字] 是原消息的编号。
 - 需要更早的原话、数字或细节时，用 thread_search 搜、用 thread_read 按编号读原文，不要凭印象回答，也不要编。
 - 最新消息末尾的【本轮环境】是系统每轮自动附上的（时间、电脑、项目、任务、相关记忆），不是用户写的，不要复述它。
+
+话题：
+- 对话按话题整理，历史里的【话题#N】标出用户消息属于哪个话题。不同话题可以互相参考，但每轮只回答【本轮环境】里的那个；这一轮建的任务和它们的汇报都属于它。
+- 话题有实质进展时用 topic_update 把“当前结论”改成一两句现状；问题答完、任务都结束、没有等用户决定的事时用 topic_close 关闭并总结一句。
+- 回合中用户发来的消息附在工具结果后面：同一话题的补充照着调整；【用户刚发来一条新消息】若是对当前话题的补充就 topic_attach 并进来，否则不管。工具结果是“未执行”时先看新消息再决定。
 
 发言：
 - 用户的消息不需要回复时（只是确认、道谢，或者说只记录不用回答），调用 stay_silent，不要输出文字。
@@ -141,6 +147,18 @@ type TurnEnv struct {
 	// segment's snapshot; ProfileGone are ids of ones deleted since.
 	ProfileChanged []string
 	ProfileGone    []string
+	// Topic is the topic the turn answers (chat-topics), nil without one.
+	Topic *TopicEnv
+}
+
+// TopicEnv describes the topic a turn answers.
+type TopicEnv struct {
+	Label   string // 【话题#N】
+	Title   string
+	Summary string
+	Closed  bool
+	// Tasks are the topic's tasks, one per line.
+	Tasks []string
 }
 
 // Tail renders the per-turn environment, appended to the newest message.
@@ -148,6 +166,20 @@ func Tail(env TurnEnv) string {
 	var b strings.Builder
 	b.WriteString(TailMarker + "\n")
 	fmt.Fprintf(&b, "- 当前时间：%s\n", env.Now.Format("2006-01-02 15:04 Mon MST"))
+	if t := env.Topic; t != nil {
+		fmt.Fprintf(&b, "\n本轮的话题：%s「%s」。这一轮只回答这个话题。\n", t.Label, t.Title)
+		if t.Summary != "" {
+			fmt.Fprintf(&b, "- 当前结论：%s\n", t.Summary)
+		} else {
+			b.WriteString("- 当前结论：还没有\n")
+		}
+		if t.Closed {
+			b.WriteString("- 这个话题之前已经关闭，现在有了新消息\n")
+		}
+		for _, task := range t.Tasks {
+			fmt.Fprintf(&b, "- 任务：%s\n", task)
+		}
+	}
 	if len(env.Machines) > 0 {
 		b.WriteString("\n电脑、项目和任务：\n")
 		for _, m := range env.Machines {

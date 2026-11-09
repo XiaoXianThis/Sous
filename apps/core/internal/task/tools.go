@@ -390,7 +390,10 @@ func (e *Engine) whereNote(ctx context.Context, taskID string) string {
 	if n, err := e.store().Node(ctx, r.NodeID); err == nil && n.Name != "" {
 		name = n.Name
 	}
-	return fmt.Sprintf("；在 %s 上由 %s 执行", name, r.Agent)
+	if r.Status == event.RunStatusQueued {
+		return fmt.Sprintf("；Run %s 已排队，目标 %s / %s，尚未收到客户端启动确认", r.ID, name, r.Agent)
+	}
+	return fmt.Sprintf("；Run %s 已收到客户端启动确认，在 %s 上由 %s 执行", r.ID, name, r.Agent)
 }
 
 func (e *Engine) activeRun(ctx context.Context, taskID string) (store.Run, error) {

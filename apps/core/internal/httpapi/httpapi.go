@@ -67,6 +67,10 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 	protect("GET /api/v1/threads/{id}", s.getThread)
 	protect("GET /api/v1/threads/{id}/messages", s.listMessages)
 	protect("POST /api/v1/threads/{id}/messages", s.postMessage)
+	protect("GET /api/v1/threads/{id}/topics", s.listTopics)
+	protect("GET /api/v1/topics/{id}", s.getTopic)
+	protect("PATCH /api/v1/topics/{id}", s.patchTopic)
+	protect("POST /api/v1/messages/{id}/move", s.moveMessage)
 	protect("POST /api/v1/attachments", s.uploadAttachment)
 	protect("GET /api/v1/attachments/{id}", s.getAttachment)
 	protect("GET /api/v1/usage", s.usage)
@@ -201,7 +205,13 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	msgs, err := s.log.Store.Messages(r.Context(), id, before, limit)
+	var msgs []store.Message
+	var err error
+	if q := r.URL.Query(); q.Has("topic") {
+		msgs, err = s.log.Store.TopicMessages(r.Context(), id, q.Get("topic"), before, limit)
+	} else {
+		msgs, err = s.log.Store.Messages(r.Context(), id, before, limit)
+	}
 	if err != nil {
 		internal(w, err)
 		return
@@ -220,6 +230,8 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		Content     string                `json:"content"`
 		Context     *event.MessageContext `json:"context"`
 		Attachments []string              `json:"attachments"`
+		// TopicID continues a topic; empty starts a new one.
+		TopicID string `json:"topic_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -245,14 +257,27 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 			body.Context = nil
 		}
 	}
+	if body.TopicID != "" {
+		if t, err := s.log.Store.Topic(r.Context(), body.TopicID); errors.Is(err, store.ErrNotFound) || (err == nil && t.ThreadID != id) {
+			writeError(w, http.StatusNotFound, "not_found", "话题不存在")
+			return
+		} else if err != nil {
+			internal(w, err)
+			return
+		}
+	}
 	msgID := ids.New()
 	evs, err := s.log.Append(r.Context(), event.New(event.MessageUser, event.ActorUser, id,
-		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts}))
+		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts, TopicID: body.TopicID}))
 	if err != nil {
 		internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq})
+	topic := body.TopicID
+	if topic == "" {
+		topic = msgID
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq, "topic_id": topic})
 }
 
 // cleanMentions drops @ references without a project id and repeats, and

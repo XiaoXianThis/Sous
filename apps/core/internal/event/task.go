@@ -152,6 +152,8 @@ type TaskCreatedPayload struct {
 	Options map[string]string `json:"options,omitempty"`
 	// DeployCommit is the deploy branch's commit an automatic deploy is for.
 	DeployCommit string `json:"deploy_commit,omitempty"`
+	// TopicID is the conversation topic the task belongs to (chat-topics).
+	TopicID string `json:"topic_id,omitempty"`
 }
 
 // Handoff carries a project consultant's session into a task that grew out
@@ -183,6 +185,9 @@ type ProjectDeployedPayload struct {
 
 type TaskUpdatedPayload struct {
 	TaskFields
+	// TopicID puts a task that had no topic into one (chat-topics): set by
+	// the engine with its first report, never by a request.
+	TopicID *string `json:"topic_id,omitempty"`
 }
 
 type TaskStatusPayload struct {

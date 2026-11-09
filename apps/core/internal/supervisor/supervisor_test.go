@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -62,13 +63,16 @@ func setup(t *testing.T, p provider.Provider, tools *tool.Registry) (*eventlog.L
 	return log, main, sup
 }
 
-// said is the text of a message without the turn's environment tail.
+// said is the text of a message without the turn's environment tail and
+// the topic label.
 func said(m provider.Message) string {
 	if len(m.Parts) == 0 {
 		return ""
 	}
-	return m.Parts[0].Text
+	return topicMark.ReplaceAllString(m.Parts[0].Text, "")
 }
+
+var topicMark = regexp.MustCompile(`【话题#\d+】`)
 
 func say(t *testing.T, log *eventlog.Log, thread, text string) {
 	t.Helper()
@@ -163,6 +167,17 @@ func TestModelErrorIsReportedAndHiddenFromHistory(t *testing.T) {
 	}
 }
 
+// sayIn writes a user message into a topic.
+func sayIn(t *testing.T, log *eventlog.Log, thread, topic, text string) {
+	t.Helper()
+	if _, err := log.Append(context.Background(), event.New(event.MessageUser, event.ActorUser, thread,
+		event.MessagePayload{MessageID: text, Content: text, TopicID: topic})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Follow-ups in a topic that arrive after a turn's last model call are one
+// next turn.
 func TestMessagesDuringTurnAreBatched(t *testing.T) {
 	p := &scripted{block: make(chan struct{}), responses: []provider.Response{
 		{Message: provider.Text(provider.RoleAssistant, "一")},
@@ -171,8 +186,8 @@ func TestMessagesDuringTurnAreBatched(t *testing.T) {
 	log, main, _ := setup(t, p, nil)
 	say(t, log, main, "a")
 	time.Sleep(50 * time.Millisecond) // first turn is now blocked in the model call
-	say(t, log, main, "b")
-	say(t, log, main, "c")
+	sayIn(t, log, main, "a", "b")
+	sayIn(t, log, main, "a", "c")
 	p.block <- struct{}{}
 	p.block <- struct{}{}
 	msgs := waitMessages(t, log, main, 5)

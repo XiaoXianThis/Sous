@@ -65,6 +65,8 @@ interface UIState {
   projectThread: Record<string, string>
   /** A project whose dialog should open (a link to its chat); '' when none. */
   openProject: string
+  /** A topic to show expanded in the chat (a push link, a new topic); '' when none. */
+  openTopic: string
 }
 
 export const ui = new Store<UIState>({
@@ -81,6 +83,7 @@ export const ui = new Store<UIState>({
   newTask: '',
   projectThread: {},
   openProject: '',
+  openTopic: '',
 })
 
 interface WBState {
@@ -319,8 +322,27 @@ export async function newThread() {
   return t
 }
 
-export async function send(content: string, attachments?: string[], mentions?: Mention[]) {
-  await api.send(ui.state.current, content, withMentions(currentContext(), mentions), attachments)
+/** Sends in the main chat column; returns the message's topic. */
+export async function send(content: string, attachments?: string[], mentions?: Mention[], topicId = ''): Promise<string> {
+  const r = await api.send(ui.state.current, content, withMentions(currentContext(), mentions), attachments, topicId)
+  return r.topic_id
+}
+
+/** Shows a topic in the chat column: its thread, expanded. */
+export async function openTopic(id: string) {
+  let thread = ''
+  for (const [tid, msgs] of Object.entries(chat.state.messages)) {
+    if (msgs.some((m) => m.topic_id === id)) thread = tid
+  }
+  if (!thread) {
+    try {
+      thread = (await api.topic(id)).thread_id
+    } catch {
+      return
+    }
+  }
+  ui.state.openTopic = id
+  await openThread(thread)
 }
 
 /** Opens a project's dialog on the workbench (an @ reference in a message). */
@@ -369,10 +391,11 @@ export async function newProjectThread(projectId: string, title: string) {
 }
 
 /** Sends in a project's chat, creating it on the first message. */
-export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[], mentions?: Mention[]) {
+export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[], mentions?: Mention[], topicId = ''): Promise<string> {
   let id = ui.state.projectThread[projectId]
   if (!id) id = (await newProjectThread(projectId, title)).id
-  await api.send(id, content, withMentions(context, mentions), attachments)
+  const r = await api.send(id, content, withMentions(context, mentions), attachments, topicId)
+  return r.topic_id
 }
 
 /** Shows a system notification for a notice while the page is in the background. */
@@ -396,6 +419,14 @@ export async function followHash(hash: string) {
   ui.state.newTask = ''
   ui.emit()
   const r = parseRoute(hash)
+  if (r.topic) {
+    await openTopic(r.topic)
+    ui.state.chatOpen = true
+    ui.state.tab = 'chat'
+    ui.emit()
+    history.replaceState(null, '', routeHash(ui.state.route))
+    return
+  }
   if (r.thread) {
     await openThread(r.thread)
     if (!chat.state.threads.find((t) => t.id === r.thread)?.project_id) {
