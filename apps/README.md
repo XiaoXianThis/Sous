@@ -16,6 +16,7 @@ Each subdirectory is an independent app that follows its own language's conventi
 | core | 服务端 Hub + 客户端 daemon / CLI | Go, SQLite | web（运行时托管 build/web） |
 | web | PWA：聊天、任务、审批、设置 | React | core（契约 core-hub-http） |
 | desktop | 托盘 + 窗口，内嵌 web | Go, Wails v3 | web（build/web）；core（契约 core-daemon-ipc、core-hub-http） |
+| site | 官网 + 文档站 | Astro, Tailwind CSS | none |
 
 ## App AGENTS.md template
 

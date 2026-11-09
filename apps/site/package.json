@@ -1,0 +1,17 @@
+{
+  "name": "sous-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "test": "bun run scripts/verify-site.mjs"
+  },
+  "dependencies": {
+    "@astrojs/tailwind": "^6.0.2",
+    "astro": "^5.16.6",
+    "tailwindcss": "^3.4.17"
+  }
+}
