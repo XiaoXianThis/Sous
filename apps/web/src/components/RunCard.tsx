@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { looks, runLook, runStatusText as statusText } from '../lib/status'
 import { gitOpText, isActive, type RunView } from '../lib/runs'
 import { duration } from '../lib/time'
 import AgentIcon, { agentTitle } from './AgentIcon'
@@ -11,9 +12,6 @@ import { Clamp, Thinking } from './Message'
 import { PlanList, ToolList } from './RunSteps'
 import TextViewer from './TextViewer'
 
-const statusText: Record<string, string> = {
-  queued: '排队中', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
-}
 const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付', clone: 'clone', create: '新建项目' }
 
 /** The current time, ticking every second while on is true. */
@@ -63,16 +61,8 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
     })
   }
 
-  const tone = run.paused && active
-    ? 'warning'
-    : run.status === 'running' || run.status === 'queued'
-      ? 'accent'
-      : run.status === 'succeeded'
-        ? 'success'
-        : run.status === 'failed' || run.status === 'interrupted'
-          ? 'danger'
-          : 'neutral'
-  const stateIcon: Record<string, string> = { queued: 'clock', running: 'play', succeeded: 'check', failed: 'alert', cancelled: 'x', interrupted: 'alert' }
+  const appearance = looks[runLook(run)]
+  const tone = appearance.tone
   const system = run.purpose === 'deliver' || run.purpose === 'clone' || run.purpose === 'create'
   const who = system ? 'sous' : run.agent
   const start = run.started_at || 0
@@ -113,7 +103,7 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
             <span className="flex-1"></span>
             {took && <span className="text-[11.5px] text-muted tabular-nums whitespace-nowrap inline-flex items-center gap-0.5"><Icon name="clock" size={11} />{took}</span>}
             <span className={`pill tone-${tone}`}>
-              <Icon name={run.paused && active ? 'pause' : stateIcon[run.status] ?? 'dot'} size={11} stroke={2.4} />
+              <Icon name={appearance.icon} size={11} stroke={2.4} />
               {run.paused && active ? '已暂停' : (statusText[run.status] ?? run.status)}
             </span>
           </button>
@@ -183,7 +173,7 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
             {run.summary && run.purpose !== 'git' && (
               <Clamp max={320} label="最终回复"><Markdown text={run.summary} /></Clamp>
             )}
-            {run.error && (run.error_kind && errorKindText[run.error_kind] ? (
+            {run.error && (run.status === 'failed' && run.error_kind && errorKindText[run.error_kind] ? (
               <div className="grid gap-1">
                 <p className="m-0 text-danger text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{errorKindText[run.error_kind]}</p>
                 <details className="text-[12px] text-muted">
@@ -192,10 +182,10 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
                 </details>
               </div>
             ) : (
-              <p className="m-0 text-danger text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>
+              <p className={`m-0 ${run.status === 'interrupted' ? 'text-muted' : 'text-danger'} text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start`}><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>
             ))}
             {run.outcome === 'no_action' && (
-              <p className="m-0 text-warm text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />agent 没调用任何工具、没有改动就结束了，没有算作完成。</p>
+              <p className="m-0 text-warm text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />本轮正常结束，未记录到工具调用或本轮文件改动；任务是否完成以验收结论为准。</p>
             )}
             {!!run.refused?.length && (
               <p className="m-0 text-muted text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="x" size={14} className="mt-[2px]" />被拒绝的操作：{run.refused.join('；')}</p>

@@ -4,7 +4,7 @@
 import type { GitTaskState, Persona, PersonaColor, Run, Task, TaskStatus } from './types'
 
 /** The states the workbench draws. */
-export type Look = 'running' | 'waiting' | 'queued' | 'paused' | 'done' | 'failed' | 'planned' | 'review' | 'cancelled'
+export type Look = 'ended' | 'interrupted' | 'running' | 'waiting' | 'queued' | 'paused' | 'done' | 'failed' | 'planned' | 'review' | 'cancelled'
 
 export interface LookInfo {
   icon: string // a name in Icon.tsx
@@ -13,6 +13,8 @@ export interface LookInfo {
 }
 
 export const looks: Record<Look, LookInfo> = {
+  ended: { icon: 'check', tone: 'success', text: '本轮正常结束' },
+  interrupted: { icon: 'pause', tone: 'neutral', text: '连接中断，工作可能已完成' },
   running: { icon: 'play', tone: 'accent', text: '执行中' },
   review: { icon: 'eye', tone: 'accent', text: '验收中' },
   waiting: { icon: 'hand', tone: 'warning', text: '等你审批' },
@@ -138,11 +140,18 @@ export function taskLook(t: Pick<Task, 'status' | 'status_reason'>): Look {
   return 'planned'
 }
 
+/** Execution labels say nothing about whether the task passed acceptance. */
+export const runStatusText: Record<Run['status'], string> = {
+  queued: '排队中', running: '执行中', succeeded: '本轮正常结束', failed: '失败',
+  cancelled: '已取消', interrupted: '连接中断，工作可能已完成',
+}
+
 /** How a run looks. */
 export function runLook(r: Pick<Run, 'status' | 'paused'>, waiting = false): Look {
   if (r.status === 'queued') return 'queued'
   if (r.status === 'running') return r.paused ? 'paused' : waiting ? 'waiting' : 'running'
-  if (r.status === 'succeeded') return 'done'
+  if (r.status === 'succeeded') return 'ended'
+  if (r.status === 'interrupted') return 'interrupted'
   if (r.status === 'cancelled') return 'cancelled'
   return 'failed'
 }

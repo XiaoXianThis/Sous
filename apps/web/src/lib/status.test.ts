@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { avatarOf, progress, runLook, stages, taskLook, taskState, taskStateDetail } from './status'
+import { looks, avatarOf, progress, runLook, stages, taskLook, taskState, taskStateDetail } from './status'
 
 const t = (status: string, extra: Record<string, unknown> = {}) =>
   ({ kind: 'code', status, pr_url: '', next: '', status_reason: '', ...extra }) as never
@@ -15,7 +15,8 @@ describe('looks', () => {
   it('maps runs', () => {
     expect(runLook({ status: 'running', paused: false }, true)).toBe('waiting')
     expect(runLook({ status: 'running', paused: true })).toBe('paused')
-    expect(runLook({ status: 'interrupted' })).toBe('failed')
+    expect(runLook({ status: 'interrupted' })).toBe('interrupted')
+    expect(runLook({ status: 'succeeded' })).toBe('ended')
   })
 })
 
@@ -84,4 +85,14 @@ describe('avatars', () => {
     expect(avatarOf({ name: '后端', glyph: '后', color: 'purple' } as never)).toEqual({ glyph: '后', color: 'purple', title: '后端' })
     expect(avatarOf(undefined, 'codex')).toEqual({ glyph: 'C', color: 'gray', title: 'codex' })
   })
+})
+
+it('keeps execution interruption and task acceptance independent', () => {
+  expect(looks[runLook({ status: 'interrupted' })]).toMatchObject({ tone: 'neutral', text: '连接中断，工作可能已完成' })
+  expect(looks[runLook({ status: 'succeeded' })].text).toBe('本轮正常结束')
+  expect(taskLook(t('review', { status_reason: '连接中断，工作可能已完成，等你验收' }))).toBe('review')
+  expect(taskState(t('review', { status_reason: '本轮正常结束，等你验收' }))).toBe('attention')
+  expect(taskStateDetail(t('review', { status_reason: '本轮正常结束，等你验收' }))).toBe('等你验收')
+  expect(taskLook(t('done'))).toBe('done')
+  expect(looks[runLook({ status: 'failed' })].tone).toBe('danger')
 })

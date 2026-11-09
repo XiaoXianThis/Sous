@@ -330,8 +330,8 @@ type RunEnded struct {
 	// to load when the next question comes.
 	Git       *GitResult `json:"git,omitempty"`
 	SessionID string     `json:"session_id,omitempty"`
-	// Outcome qualifies a work run that "succeeded": no_action when the
-	// agent ended its turn without doing anything (no tool call, no change).
+	// Outcome records work evidence, independently of execution status and
+	// task acceptance. needs_confirmation also qualifies interrupted runs.
 	Outcome string `json:"outcome,omitempty"`
 	// ErrorKind classifies a failure: agent_quota, agent_rate_limit,
 	// agent_not_logged_in, agent_unavailable (empty: anything else).
@@ -343,7 +343,9 @@ type RunEnded struct {
 
 // Run outcomes and error kinds (RunEnded).
 const (
-	OutcomeNoAction = "no_action"
+	OutcomeNoAction          = "no_action"
+	OutcomeWorkProduced      = "work_produced"
+	OutcomeNeedsConfirmation = "needs_confirmation"
 
 	ErrAgentQuota       = "agent_quota"
 	ErrAgentRateLimit   = "agent_rate_limit"

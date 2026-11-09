@@ -254,3 +254,62 @@ func TestRemoteStartNeedsTheRemote(t *testing.T) {
 		t.Fatalf("no origin: %v", err)
 	}
 }
+
+func TestFingerprintTracksOnlyThisRunsFileChanges(t *testing.T) {
+	ctx := context.Background()
+	repo := gitInit(t)
+	p, err := prepareLocal(ctx, t, t.TempDir(), repo, "fingerprint-run", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := func() string {
+		t.Helper()
+		got, err := Fingerprint(ctx, p)
+		if err != nil || got == "" {
+			t.Fatalf("fingerprint: %q %v", got, err)
+		}
+		return got
+	}
+	// A retry starts with old committed and untracked output already present.
+	if err := os.WriteFile(filepath.Join(p.Dir, "a.txt"), []byte("old run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.Dir, "z.txt"), []byte("old untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := fingerprint()
+	if got := gitOut(p.Dir, "diff", "--cached"); got != "" {
+		t.Fatalf("snapshot staged files: %s", got)
+	}
+	if _, _, err := Diff(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() != before {
+		t.Fatal("staging old output was mistaken for new work")
+	}
+	if _, err := p.git(ctx, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "old output"); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() != before {
+		t.Fatal("committing old output was mistaken for new files")
+	}
+	if err := os.WriteFile(filepath.Join(p.Dir, "b.txt"), []byte("new run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withNew := fingerprint()
+	if withNew == before {
+		t.Fatal("untracked output was lost")
+	}
+	if err := os.Remove(filepath.Join(p.Dir, "b.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() != before {
+		t.Fatal("unchanged files were mistaken for output")
+	}
+	if err := os.Remove(filepath.Join(p.Dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() == before {
+		t.Fatal("deletion was lost")
+	}
+}

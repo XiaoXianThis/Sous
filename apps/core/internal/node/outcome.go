@@ -12,16 +12,20 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/workspace"
 )
 
 // How an agent says it cannot go on. Agents report these as errors (ACP
 // -32603 with the provider's message) or, some of them, as the only text
 // of a turn that "ended normally".
 var (
-	quotaRE       = regexp.MustCompile(`(?i)usage ?limit|quota|upgrade your plan|out of credits|insufficient (credits|balance|funds)|credit balance|billing|monthly limit|plan limit|UsageLimitReached|exceeded your (current )?(plan|limit|usage)`)
-	rateLimitRE   = regexp.MustCompile(`(?i)rate.?limit|too many requests|\b429\b`)
-	notLoggedInRE = regexp.MustCompile(`(?i)not logged in|log ?in (is )?required|please (log|sign) ?in|unauthenticated|\b401\b|invalid api key|authentication (failed|required)`)
-	unavailableRE = regexp.MustCompile(`(?i)service (is )?(temporarily )?unavailable|overloaded|\b50[234]\b|bad gateway|internal server error`)
+	quotaRE             = regexp.MustCompile(`(?i)usage ?limit|quota|upgrade your plan|out of credits|insufficient (credits|balance|funds)|credit balance|billing|monthly limit|plan limit|UsageLimitReached|exceeded your (current )?(plan|limit|usage)`)
+	rateLimitRE         = regexp.MustCompile(`(?i)rate.?limit|too many requests|\b429\b`)
+	notLoggedInRE       = regexp.MustCompile(`(?i)not logged in|log ?in (is )?required|please (log|sign) ?in|unauthenticated|\b401\b|invalid api key|authentication (failed|required)`)
+	unavailableRE       = regexp.MustCompile(`(?i)service (is )?(temporarily )?unavailable|overloaded|\b50[234]\b|bad gateway|internal server error`)
+	resultFailureRE     = regexp.MustCompile(`(?i)^(?:(?:任务|部署|执行)?(?:失败|未完成|没有完成)|(?:无法|未能)完成(?:任务)?|failed)(?:$|[\s：:，,。.!！])`)
+	completedProgressRE = regexp.MustCompile(`^(?:主体工作已完成|任务已完成)(?:$|[\s：:，,。.!！])`)
 )
 
 // errorKind classifies why an agent stopped, from its error or its words.
@@ -50,10 +54,9 @@ func errorKind(err error, text string) string {
 // or an error message.
 const noActionRunes = 300
 
-// outcome judges a work run that ended its turn normally. A turn without
-// a single tool call, without a change and with only a few words did no
-// work: it is reported as such instead of as done (report 4.1). When the
-// words say the agent is out of its plan or rate limited, the run failed.
+// outcome describes a normally ended work run. no_action is an observation
+// for acceptance, not a task failure. Existing provider error detection stays
+// intact for turns that only report a quota, rate-limit or login error.
 func outcome(toolCalls int, diffstat, summary string) (status, kind, out string) {
 	if toolCalls > 0 || diffstat != "" || utf8.RuneCountInString(strings.TrimSpace(summary)) > noActionRunes {
 		return "succeeded", "", ""
@@ -63,6 +66,71 @@ func outcome(toolCalls int, diffstat, summary string) (status, kind, out string)
 		return "failed", k, ""
 	}
 	return "succeeded", "", proto.OutcomeNoAction
+}
+
+// workOutcome keeps execution, evidence and acceptance separate. A refused
+// command is not a task verdict: only explicit failure/no-output termination
+// fails a run. Reports, an explicit completion declaration, or files changed
+// since THIS run began preserve ambiguous endings for user confirmation.
+// Tool counts, summary length and a diff from an older run are not such proof.
+func workOutcome(status, stop, summary, stat string, err error, calls int, changed bool, result *sousmcp.Call, completed bool) proto.RunEnded {
+	e := proto.RunEnded{Status: status, StopReason: stop, Summary: summary, DiffStat: stat}
+	if err != nil {
+		e.Error = err.Error()
+	}
+	if status == "cancelled" { // a user cancellation always wins
+		return e
+	}
+	if resultFailed(result) {
+		e.Status, e.Error = "failed", "agent 报告任务失败："+result.Done
+		return e
+	}
+	produced := changed || result != nil || completed
+	if status == "failed" || status == "interrupted" {
+		if produced {
+			e.Status, e.Outcome = "interrupted", proto.OutcomeNeedsConfirmation
+		} else if status == "failed" {
+			e.ErrorKind = errorKind(err, "")
+		}
+		return e
+	}
+	if produced {
+		e.Outcome = proto.OutcomeWorkProduced
+		return e
+	}
+	e.Status, e.ErrorKind, e.Outcome = outcome(calls, "", summary)
+	if e.Status == "failed" {
+		e.Error = "agent 没做任何操作就结束了，它说：" + truncate(summary, 300)
+	}
+	return e
+}
+
+func (r *run) hasWorkEvidence(ws workspace.Prepared) bool {
+	r.mu.Lock()
+	reported := r.sous.result != nil || r.sous.completed
+	baseline := r.workBaseline
+	r.mu.Unlock()
+	if reported {
+		return true
+	}
+	if baseline == "" {
+		return false
+	}
+	current, err := workspace.Fingerprint(r.ctx, ws)
+	return err == nil && current != "" && current != baseline
+}
+
+func resultFailed(c *sousmcp.Call) bool {
+	if c == nil {
+		return false
+	}
+	if c.Status == "failed" {
+		return true
+	}
+	// Compatibility for older report_result callers: recognize only an
+	// explicit leading verdict, never words in verification/risk prose (a
+	// fixed test failure is not a failed task). New callers use status=failed.
+	return resultFailureRE.MatchString(strings.TrimSpace(c.Done))
 }
 
 // outputRunes bounds a tool's output in the run's log.

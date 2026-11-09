@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { looks, runLook, runStatusText as statusText } from '../lib/status'
 import { go, ui, useChat, useWb } from '../lib/app'
 import { isActive, runFromHistory, type RunView } from '../lib/runs'
 import { personaFor, runMeta } from '../lib/workbench'
@@ -11,9 +12,6 @@ import { PlanList, ToolList } from './RunSteps'
 import Sheet from './Sheet'
 import TextViewer from './TextViewer'
 
-const statusText: Record<string, string> = {
-  queued: '排队中', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
-}
 
 export default function RunSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const chatState = useChat()
@@ -52,17 +50,8 @@ export default function RunSheet({ id, onClose }: { id: string; onClose: () => v
   const steps = (view?.tools ?? []).filter((t) => !liveIDs.has(t.id))
   const plan = view?.plan ?? []
   const runState = run ? (run.paused ? '已暂停' : statusText[run.status] ?? run.status) : ''
-  const tone = run
-    ? run.paused
-      ? 'warning'
-      : run.status === 'running'
-        ? 'accent'
-        : run.status === 'succeeded'
-          ? 'success'
-          : run.status === 'failed' || run.status === 'interrupted'
-            ? 'danger'
-            : 'neutral'
-    : 'neutral'
+  const appearance = run ? looks[runLook(run)] : undefined
+  const tone = appearance?.tone ?? 'neutral'
 
   async function act(key: string, fn: () => Promise<unknown>) {
     setBusy(key)
@@ -85,7 +74,7 @@ export default function RunSheet({ id, onClose }: { id: string; onClose: () => v
     })
   }
 
-  const stateIcon = run?.paused ? 'pause' : ({ queued: 'clock', running: 'play', succeeded: 'check', failed: 'alert', cancelled: 'x', interrupted: 'alert' } as Record<string, string>)[run?.status ?? ''] ?? 'dot'
+  const stateIcon = appearance?.icon ?? 'dot'
   const title = task?.title || (run?.persona ? `${run.persona} 的 Run` : '运行详情')
   const head = run ? (
     <div className="flex items-center gap-3 min-w-0">
@@ -131,7 +120,7 @@ export default function RunSheet({ id, onClose }: { id: string; onClose: () => v
 
             {error && <p className="m-0 text-danger text-[13px] [overflow-wrap:anywhere]" role="alert">{error}</p>}
             {run.summary && <p className="m-0 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere]">{run.summary}</p>}
-            {run.error && <p className="m-0 text-danger text-[13px] [overflow-wrap:anywhere] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>}
+            {run.error && <p className={`m-0 ${run.status === 'interrupted' ? 'text-muted' : 'text-danger'} text-[13px] [overflow-wrap:anywhere] flex gap-1.5 items-start`}><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>}
             {run.diffstat && <p className="m-0 text-muted text-[12px] font-mono flex gap-1.5 items-center"><Icon name="diff" size={13} />{run.diffstat}</p>}
 
             {pending.map((x) => <ApprovalCard key={x.id} approval={x} context={task?.title} />)}

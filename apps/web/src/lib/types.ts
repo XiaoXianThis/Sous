@@ -281,7 +281,7 @@ export interface Run {
   session?: string
   resume_session?: string
   /** How the run ended beyond its status (end-to-end review 4.1, 4.2, 4.14). */
-  outcome?: 'no_action'
+  outcome?: 'no_action' | 'work_produced' | 'needs_confirmation'
   error_kind?: 'agent_quota' | 'agent_rate_limit' | 'agent_not_logged_in' | 'agent_unavailable'
   refused?: string[]
 }

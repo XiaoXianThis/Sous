@@ -438,6 +438,20 @@ func (d *Daemon) reconcile(resume []string) {
 			d.ob.reliable(proto.New(proto.TRunEnded, e))
 			continue
 		}
+		if sv, ok := saved[id]; ok && sv.Spec.Purpose == proto.PurposeWork && (sv.Result != nil || sv.Completed) {
+			// A persisted report survives a daemon restart too; do not send
+			// another prompt after the agent already handed in its result.
+			summary := ""
+			if sv.Result != nil {
+				summary = mask(resultSection(sv.Result))
+			}
+			end := workOutcome("interrupted", "", summary, "", errors.New("这台机器上的 sous 重启过，执行被中断了"), 0, false, sv.Result, sv.Completed)
+			end.RunID, end.SessionID = id, sv.SessionID
+			end.Error = mask(end.Error)
+			d.ob.reliable(proto.New(proto.TRunEnded, end))
+			d.forget(id)
+			continue
+		}
 		if sv, ok := saved[id]; ok && sv.CanLoad && sv.SessionID != "" && sv.Spec.Purpose != proto.PurposeDeliver && sv.Spec.Purpose != proto.PurposeGit {
 			slog.Info("daemon: resuming a run from before the restart", "run", id)
 			d.restore(sv)
@@ -503,6 +517,7 @@ func (d *Daemon) restore(sv savedRun) {
 	r.sessionID, r.canLoad = sv.SessionID, sv.CanLoad
 	r.paused, r.pauseReason = sv.Paused, sv.PauseReason
 	r.delivered = append([]string(nil), sv.Delivered...)
+	r.workBaseline, r.sous.result, r.sous.completed = sv.WorkBaseline, sv.Result, sv.Completed
 	for _, id := range sv.Delivered {
 		r.seen[id] = true
 	}

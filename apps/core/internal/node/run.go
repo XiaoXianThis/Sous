@@ -88,6 +88,7 @@ type run struct {
 	stuckSent      bool
 	turnText       strings.Builder
 	baseline       map[string]string
+	workBaseline   string // persisted start fingerprint for this run, not this task
 	approvalLaunch []string
 	approvalEnv    []string
 	workdir        string
@@ -198,6 +199,12 @@ func (r *run) execute() {
 		r.end("failed", "", "", "", fmt.Errorf("准备工作目录失败：%w", err))
 		return
 	}
+	if r.resumed == nil && (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork) {
+		r.workBaseline, err = workspace.Fingerprint(r.ctx, ws)
+		if err != nil {
+			slog.Warn("daemon: start fingerprint failed", "run", r.spec.RunID, "err", err)
+		}
+	}
 	if r.resumed == nil {
 		r.markStarted(ws)
 	} else {
@@ -234,20 +241,15 @@ func (r *run) execute() {
 		r.sendDiff(diff)
 	}
 	summary := r.summary()
-	if status == "succeeded" && (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork) {
+	if r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork {
+		current, snapshotErr := workspace.Fingerprint(context.Background(), ws)
 		r.mu.Lock()
 		calls := len(r.toolCalls)
+		produced := snapshotErr == nil && r.workBaseline != "" && current != "" && current != r.workBaseline
+		result, completed := r.sous.result, r.sous.completed
 		r.mu.Unlock()
-		st, kind, out := outcome(calls, stat, summary)
-		if st == "failed" {
-			r.endWith(proto.RunEnded{Status: st, StopReason: stop, Summary: summary, DiffStat: stat, ErrorKind: kind,
-				Error: "agent 没做任何操作就结束了，它说：" + truncate(summary, 300)})
-			return
-		}
-		if out != "" {
-			r.endWith(proto.RunEnded{Status: status, StopReason: stop, Summary: summary, DiffStat: stat, Outcome: out})
-			return
-		}
+		r.endWith(workOutcome(status, stop, summary, stat, err, calls, produced, result, completed))
+		return
 	}
 	r.end(status, stop, summary, stat, err)
 }
@@ -544,6 +546,12 @@ func (r *run) drive(spec agents.Spec, ws workspace.Prepared) (status, stop strin
 			return "cancelled", stop, errors.New(r.stopReasonText())
 		}
 		if stop == "cancelled" {
+			if (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork) && r.hasWorkEvidence(ws) {
+				// A permission refusal can make ACP end as cancelled even after
+				// a result was handed in. Preserve it for confirmation instead
+				// of prompting the agent to repeat completed external work.
+				return "interrupted", stop, errors.New("agent 结束了本轮，已有工作证据，等待确认")
+			}
 			// Nobody stopped the run: the agent gave up its turn, usually
 			// because an operation was refused. Tell it and let it go on
 			// another way, a few times; then report a failure, not a

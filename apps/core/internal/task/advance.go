@@ -65,6 +65,11 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	}
 
 	if r.Status == event.RunStatusInterrupted && r.Purpose == event.PurposeWork {
+		if r.Outcome == proto.OutcomeNeedsConfirmation {
+			// Evidence already exists. Do not repeat completed deployments or
+			// other external effects just because the ACP connection was lost.
+			return e.confirmWork(ctx, t, r, "连接中断，工作可能已完成，等你验收")
+		}
 		if ok, err := e.recover(ctx, t, r); ok || err != nil {
 			return err
 		}
@@ -80,10 +85,13 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	switch r.Status {
 	case event.RunStatusSucceeded:
 		if r.Outcome == proto.OutcomeNoAction && r.Purpose == event.PurposeWork {
-			return e.noAction(ctx, t, r)
+			return e.confirmWork(ctx, t, r, "本轮正常结束，未记录到工具调用或本轮文件改动，等你验收")
 		}
-		if len(r.Refused) > 0 && r.DiffStat == "" && r.Purpose == event.PurposeWork {
-			return e.refusedNothingDone(ctx, t, r)
+		if len(r.Refused) > 0 && r.Outcome != proto.OutcomeWorkProduced && r.Purpose == event.PurposeWork {
+			// Refusal + no diff proves neither failure nor completion (ops
+			// may have no repository diff). Only the Node's per-run evidence
+			// bypasses confirmation; a normal end alone is not acceptance.
+			return e.confirmWork(ctx, t, r, "本轮正常结束，有操作被拒绝，产出尚待确认，等你验收")
 		}
 		if t.Kind == event.TaskKindOps && t.DeployCommit != "" && r.Purpose == event.PurposeWork {
 			return e.checkDeploy(ctx, t, r)
@@ -152,38 +160,14 @@ func refusedNote(r store.Run) string {
 	return "\n\n这次执行中被拒绝的操作：" + strings.Join(r.Refused, "；")
 }
 
-// refusedNothingDone stops a task whose run had operations refused and left
-// no change: the refusal may well mean "do not do this", which is not done
-// and not for an automatic retry either (end-to-end review 4.2).
-func (e *Engine) refusedNothingDone(ctx context.Context, t store.Task, r store.Run) error {
-	reason := truncate("执行中有操作被拒绝，没有留下改动："+strings.Join(r.Refused, "；"), 300)
-	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
-		return err
+// confirmWork waits for acceptance without calling an uncertain run failed,
+// assuming it is done, or automatically repeating its external side effects.
+func (e *Engine) confirmWork(ctx context.Context, t store.Task, r store.Run, reason string) error {
+	if t.Status == event.TaskReview && t.StatusReason == reason {
+		return nil
 	}
-	e.tell(ctx, t, "refused:"+r.ID, "任务的操作被拒绝",
-		fmt.Sprintf("任务 %s「%s」执行中这些操作被拒绝了：%s。agent 没有留下改动就停了，所以没有算作完成。它说：%s\n\n"+
-			"拒绝可能就是用户不想这么做：不要直接重试，先问用户想怎么办（换个做法、取消任务，还是允许后重试）。（这是 sous 的自动提醒，不是用户发的消息。）",
-			t.ID, t.Title, strings.Join(r.Refused, "；"), truncate(firstNonEmpty(r.Summary, "（什么也没说）"), 200)))
-	return nil
-}
-
-// noAction stops a task whose agent ended its turn without doing anything:
-// no tool call, no change, a few words. That is neither done nor worth
-// reviewing; the supervisor decides what next (report 4.1).
-func (e *Engine) noAction(ctx context.Context, t store.Task, r store.Run) error {
-	said := truncate(strings.TrimSpace(r.Summary), 200)
-	reason := "agent 没做任何操作就结束了"
-	if said != "" {
-		reason += "，它说：" + said
-	}
-	if err := e.transition(ctx, t, event.TaskBlocked, reason, "", event.ActorSystem); err != nil {
-		return err
-	}
-	e.tell(ctx, t, "no-action:"+r.ID, "任务没有实际执行",
-		fmt.Sprintf("任务 %s「%s」的 agent（%s）没调用任何工具、没有改动就结束了这一轮，所以没有算作完成。它说：%s\n\n"+
-			"判断怎么继续：如果是 agent 的额度、登录或服务出了问题，换一个 agent 或机器重试（task_dispatch）；如果它其实是在等更清楚的说明，补充说明后重试；需要用户决定时用 notify 简短提醒一次。（这是 sous 的自动提醒，不是用户发的消息。）",
-			t.ID, t.Title, firstNonEmpty(r.Agent, "agent"), firstNonEmpty(said, "（什么也没说）")))
-	return nil
+	e.checkOverlap(ctx, t, r)
+	return e.askUserReview(ctx, t, r, reason)
 }
 
 // finish closes a task whose work is done (and reviewed, if it was to be).
@@ -230,6 +214,10 @@ func (e *Engine) askUserReview(ctx context.Context, t store.Task, r store.Run, n
 		return err
 	}
 	text := fmt.Sprintf("任务「%s」做完了，等你验收：看一下改动，说“通过”或者要改什么。", t.Title)
+	if note != "" {
+		text = fmt.Sprintf("任务「%s」：%s。请确认结果，说“通过”或者要改什么。", t.Title, note)
+	}
+	text += refusedNote(r)
 	if r.DiffStat != "" {
 		text += "\n\n改动：" + r.DiffStat
 	}
@@ -275,7 +263,7 @@ func (e *Engine) RequestReview(ctx context.Context, id, by, actor string) (store
 		return store.Task{}, fmt.Errorf("%w: 任务还在执行", ErrConflict)
 	}
 	work := e.lastRun(ctx, t.ID, event.PurposeWork)
-	if work.ID == "" || work.Status != event.RunStatusSucceeded {
+	if work.ID == "" || (work.Status != event.RunStatusSucceeded && !(work.Status == event.RunStatusInterrupted && work.Outcome == proto.OutcomeNeedsConfirmation)) {
 		return store.Task{}, fmt.Errorf("%w: 任务还没有做完的结果可以验收", ErrConflict)
 	}
 	if t.GitState == event.GitMerged || t.GitState == event.GitDiscarded {
