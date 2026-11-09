@@ -58,3 +58,26 @@ describe('RunCard', () => {
     expect(el.textContent).toContain('已经写好了 hello.txt')
   })
 })
+
+it('shows a connection interruption as uncertain work without failure styling', async () => {
+  const interrupted = view()
+  interrupted.run.status = 'interrupted'
+  interrupted.run.outcome = 'needs_confirmation'
+  interrupted.run.error = 'stream disconnected before completion'
+  await act(async () => root.render(<RunCard view={interrupted} nodeName={() => 'mac'} />))
+  expect(el.textContent).toContain('连接中断，工作可能已完成')
+  expect(el.textContent).toContain('stream disconnected before completion')
+  expect(el.querySelector('.tone-danger')).toBeNull()
+  expect([...el.querySelectorAll('.text-danger')].some((e) => e.textContent?.includes('stream disconnected'))).toBe(false)
+  expect(el.textContent).toContain('已经写好了 hello.txt')
+})
+
+it('keeps no_action separate from execution failure and task acceptance', async () => {
+  const ended = view()
+  ended.run.outcome = 'no_action'
+  await act(async () => root.render(<RunCard view={ended} nodeName={() => 'mac'} />))
+  expect(el.textContent).toContain('本轮正常结束')
+  expect(el.textContent).toContain('任务是否完成以验收结论为准')
+  expect(el.textContent).not.toContain('没有算作完成')
+  expect(el.querySelector('.tone-danger')).toBeNull()
+})

@@ -10,11 +10,11 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
 )
 
-// A turn that did nothing is not a success; when its words say the agent is
-// out of its plan, the run failed (end-to-end review 4.1). A turn with a tool
-// call, a change or a real answer stays a success.
+// no_action records the absence of operations without failing the execution;
+// explicit provider errors still fail (end-to-end review 4.1).
 func TestOutcome(t *testing.T) {
 	cases := []struct {
 		calls             int
@@ -142,5 +142,56 @@ func TestProjectPathRefusesGitAliases(t *testing.T) {
 		if _, err := a.projectOp(proto.OpProjectRead, proto.ProjectArgs{Root: root, Rel: rel}); err == nil {
 			t.Errorf("read %s", rel)
 		}
+	}
+}
+
+// Execution success, work evidence, and task acceptance must not be conflated.
+func TestWorkOutcomeSeparatesConnectionAndEvidence(t *testing.T) {
+	for _, text := range []string{"测试通过", "服务已启动", "任务已完成了一部分", "主体工作已完成一半"} {
+		if completedProgressRE.MatchString(text) {
+			t.Fatalf("intermediate progress mistaken for completion: %q", text)
+		}
+	}
+	for _, tc := range []struct {
+		name, status       string
+		changed, completed bool
+		result             *sousmcp.Call
+		want, outcome      string
+	}{
+		{"normal-result", "succeeded", false, false, &sousmcp.Call{Done: "完成"}, "succeeded", proto.OutcomeWorkProduced},
+		{"normal-changes", "succeeded", true, false, nil, "succeeded", proto.OutcomeWorkProduced},
+		{"normal-no-result", "succeeded", false, false, nil, "succeeded", ""},
+		{"acp-error-after-result", "failed", false, false, &sousmcp.Call{Done: "完成"}, "interrupted", proto.OutcomeNeedsConfirmation},
+		{"acp-error-without-output", "failed", false, false, nil, "failed", ""},
+		{"disconnect-after-changes", "failed", true, false, nil, "interrupted", proto.OutcomeNeedsConfirmation},
+		{"disconnect-after-completed-progress", "failed", false, true, nil, "interrupted", proto.OutcomeNeedsConfirmation},
+		{"refusal-cancel-without-output", "failed", false, false, nil, "failed", ""},
+		{"explicit-failure-with-changes", "succeeded", true, true, &sousmcp.Call{Done: "执行结果", Status: "failed"}, "failed", ""},
+		{"explicit-failure-after-acp-error", "failed", true, true, &sousmcp.Call{Done: "失败：验证未通过"}, "failed", ""},
+		{"legacy-deploy-failure", "succeeded", false, false, &sousmcp.Call{Done: "部署失败，服务未能启动"}, "failed", ""},
+		{"legacy-english-failure", "succeeded", true, false, &sousmcp.Call{Done: "Failed to start service"}, "failed", ""},
+		{"cancel-with-output", "cancelled", true, true, &sousmcp.Call{Done: "完成"}, "cancelled", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.status != "succeeded" {
+				err = errors.New("stream disconnected before completion")
+			}
+			got := workOutcome(tc.status, "", "执行摘要", "old task diff", err, 2, tc.changed, tc.result, tc.completed)
+			if got.Status != tc.want || got.Outcome != tc.outcome {
+				t.Fatalf("got %+v; want %s / %s", got, tc.want, tc.outcome)
+			}
+		})
+	}
+	got := workOutcome("succeeded", "end_turn", "好的", "old task diff", nil, 0, false, nil, false)
+	if got.Status != "succeeded" || got.Outcome != proto.OutcomeNoAction {
+		t.Fatalf("old diff treated as this run's work: %+v", got)
+	}
+	got = workOutcome("succeeded", "end_turn", "Upgrade your plan to continue", "", nil, 0, false, nil, false)
+	if got.Status != "failed" {
+		t.Fatalf("real error hidden: %+v", got)
+	}
+	if resultFailed(&sousmcp.Call{Done: "修复失败：的显示文案", Verified: "之前测试失败，已修复", Left: "无"}) {
+		t.Fatal("verification prose or a mid-sentence word was treated as a task verdict")
 	}
 }

@@ -22,6 +22,10 @@
 //	       session writes hello.txt another way and ends the turn
 //	quota  say "Upgrade your plan to continue" and end the turn, without
 //	       a tool call (an agent out of its plan's usage)
+//	result-error / progress-error report result/completion, then ACP error
+//	result-failed report explicit failure and end normally
+//	result-refused report a completed deploy, then request an unrelated check
+//	change-disconnect write a file, then drop the stream
 //	noop   say a few words and end the turn, without a tool call
 //	answer answer every prompt in words (a consultant or a reviewer): ask
 //	       to read README.md first; when the prompt contains "改一下",
@@ -210,6 +214,45 @@ func runFake(mode string) {
 			result(id, map[string]string{"stopReason": "end_turn"})
 			return
 		}
+		if mode == "result-error" || mode == "progress-error" || mode == "progress-text-error" || mode == "result-failed" || mode == "result-refused" || mode == "result-refused-cancel" || mode == "result-slow" {
+			mu.Lock()
+			list := servers
+			mu.Unlock()
+			_, err := withSous(list, func(tool func(string, map[string]string) (string, error)) (string, error) {
+				if mode == "progress-text-error" {
+					return tool("report_progress", map[string]string{"text": "主体工作已完成：文件已替换，服务已启动，验证通过"})
+				}
+				if mode == "progress-error" {
+					return tool("report_progress", map[string]string{"text": "文件已替换，服务已启动，验证通过", "status": "completed"})
+				}
+				status := "completed"
+				if mode == "result-failed" {
+					status = "failed"
+				}
+				return tool("report_result", map[string]string{"done": "部署执行结果", "verified": "服务检查", "status": status})
+			})
+			if err != nil {
+				send(msg{ID: id, Error: &acp.Error{Code: -32603, Message: err.Error()}})
+				return
+			}
+			if mode == "result-slow" {
+				<-cancelled
+				result(id, map[string]string{"stopReason": "cancelled"})
+				return
+			}
+			if mode == "result-error" || mode == "progress-error" || mode == "progress-text-error" {
+				send(msg{ID: id, Error: &acp.Error{Code: -32603, Message: "stream disconnected before completion"}})
+				return
+			}
+			if mode == "result-failed" {
+				result(id, map[string]string{"stopReason": "end_turn"})
+				return
+			}
+		}
+		if mode == "change-disconnect" {
+			os.WriteFile(filepath.Join(cwd, "hello.txt"), []byte("completed before disconnect\n"), 0o644)
+			os.Exit(3)
+		}
 		if mode == "ask" {
 			mu.Lock()
 			list := servers
@@ -282,6 +325,8 @@ func runFake(mode string) {
 		update(sid, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{{"content": "创建 hello.txt", "priority": "high", "status": "in_progress"}}})
 		kind, input := "execute", map[string]string{"command": "./scripts/make-hello.sh hello.txt"}
 		switch mode {
+		case "result-refused", "result-refused-cancel":
+			input = map[string]string{"command": "wok check"}
 		case "approval-guard":
 			input = map[string]string{"command": "env -u SOUS_SIGN_CERT_P12_PASSWORD sh scripts/make-hello.sh hello.txt"}
 		case "edit":
@@ -310,7 +355,7 @@ func runFake(mode string) {
 			chunk(sid, "已经创建 hello.txt。")
 		} else {
 			update(sid, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed"})
-			if mode == "reject" {
+			if mode == "reject" || mode == "reject-stop" || mode == "result-refused-cancel" {
 				result(id, map[string]string{"stopReason": "cancelled"})
 				return
 			}
@@ -479,7 +524,7 @@ func configOptions(model, effort string) []map[string]any {
 // askThroughSous plays an agent using sous's MCP server: it starts the
 // server named "sous", reports progress, asks the supervisor a question,
 // hands in a result and returns the answer.
-func askThroughSous(list []acp.MCPServer) (string, error) {
+func withSous(list []acp.MCPServer, use func(func(string, map[string]string) (string, error)) (string, error)) (string, error) {
 	var srv *acp.MCPServer
 	for i := range list {
 		if list[i].Name == "sous" {
@@ -543,15 +588,21 @@ func askThroughSous(list []acp.MCPServer) (string, error) {
 		return "", err
 	}
 	stdin.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n"))
-	if _, err := tool("report_progress", map[string]string{"text": "看完了代码，准备改端口"}); err != nil {
-		return "", err
-	}
-	answer, err := tool("ask_supervisor", map[string]string{"question": "端口用 8080 还是 3000？我倾向 8080。"})
-	if err != nil {
-		return "", err
-	}
-	if _, err := tool("report_result", map[string]string{"done": "按回答写了 answer.txt", "verified": "没有验证", "decide": "无"}); err != nil {
-		return "", err
-	}
-	return answer, nil
+	return use(tool)
+}
+
+func askThroughSous(list []acp.MCPServer) (string, error) {
+	return withSous(list, func(tool func(string, map[string]string) (string, error)) (string, error) {
+		if _, err := tool("report_progress", map[string]string{"text": "看完了代码，准备改端口"}); err != nil {
+			return "", err
+		}
+		answer, err := tool("ask_supervisor", map[string]string{"question": "端口用 8080 还是 3000？我倾向 8080。"})
+		if err != nil {
+			return "", err
+		}
+		if _, err := tool("report_result", map[string]string{"done": "按回答写了 answer.txt", "verified": "没有验证", "decide": "无"}); err != nil {
+			return "", err
+		}
+		return answer, nil
+	})
 }

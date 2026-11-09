@@ -6,11 +6,14 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -292,6 +295,64 @@ func Diff(ctx context.Context, p Prepared) (diff, stat string, err error) {
 		return "", "", err
 	}
 	return diff, strings.TrimSpace(stat), nil
+}
+
+// Fingerprint reads the current files without staging or changing the user's
+// index. Unlike Diff (against the task's base), comparing two fingerprints
+// proves changes in this run, including committed/untracked/deleted files.
+// Git-ignored files are excluded. A failed snapshot is unknown, never evidence.
+func Fingerprint(ctx context.Context, p Prepared) (string, error) {
+	if p.Base == "" {
+		return "", nil
+	}
+	names, err := p.git(ctx, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	paths := strings.Split(names, "\x00")
+	sort.Strings(paths) // index changes alone must not count as work
+	previous := ""
+	for _, name := range paths {
+		if name == "" {
+			continue
+		}
+		if name == previous {
+			continue
+		}
+		previous = name
+		path := filepath.Join(p.Dir, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue // deleted tracked files are absent from the fingerprint
+		}
+		if err != nil {
+			return "", err
+		}
+		content := sha256.New()
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return "", err
+			}
+			io.WriteString(content, target)
+		case info.Mode().IsRegular():
+			f, err := os.Open(path)
+			if err != nil {
+				return "", err
+			}
+			_, err = io.Copy(content, f)
+			f.Close()
+			if err != nil {
+				return "", err
+			}
+		default:
+			continue // do not read FIFOs, devices or submodule directories
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%x\n", name, info.Mode(), content.Sum(nil))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // Remove deletes a worktree (keeping its branch) or a scratch directory.

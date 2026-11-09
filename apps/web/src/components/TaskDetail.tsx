@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { runStatusText as runStatus } from '../lib/status'
 import { useChat } from '../lib/app'
 import { agentChoices, agentUnavailable, isOpen, modeText, nodeLabel, statusText } from '../lib/tasks'
 import type { Node, Persona, Project, Run, Task } from '../lib/types'
@@ -151,9 +152,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
 
   const nodeName = (nid: string) => nodes.find((n) => n.id === nid)?.name ?? '未知机器'
   const purposeText: Record<string, string> = { work: '开发', rebase: 'rebase', deliver: '交付', review: '验收', git: 'git 操作' }
-  const runStatus: Record<string, string> = {
-    queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
-  }
+
   const canDispatch = task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
   const when = (ts: number) => new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const badgeCls = task
@@ -417,7 +416,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
                           <span className="font-semibold text-warm">{purposeText[r.purpose] ?? r.purpose}</span>
                           <span>{r.purpose === 'deliver' || r.purpose === 'git' ? 'sous' : r.agent} @ {nodeName(r.node_id)} · {runStatus[r.status] ?? r.status}</span>
                           <span className="text-muted text-[13px] m-0">{when(r.created_at)} · {modeText[r.permission_mode] ?? r.permission_mode}</span>
-                          {r.error && <span className="text-danger text-[13px] m-0 [overflow-wrap:anywhere]">{r.error}</span>}
+                          {r.error && <span className={`${r.status === 'interrupted' ? 'text-muted' : 'text-danger'} text-[13px] m-0 [overflow-wrap:anywhere]`}>{r.error}</span>}
                           {r.diffstat && <span className="text-muted text-[13px] m-0">{r.diffstat}</span>}
                         </button>
                       </li>

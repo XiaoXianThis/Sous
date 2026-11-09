@@ -61,3 +61,38 @@ func TestServe(t *testing.T) {
 		t.Fatalf("calls: %v", calls)
 	}
 }
+
+func TestReportStatusIsOptionalAndValidated(t *testing.T) {
+	for _, tc := range []struct {
+		name, args, want string
+		valid            bool
+	}{
+		{"report_progress", `{"text":"工作完成","status":"completed"}`, "completed", true},
+		{"report_result", `{"done":"服务已启动","verified":"通过"}`, "", true},
+		{"report_result", `{"done":"部署失败","verified":"失败","status":"failed"}`, "failed", true},
+		{"report_result", `{"done":"完成","status":"completed"}`, "completed", true},
+		{"report_progress", `{"text":"工作完成","status":"failed"}`, "", false},
+		{"report_result", `{"done":"完成","status":"done"}`, "", false},
+	} {
+		called := false
+		_, err := callTool(context.Background(), tc.name, json.RawMessage(tc.args), func(_ context.Context, _ string, c Call) (Answer, error) {
+			called = true
+			if c.Status != tc.want {
+				t.Fatalf("status: %q want %q", c.Status, tc.want)
+			}
+			return Answer{}, nil
+		})
+		if (err == nil) != tc.valid || called != tc.valid {
+			t.Fatalf("%s: called=%v err=%v", tc.args, called, err)
+		}
+	}
+	for _, tool := range tools {
+		if tool["name"] == "ask_supervisor" {
+			continue
+		}
+		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		if props["status"] == nil {
+			t.Fatalf("missing status schema: %v", tool["name"])
+		}
+	}
+}

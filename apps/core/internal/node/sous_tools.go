@@ -28,11 +28,12 @@ var AskWait = 20 * time.Minute
 
 // sousState is a run's side of the sous MCP server.
 type sousState struct {
-	builtin bool
-	token   string
-	asks    int
-	ask     chan string // the question waiting for an answer, if any
-	result  *sousmcp.Call
+	builtin   bool
+	token     string
+	asks      int
+	ask       chan string // the question waiting for an answer, if any
+	result    *sousmcp.Call
+	completed bool // explicit progress declaration; see the compatibility rule below
 }
 
 // sousServers is the MCP server list for a run's agent sessions.
@@ -89,14 +90,29 @@ func (d *Daemon) sousCall(ctx context.Context, method string, raw json.RawMessag
 	}
 	switch method {
 	case sousmcp.MethodProgress:
+		if c.Status != "" && c.Status != "completed" {
+			return nil, errors.New("invalid progress status")
+		}
+		r.mu.Lock()
+		// New callers declare status=completed. Older callers may use the
+		// exact leading declaration "主体工作已完成"/"任务已完成" followed by
+		// punctuation/end. Do not infer completion from arbitrary words such
+		// as "测试通过", "服务启动" or a completed intermediate step.
+		r.sous.completed = c.Status == "completed" || completedProgressRE.MatchString(strings.TrimSpace(c.Text))
+		r.mu.Unlock()
+		r.save()
 		r.status("进度：" + truncate(strings.TrimSpace(c.Text), 300))
 		return sousmcp.Answer{Text: "已报告"}, nil
 	case sousmcp.MethodAsk:
 		return r.askSupervisor(ctx, strings.TrimSpace(c.Text))
 	case sousmcp.MethodResult:
+		if c.Status != "" && c.Status != "completed" && c.Status != "failed" {
+			return nil, errors.New("invalid result status")
+		}
 		r.mu.Lock()
 		r.sous.result = &c
 		r.mu.Unlock()
+		r.save()
 		return sousmcp.Answer{Text: "已收到结果。用几句话收尾就可以结束了。"}, nil
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
@@ -197,10 +213,11 @@ func (r *run) isBuiltinSousRequest(req acp.PermissionRequest) bool {
 	switch req.ToolCall.Title {
 	case "mcp__sous__report_progress":
 		allowed["text"] = true
+		allowed["status"] = true
 	case "mcp__sous__ask_supervisor":
 		allowed["question"] = true
 	case "mcp__sous__report_result":
-		for _, k := range []string{"done", "changed", "verified", "left", "decide"} {
+		for _, k := range []string{"done", "changed", "verified", "left", "decide", "status"} {
 			allowed[k] = true
 		}
 	}

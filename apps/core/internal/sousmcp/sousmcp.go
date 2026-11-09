@@ -33,6 +33,9 @@ type Call struct {
 	RunID string `json:"run_id"`
 	Token string `json:"token"`
 	Text  string `json:"text,omitempty"`
+	// Optional declaration: completed for progress/results, failed for results.
+	// Empty keeps older agents compatible; it never implies task acceptance.
+	Status string `json:"status,omitempty"`
 	// run.result
 	Done     string `json:"done,omitempty"`
 	Changed  string `json:"changed,omitempty"`
@@ -185,6 +188,7 @@ func callTool(ctx context.Context, name string, raw json.RawMessage, call Caller
 		Verified string `json:"verified"`
 		Left     string `json:"left"`
 		Decide   string `json:"decide"`
+		Status   string `json:"status"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -197,10 +201,13 @@ func callTool(ctx context.Context, name string, raw json.RawMessage, call Caller
 	)
 	switch name {
 	case "report_progress":
+		if a.Status != "" && a.Status != "completed" {
+			return "", errors.New("status 只能是 completed")
+		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", errors.New("text 不能为空")
 		}
-		ans, err = call(ctx, MethodProgress, Call{Text: a.Text})
+		ans, err = call(ctx, MethodProgress, Call{Text: a.Text, Status: a.Status})
 	case "ask_supervisor":
 		if strings.TrimSpace(a.Question) == "" {
 			return "", errors.New("question 不能为空")
@@ -209,7 +216,10 @@ func callTool(ctx context.Context, name string, raw json.RawMessage, call Caller
 		defer cancel()
 		ans, err = call(actx, MethodAsk, Call{Text: a.Question})
 	case "report_result":
-		ans, err = call(ctx, MethodResult, Call{Done: a.Done, Changed: a.Changed, Verified: a.Verified, Left: a.Left, Decide: a.Decide})
+		if a.Status != "" && a.Status != "completed" && a.Status != "failed" {
+			return "", errors.New("status 只能是 completed 或 failed")
+		}
+		ans, err = call(ctx, MethodResult, Call{Done: a.Done, Changed: a.Changed, Verified: a.Verified, Left: a.Left, Decide: a.Decide, Status: a.Status})
 	default:
 		return "", fmt.Errorf("没有工具 %s", name)
 	}
@@ -224,7 +234,8 @@ var tools = []map[string]any{
 		"name":        "report_progress",
 		"description": "用一句话报告任务做到了哪一步（比如“依赖装好了，正在跑测试”）。会显示在任务卡上，主管也能看到；不用等回答。只在阶段变化时报告，不要每一步都报。",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-			"text": map[string]any{"type": "string", "description": "现在做到哪了"}}, "required": []string{"text"}},
+			"text":   map[string]any{"type": "string", "description": "现在做到哪了"},
+			"status": map[string]any{"type": "string", "enum": []string{"completed"}, "description": "仅当主体工作已完成时填写 completed；不表示任务已验收"}}, "required": []string{"text"}},
 	},
 	{
 		"name": "ask_supervisor",
@@ -237,6 +248,7 @@ var tools = []map[string]any{
 		"name":        "report_result",
 		"description": "做完时交结果（也可以在最后的总结里写“## 结果”一节，二选一）。每项一两句，没有就写“无”。",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"status":   map[string]any{"type": "string", "enum": []string{"completed", "failed"}, "description": "执行结果；明确失败必须填 failed，completed 不表示任务已验收"},
 			"done":     map[string]any{"type": "string", "description": "做了什么"},
 			"changed":  map[string]any{"type": "string", "description": "改了哪些文件或执行了哪些命令"},
 			"verified": map[string]any{"type": "string", "description": "怎么验证的、结果如何；没验证就写“没有验证”"},

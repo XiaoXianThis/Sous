@@ -2,11 +2,17 @@ package node_test
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/acp/acptest"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
@@ -34,33 +40,28 @@ func TestQuotaTurnFailsTheTask(t *testing.T) {
 	}
 }
 
-// A turn without a tool call, a change or a real answer is not done: the
-// task stops and the supervisor gets a follow-up to decide (4.1).
-func TestNoActionTurnBlocksTheTask(t *testing.T) {
+// A normal no_action turn preserves execution success and asks for acceptance.
+func TestNoActionTurnWaitsForAcceptance(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("noop")()
 	ctx := context.Background()
-	tk, _ := te.tasks.Create(ctx, te.general(task.Input{ThreadID: te.main, Title: "部署", Dispatch: true, Review: event.ReviewModel, OnFail: event.OnFailRework}))
-	blocked := te.waitStatus(tk.ID, event.TaskBlocked, event.TaskDone, event.TaskFailed)
-	if blocked.Status != event.TaskBlocked || !strings.Contains(blocked.StatusReason, "没做任何操作") {
-		t.Fatalf("task: %+v", blocked)
+	tk, err := te.tasks.Create(ctx, te.general(task.Input{ThreadID: te.main, Title: "部署", Dispatch: true, Review: event.ReviewNone}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := te.waitStatus(tk.ID, event.TaskReview, event.TaskBlocked, event.TaskDone, event.TaskFailed)
+	if waiting.Status != event.TaskReview || !task.UserReviewing(waiting) || !strings.Contains(waiting.StatusReason, "本轮正常结束") {
+		t.Fatalf("task: %+v", waiting)
 	}
 	if n := len(te.reviewer.requests()); n != 0 {
-		t.Fatalf("a run that did nothing went to the reviewer (%d calls)", n)
+		t.Fatalf("unexpected automatic review: %d", n)
 	}
-	if runs := te.runs(tk.ID); len(runs) != 1 || runs[0].Outcome != proto.OutcomeNoAction {
+	if runs := te.runs(tk.ID); len(runs) != 1 || runs[0].Outcome != proto.OutcomeNoAction || runs[0].Status != event.RunStatusSucceeded {
 		t.Fatalf("runs: %+v", runs)
 	}
-	te.waitFor("the follow-up", func() bool {
-		evs, _ := te.log.Store.EventsSince(ctx, 0, 5000)
-		for _, ev := range evs {
-			var p event.TriggerPayload
-			if ev.Type == event.TriggerFired && ev.Decode(&p) == nil && strings.HasPrefix(p.Key, "no-action:") {
-				return true
-			}
-		}
-		return false
-	})
+	if done, err := te.tasks.Verdict(ctx, tk.ID, true, "无需文件修改，回答已满足要求", event.ActorUser); err != nil || done.Status != event.TaskDone {
+		t.Fatalf("acceptance: %+v %v", done, err)
+	}
 }
 
 // rejectNext refuses the task's next approval that waits for the user.
@@ -89,32 +90,30 @@ func (te *taskEnv) rejectNext(taskID string) store.Approval {
 	return a
 }
 
-// A refusal is not a failed attempt to retry (4.2). A run whose operation
-// was refused and that changed nothing stops, done by no one and reviewed by
-// no one, even without a review; a later run asking the very same thing gets
-// the user's answer without asking again.
-func TestRefusalWithoutChangesStops(t *testing.T) {
+// A refusal without evidence requires acceptance, even without configured
+// review; a user-requested rework retains the previous refusal.
+func TestRefusalWithoutEvidenceWaitsForAcceptance(t *testing.T) {
 	te := newTaskEnv(t)
 	defer te.startDaemon("write")()
 	ctx := context.Background()
 	tk, _ := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "写 hello", Dispatch: true, Review: event.ReviewNone}))
 	first := te.rejectNext(tk.ID)
-	blocked := te.waitStatus(tk.ID, event.TaskBlocked, event.TaskDone)
-	if blocked.Status != event.TaskBlocked || !strings.Contains(blocked.StatusReason, "没有留下改动") || !strings.Contains(blocked.StatusReason, "不要动这个") {
+	blocked := te.waitStatus(tk.ID, event.TaskReview, event.TaskBlocked, event.TaskDone)
+	if blocked.Status != event.TaskReview || !strings.Contains(blocked.StatusReason, "产出尚待确认") {
 		t.Fatalf("task: %+v", blocked)
 	}
 	if n := len(te.reviewer.requests()); n != 0 {
 		t.Fatalf("reviewed a refused run (%d calls)", n)
 	}
 
-	// The user retries: the same request is refused as the user refused it.
-	if _, err := te.tasks.Dispatch(ctx, tk.ID, "", "", event.ActorUser); err != nil {
+	// The user asks for rework: the same request retains the earlier refusal.
+	if _, err := te.tasks.Verdict(ctx, tk.ID, false, "换个办法完成", event.ActorUser); err != nil {
 		t.Fatal(err)
 	}
 	te.waitFor("the second run to end", func() bool {
 		return len(te.runs(tk.ID)) == 2 && te.runs(tk.ID)[1].Status != event.RunStatusRunning && te.runs(tk.ID)[1].Status != event.RunStatusQueued
 	})
-	te.waitStatus(tk.ID, event.TaskBlocked, event.TaskDone)
+	te.waitStatus(tk.ID, event.TaskReview, event.TaskBlocked, event.TaskDone)
 	as, _ := te.log.Store.TaskApprovals(ctx, tk.ID)
 	var again *store.Approval
 	for i := range as {
@@ -297,4 +296,162 @@ func TestGitOperationsOnATaskTakeTurns(t *testing.T) {
 		t.Fatalf("a second git operation started: %v", err)
 	}
 	te.hub.Cancel(ctx, first.ID, "test")
+}
+
+// Real ACP/MCP -> Node -> Hub -> Task coverage: completed work survives a
+// broken connection, is not rerun, and only a separate verdict marks it done.
+func TestConnectionErrorWithEvidenceWaitsForAcceptance(t *testing.T) {
+	for _, mode := range []string{"result-error", "progress-error", "progress-text-error", "change-disconnect"} {
+		t.Run(mode, func(t *testing.T) {
+			te := newTaskEnv(t)
+			defer te.startOutcomeDaemon(mode)()
+			ctx := context.Background()
+			tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "完成工作后断流", Review: event.ReviewNone, Dispatch: true}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting := te.waitStatus(tk.ID, event.TaskReview, event.TaskFailed, event.TaskBlocked, event.TaskDone)
+			if waiting.Status != event.TaskReview || !strings.Contains(waiting.StatusReason, "连接中断，工作可能已完成") {
+				t.Fatalf("task: %+v", waiting)
+			}
+			runs := te.runs(tk.ID)
+			if len(runs) != 1 || runs[0].Status != event.RunStatusInterrupted || runs[0].Outcome != proto.OutcomeNeedsConfirmation {
+				t.Fatalf("runs: %+v", runs)
+			}
+			// Effect retries must not restart work or append duplicate reports.
+			for i := 0; i < 2; i++ {
+				if err := te.tasks.Advance(ctx, store.Effect{Payload: []byte(runs[0].ID)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(te.runs(tk.ID)) != 1 || len(te.reviewer.requests()) != 0 {
+				t.Fatal("uncertain work was automatically repeated/reviewed")
+			}
+			if done, err := te.tasks.Verdict(ctx, tk.ID, true, "已确认工作完成", event.ActorUser); err != nil || done.Status != event.TaskDone {
+				t.Fatalf("verdict: %+v %v", done, err)
+			}
+			if run := te.runs(tk.ID)[0]; run.Status != event.RunStatusInterrupted {
+				t.Fatal("acceptance rewrote execution history")
+			}
+		})
+	}
+}
+
+func TestCompletedDeploySurvivesRejectedFinalCheck(t *testing.T) {
+	te := newTaskEnv(t)
+	te.cfg.Role = proto.RoleServer
+	// Fixture-only floor rule reproduces a server rejecting this final check;
+	// production approval policy is unchanged.
+	te.cfg.Policy.ExtraFloor = []string{`(?m)^wok check$`}
+	ctx := context.Background()
+	if _, err := te.log.Append(ctx, event.New(event.NodeRole, event.ActorSystem, "", event.NodeRolePayload{NodeID: te.cfg.NodeID, Role: proto.RoleServer})); err != nil {
+		t.Fatal(err)
+	}
+	defer te.startOutcomeDaemon("result-refused")()
+	tk, err := te.tasks.Create(ctx, task.Input{Mode: "default", ThreadID: te.main, ProjectID: "p1", Kind: event.TaskKindOps,
+		Place: event.PlaceInPlace, Review: event.ReviewNone, Title: "部署完成后检查被拒", Dispatch: true, Actor: event.ActorSupervisor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := te.waitStatus(tk.ID, event.TaskDone, event.TaskBlocked, event.TaskFailed, event.TaskReview)
+	if done.Status != event.TaskDone {
+		t.Fatalf("task: %+v", done)
+	}
+	runs := te.runs(tk.ID)
+	if len(runs) != 1 || runs[0].Status != event.RunStatusSucceeded || runs[0].DiffStat != "" || len(runs[0].Refused) == 0 || runs[0].Outcome != proto.OutcomeWorkProduced {
+		t.Fatalf("completed deploy mistaken for no output: %+v", runs)
+	}
+}
+
+func TestExplicitResultFailureStillFailsTheTask(t *testing.T) {
+	te := newTaskEnv(t)
+	defer te.startOutcomeDaemon("result-failed")()
+	ctx := context.Background()
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "失败声明", Review: event.ReviewNone, Dispatch: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := te.waitStatus(tk.ID, event.TaskFailed, event.TaskDone, event.TaskReview); got.Status != event.TaskFailed {
+		t.Fatalf("task: %+v", got)
+	}
+	if runs := te.runs(tk.ID); len(runs) != 1 || runs[0].Status != event.RunStatusFailed || !strings.Contains(runs[0].Error, "agent 报告任务失败") {
+		t.Fatalf("runs: %+v", runs)
+	}
+}
+
+// MCP report fixtures need the same local IPC endpoint as the real daemon.
+func (te *taskEnv) startOutcomeDaemon(mode string) func() {
+	te.t.Helper()
+	d, stop := te.startDaemonWith(mode, acptest.EnvSousMCP+"=1")
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := d.ServeIPC(ctx, node.NewLogRing(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		cancel()
+		stop()
+		te.t.Fatal(err)
+	}
+	return func() { cancel(); stop() }
+}
+
+func TestRefusalCancellationWithoutOutputStillFails(t *testing.T) {
+	te := newTaskEnv(t)
+	defer te.startDaemon("reject-stop")()
+	ctx := context.Background()
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{Mode: "default", ThreadID: te.main, Title: "无产出且停下", Dispatch: true, Review: event.ReviewNone}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	te.rejectNext(tk.ID)
+	if got := te.waitStatus(tk.ID, event.TaskFailed, event.TaskDone, event.TaskReview); got.Status != event.TaskFailed {
+		t.Fatalf("task: %+v", got)
+	}
+	if runs := te.runs(tk.ID); len(runs) != 1 || runs[0].Status != event.RunStatusFailed || len(runs[0].Refused) == 0 || runs[0].DiffStat != "" {
+		t.Fatalf("runs: %+v", runs)
+	}
+}
+
+func TestReportedWorkIsNotRepeatedAfterRefusalCancellation(t *testing.T) {
+	te := newTaskEnv(t)
+	te.cfg.Policy.ExtraFloor = []string{`(?m)^wok check$`}
+	defer te.startOutcomeDaemon("result-refused-cancel")()
+	ctx := context.Background()
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "交回后拒绝导致 cancelled", Dispatch: true, Review: event.ReviewNone}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := te.waitStatus(tk.ID, event.TaskReview, event.TaskFailed, event.TaskDone); got.Status != event.TaskReview {
+		t.Fatalf("task: %+v", got)
+	}
+	run := te.runs(tk.ID)[0]
+	if run.Status != event.RunStatusInterrupted || len(run.Refused) != 1 {
+		t.Fatalf("result was retried or failed: %+v", run)
+	}
+}
+
+func TestPersistedResultSurvivesDaemonInterruption(t *testing.T) {
+	te := newTaskEnv(t)
+	stop := te.startOutcomeDaemon("result-slow")
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	ctx := context.Background()
+	tk, err := te.tasks.Create(ctx, te.code(task.Input{ThreadID: te.main, Title: "交回后 daemon 重启", Dispatch: true, Review: event.ReviewNone}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := te.firstRun(tk.ID)
+	te.waitFor("persisted result", func() bool {
+		raw, _ := os.ReadFile(filepath.Join(te.root, "runs", run.ID+".json"))
+		return strings.Contains(string(raw), `"result":`) && strings.Contains(string(raw), `"work_baseline":`)
+	})
+	stop()
+	stop = nil
+	defer te.startOutcomeDaemon("noop")()
+	if got := te.waitStatus(tk.ID, event.TaskReview, event.TaskFailed, event.TaskDone); got.Status != event.TaskReview {
+		t.Fatalf("task: %+v", got)
+	}
+	if runs := te.runs(tk.ID); len(runs) != 1 || runs[0].Status != event.RunStatusInterrupted || runs[0].Outcome != proto.OutcomeNeedsConfirmation || !strings.Contains(runs[0].Summary, "部署执行结果") {
+		t.Fatalf("runs: %+v", runs)
+	}
 }

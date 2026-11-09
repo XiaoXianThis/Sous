@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 )
@@ -19,13 +20,16 @@ import (
 // daemon can resume it after a restart (design §9): its spec, the agent's
 // session, and which follow-ups the agent already read.
 type savedRun struct {
-	Spec        proto.RunStart `json:"spec"`
-	SessionID   string         `json:"session_id,omitempty"`
-	CanLoad     bool           `json:"can_load,omitempty"`
-	Workdir     string         `json:"workdir,omitempty"`
-	Delivered   []string       `json:"delivered,omitempty"`
-	Paused      bool           `json:"paused,omitempty"`
-	PauseReason string         `json:"pause_reason,omitempty"`
+	Spec         proto.RunStart `json:"spec"`
+	SessionID    string         `json:"session_id,omitempty"`
+	CanLoad      bool           `json:"can_load,omitempty"`
+	Workdir      string         `json:"workdir,omitempty"`
+	Delivered    []string       `json:"delivered,omitempty"`
+	Paused       bool           `json:"paused,omitempty"`
+	PauseReason  string         `json:"pause_reason,omitempty"`
+	WorkBaseline string         `json:"work_baseline,omitempty"`
+	Result       *sousmcp.Call  `json:"result,omitempty"`
+	Completed    bool           `json:"completed,omitempty"`
 }
 
 func (d *Daemon) runsDir() string { return filepath.Join(d.root, "runs") }
@@ -48,6 +52,7 @@ func (r *run) save() {
 	r.mu.Lock()
 	sv := savedRun{Spec: r.spec, SessionID: r.sessionID, CanLoad: r.canLoad, Workdir: r.workdir,
 		Delivered: append([]string(nil), r.delivered...), Paused: r.paused, PauseReason: r.pauseReason}
+	sv.WorkBaseline, sv.Result, sv.Completed = r.workBaseline, r.sous.result, r.sous.completed
 	r.mu.Unlock()
 	if err := os.MkdirAll(r.d.runsDir(), 0o700); err != nil {
 		slog.Warn("daemon: save run", "err", err)
