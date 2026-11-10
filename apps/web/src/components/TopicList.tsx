@@ -19,6 +19,9 @@ interface TopicsData {
 /** The expanded key of "更早的对话": topic ids are message ids, which never hold a colon. */
 export const EARLIER = ':earlier'
 
+/** How long a topic a message just started stays highlighted. */
+export const FLASH_MS = 1200
+
 const groupInfo: Record<TopicGroup, { text: string; icon: string; tone: string }> = {
   attention: { text: '要你处理', icon: 'hand', tone: 'tone-warning' },
   active: { text: '进行中', icon: 'play', tone: 'tone-accent' },
@@ -81,7 +84,10 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
   const approvals = wbState.inbox?.approvals ?? []
   const answering = chatState.answering[threadId]
 
-  // A topic to show: a push link, or the one a message just started.
+  // The topic a short highlight marks (one a message just started), '' when none.
+  const [flash, setFlash] = useState('')
+
+  // A topic to open: a push link the user followed.
   useEffect(() => {
     const id = uiState.openTopic
     if (!id) return
@@ -90,6 +96,27 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
     ui.state.openTopic = ''
     ui.emit()
   }, [uiState.openTopic])
+
+  // A topic to show, folded: the one a message just started. Whatever is open
+  // folds so the card can be seen; opening it is left to the user's click.
+  useEffect(() => {
+    const id = uiState.revealTopic
+    if (!id) return
+    setExpandedId('')
+    setFocus(id)
+    setFlash(id)
+    ui.state.revealTopic = ''
+    ui.emit()
+  }, [uiState.revealTopic])
+
+  // The highlight lasts about a second once the card is there (the list may
+  // reload a moment after the message); a topic that never shows lets it go.
+  const flashShown = !!flash && !!data?.topics.some((t) => t.id === flash)
+  useEffect(() => {
+    if (!flash) return
+    const timer = setTimeout(() => setFlash(''), flashShown ? FLASH_MS : 10_000)
+    return () => clearTimeout(timer)
+  }, [flash, flashShown])
 
   // Another thread: nothing of it is open.
   const shownThread = useRef(threadId)
@@ -153,6 +180,7 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
                 msgs={msgs}
                 answering={answering}
                 open={c.topic.id === openId}
+                flash={c.topic.id === flash}
                 onToggle={() => toggle(c.topic.id)}
                 isUnread={unread(c.topic, msgs, seen)}
                 onSeen={onSeen}
@@ -314,12 +342,14 @@ function useFollow(shown: boolean, tail: unknown) {
   return { ref, onScroll: measure }
 }
 
-function TopicCard({ card, threadId, msgs, answering, open, onToggle, isUnread, onSeen, sendIn, topicIds, onChanged }: {
+function TopicCard({ card, threadId, msgs, answering, open, flash, onToggle, isUnread, onSeen, sendIn, topicIds, onChanged }: {
   card: TopicCardView
   threadId: string
   msgs: Message[]
   answering: string | undefined
   open: boolean
+  /** Just started by a message: highlighted for a moment (app.css, .card[data-flash]). */
+  flash: boolean
   onToggle: () => void
   isUnread: boolean
   onSeen: (id: string, seq: number) => void
@@ -358,7 +388,7 @@ function TopicCard({ card, threadId, msgs, answering, open, onToggle, isUnread, 
   const info = groupInfo[card.group]
   return (
     // Open, the card fills the chat area: title row on top, reply box at the bottom, the rest scrolls between.
-    <article ref={fold.scope} className="card relative flex flex-col min-w-0 min-h-0" data-topic={t.id} data-testid="topic-card">
+    <article ref={fold.scope} className="card relative flex flex-col min-w-0 min-h-0" data-topic={t.id} data-flash={flash ? '' : undefined} data-testid="topic-card">
       <header className="flex-none flex items-start gap-2 min-w-0 px-3.5 pt-3 pb-2.5">
         <button type="button" className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 items-center flex-1 min-w-0 border-0 bg-transparent p-0 text-left" aria-expanded={open} onClick={onToggle}>
           <Icon name={card.busy ? 'refresh' : info.icon} size={14} className={`${card.busy ? 'spin tone-accent' : info.tone} flex-none`} />

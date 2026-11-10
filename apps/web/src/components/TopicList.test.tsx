@@ -1,12 +1,16 @@
 // The topic list is an accordion: one topic (or "更早的对话") open at a time,
 // and the open one fills the chat area while the rest of the list steps aside.
+// Only a click (or a push link the user followed) opens a topic: a message
+// sent from the main input leaves the topic it started folded, in view and
+// highlighted for a moment.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
 import { chat, ui } from '../lib/app'
 import type { Topic } from '../lib/types'
-import TopicList from './TopicList'
+import ChatView from './ChatView'
+import TopicList, { FLASH_MS } from './TopicList'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -41,9 +45,11 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   el.remove()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   chat.state.messages = {}
   ui.state.openTopic = ''
+  ui.state.revealTopic = ''
 })
 
 describe('topic accordion', () => {
@@ -71,7 +77,7 @@ describe('topic accordion', () => {
     await click(toggleOf('a'))
     expect(toggleOf('a')!.getAttribute('aria-expanded')).toBe('true')
 
-    // A push link or a message just sent opens the second topic.
+    // A push link the user followed opens the second topic.
     await act(async () => { ui.state.openTopic = 'b'; ui.emit() })
     expect(toggleOf('b')!.getAttribute('aria-expanded')).toBe('true')
     expect(toggleOf('a')).toBeNull()
@@ -129,5 +135,88 @@ describe('topic accordion', () => {
     await act(async () => { ui.state.openTopic = 'gone'; ui.emit() })
     expect(filled()).toBe(false)
     expect(shownTopics()).toEqual(['a'])
+  })
+})
+
+const flashed = () => [...el.querySelectorAll('[data-topic][data-flash]')].map((c) => c.getAttribute('data-topic'))
+
+describe('a topic a message just started', () => {
+  it('stays folded, highlighted for about a second, and opens on a click', async () => {
+    await render([topic('a'), topic('b')])
+    vi.useFakeTimers()
+    await act(async () => { ui.state.revealTopic = 'b'; ui.emit() })
+    expect(ui.state.revealTopic).toBe('')
+    expect(toggleOf('b')!.getAttribute('aria-expanded')).toBe('false')
+    expect(expanded()).toHaveLength(0)
+    expect(filled()).toBe(false)
+    expect(shownTopics()).toEqual(['a', 'b'])
+    expect(flashed()).toEqual(['b'])
+
+    await act(async () => { vi.advanceTimersByTime(FLASH_MS) })
+    expect(flashed()).toEqual([])
+    vi.useRealTimers()
+
+    await click(toggleOf('b'))
+    expect(toggleOf('b')!.getAttribute('aria-expanded')).toBe('true')
+    expect(expanded()).toHaveLength(1)
+  })
+
+  it('folds an open topic so the new one shows, folded, and the accordion keeps one open', async () => {
+    await render([topic('a'), topic('b')])
+    await click(toggleOf('a'))
+    expect(expanded()).toHaveLength(1)
+
+    await act(async () => { ui.state.revealTopic = 'b'; ui.emit() })
+    expect(filled()).toBe(false)
+    expect(shownTopics()).toEqual(['a', 'b'])
+    expect(toggleOf('a')!.getAttribute('aria-expanded')).toBe('false')
+    expect(toggleOf('b')!.getAttribute('aria-expanded')).toBe('false')
+    expect(expanded()).toHaveLength(0)
+
+    await click(toggleOf('a'))
+    expect(expanded()).toHaveLength(1)
+    await click(toggleOf('a'))
+    await click(toggleOf('b'))
+    expect(expanded()).toHaveLength(1)
+    expect(toggleOf('a')).toBeNull()
+  })
+
+  it('shows a new topic of the folded closed group without opening it', async () => {
+    await render([topic('a'), topic('z', { status: 'closed' })])
+    expect(shownTopics()).toEqual(['a'])
+    await act(async () => { ui.state.revealTopic = 'z'; ui.emit() })
+    expect(shownTopics()).toEqual(['a', 'z'])
+    expect(toggleOf('z')!.getAttribute('aria-expanded')).toBe('false')
+    expect(expanded()).toHaveLength(0)
+  })
+
+  it('sent from the main input, leaves its topic folded with only one topic ever expanded', async () => {
+    localStorage.removeItem('sous.chatView')
+    // The rest of the chat (context meter…) reads from the Hub: nothing answers here.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => {}))
+    vi.spyOn(api, 'topics').mockResolvedValue({ topics: [topic('a'), topic('b')], earlier: { count: 0 } })
+    await act(async () => root.render(
+      <ChatView label="对话" threadId="t1" threads={[]} title="sous" avatar={null} threadLabel={(t) => t.title} threadIcon={() => 'chat'}
+        onPick={() => {}} onNew={() => {}} onSend={async () => 'b'} onSendIn={async () => {}} placeholder="说点什么" empty={null} />,
+    ))
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    // One topic open before sending.
+    await click(toggleOf('a'))
+    expect(expanded()).toHaveLength(1)
+
+    const box = el.querySelector<HTMLTextAreaElement>('textarea[placeholder*="开一个新话题"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box, '新的事')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+
+    expect(ui.state.openTopic).toBe('')
+    expect(toggleOf('b')!.getAttribute('aria-expanded')).toBe('false')
+    expect(expanded().length).toBeLessThanOrEqual(1)
+    expect(expanded()).toHaveLength(0)
+    expect(flashed()).toEqual(['b'])
   })
 })
