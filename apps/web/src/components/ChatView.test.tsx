@@ -159,7 +159,12 @@ describe('@ references', () => {
 vi.mock('./ModelSwitch', () => ({ default: ({ placement = 'composer' }: { placement?: string }) => <button data-model-placement={placement}>模型</button> }))
 vi.mock('../lib/phone', () => ({ usePhone: () => phone.value }))
 const phone = vi.hoisted(() => ({ value: false }))
-vi.mock('./ContextMeter', () => ({ ContextPanel: () => null, ContextRing: () => null, useThreadContext: () => [null, () => {}] }))
+const ctx = vi.hoisted(() => ({ view: null as null | { segment: number } }))
+vi.mock('./ContextMeter', () => ({
+  ContextPanel: () => <div data-context-panel />,
+  ContextRing: ({ onOpen }: { onOpen: () => void }) => <button aria-label="上下文" onClick={onOpen}>环</button>,
+  useThreadContext: () => [ctx.view, () => {}],
+}))
 
 
 describe('phone composer', () => {
@@ -182,5 +187,35 @@ describe('phone composer', () => {
     await render()
     expect(el.querySelector('.composer-tools [data-model-placement=composer]')).not.toBeNull()
     expect(el.querySelector('.chat-head [data-model-placement]')).toBeNull()
+  })
+})
+
+describe('context ring', () => {
+  const ring = () => el.querySelector('[aria-label=上下文]') as HTMLButtonElement | null
+  for (const isPhone of [false, true]) {
+    it(`sits in the composer right before send (${isPhone ? 'phone' : 'desktop'})`, async () => {
+      phone.value = isPhone
+      ctx.view = { segment: 1200 }
+      try {
+        await render()
+        expect(el.querySelector('.chat-head [aria-label=上下文]')).toBeNull()
+        const r = ring()!
+        const tools = el.querySelector('.composer-tools')!
+        expect(r.closest('.composer-tools')).toBe(tools)
+        expect(tools.lastElementChild!.contains(r)).toBe(true)
+        expect(tools.nextElementSibling!.classList.contains('composer-send')).toBe(true)
+        act(() => r.click())
+        expect(sent).toEqual([])
+        expect(el.querySelector('[data-context-panel]')).not.toBeNull()
+      } finally { phone.value = false; ctx.view = null }
+    })
+  }
+  it('takes no space without context data', async () => {
+    ctx.view = { segment: 0 }
+    try {
+      await render()
+      expect(ring()).toBeNull()
+      expect(el.querySelector('.composer-ring')).toBeNull()
+    } finally { ctx.view = null }
   })
 })
