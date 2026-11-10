@@ -99,3 +99,48 @@ describe('supervisor tools', () => {
     expect(el.querySelector('[data-testid=supervisor-tools]')).toBeNull()
   })
 })
+
+describe('system lines', () => {
+  const row = (id: string) => el.querySelector(`[data-testid=${id}] > button[aria-expanded]`) as HTMLButtonElement
+
+  it('folds a task-news trigger to one line, not a user bubble, and opens on click', async () => {
+    const content = '【任务进展】任务「运维：把 inbox 里已完成且有 PR 的旧任务标记为已处理（只改 dismissed）」有了新汇报，请看看。\n第二行细节'
+    await render({ role: 'user', kind: 'trigger', content })
+    expect(el.querySelector('.bg-user-bubble')).toBeNull()
+    const b = row('message-trigger')
+    expect(b.tagName).toBe('BUTTON')
+    expect(b.getAttribute('aria-expanded')).toBe('false')
+    expect(b.textContent).toContain('任务进展')
+    expect(b.querySelector('.text-ellipsis')?.textContent).toContain('运维：把 inbox')
+    expect(el.textContent).not.toContain('第二行细节')
+    await act(async () => b.click())
+    expect(b.getAttribute('aria-expanded')).toBe('true')
+    expect(el.textContent).toContain('第二行细节')
+    await act(async () => b.click())
+    expect(el.textContent).not.toContain('第二行细节')
+  })
+
+  it.each([
+    ['notice', '提醒'],
+    ['report', '任务汇报'],
+    ['inspector', '巡检'],
+  ])('folds a %s to one line with its first line as the title', async (kind, label) => {
+    await render({ kind: kind as Message['kind'], content: '构建失败了\n\n详细日志在这里' })
+    const b = row(`message-${kind}`)
+    expect(b.textContent).toContain(label)
+    expect(b.textContent).toContain('构建失败了')
+    expect(el.textContent).not.toContain('详细日志在这里')
+    await act(async () => b.click())
+    expect(el.textContent).toContain('详细日志在这里')
+  })
+
+  it('keeps the title shrinkable so a long one cannot widen the line', async () => {
+    await render({ kind: 'report', content: '很长'.repeat(200) })
+    const b = row('message-report')
+    expect(b.className).toContain('max-w-full')
+    const title = b.querySelector('.text-ellipsis')!
+    expect(title.className).toContain('min-w-0')
+    expect(title.className).toContain('overflow-hidden')
+    expect(title.className).not.toContain('flex-none')
+  })
+})

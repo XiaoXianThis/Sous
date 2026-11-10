@@ -96,7 +96,7 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
               {purposeText[run.purpose] && <span className="text-muted font-normal"> · {purposeText[run.purpose]}</span>}
             </span>
             <span className="flex items-center gap-2 text-[11.5px] text-muted min-w-0 max-[760px]:hidden">
-              <span className="inline-flex items-center gap-0.5 whitespace-nowrap"><Icon name="laptop" size={11} />{nodeName(run.node_id)}</span>
+              <span className="inline-flex items-center gap-0.5 min-w-0 whitespace-nowrap"><Icon name="laptop" size={11} className="flex-none" /><span className="overflow-hidden text-ellipsis">{nodeName(run.node_id)}</span></span>
               {run.branch && <span className="inline-flex items-center gap-0.5 min-w-0"><Icon name="branch" size={11} /><span className="overflow-hidden text-ellipsis whitespace-nowrap">{run.branch}</span></span>}
               {run.recovery_note && <span className="inline-flex items-center gap-0.5 text-warm" title={run.recovery_note}><Icon name="refresh" size={11} />重启</span>}
             </span>

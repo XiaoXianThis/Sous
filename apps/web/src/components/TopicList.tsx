@@ -7,8 +7,7 @@ import { ago } from '../lib/time'
 import { lastLine, markSeen, messagesOf, readSeen, taskSummary, topicCards, unread, waitingIn, type TopicCardView, type TopicGroup } from '../lib/topics'
 import type { Message, Task, Topic } from '../lib/types'
 import Icon from './Icon'
-import MessageView, { Clamp } from './Message'
-import Markdown from './Markdown'
+import MessageView, { firstLine, SystemNote } from './Message'
 import TalkLog from './TalkLog'
 
 interface TopicsData {
@@ -329,33 +328,15 @@ function TopicCard({ card, threadId, msgs, answering, open, onToggle, isUnread, 
   )
 }
 
-function firstLine(s: string): string {
-  return s.split('\n').find((l) => l.trim())?.trim().replace(/^【[^】]*】/, '') ?? ''
-}
-
 /** A message inside a topic: reports fold to one line; the user's own show
  * whether sous has got to them, and an attached one can be taken back out. */
 function TopicMessage({ message, waiting, answering, attached, tasks }: { message: Message; waiting: boolean; answering: boolean; attached: boolean; tasks: Task[] }) {
-  const [open, setOpen] = useState(false)
   const [undoing, setUndoing] = useState(false)
   if (message.kind === 'report') {
+    // Folds to one line like every system line; the task title is cut with
+    // an ellipsis instead of pushing the line out of the card.
     const task = tasks.find((t) => t.id === message.task_id)
-    return (
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-2" data-testid="topic-report">
-        <button type="button" className="flex items-center gap-2 min-w-0 border-0 bg-transparent p-0 text-left text-[12.5px] text-muted hover:text-ink" aria-expanded={open} onClick={() => setOpen(!open)}>
-          <Icon name="bell" size={13} className="flex-none" />
-          <span className="font-semibold flex-none">汇报</span>
-          {task && <span className="flex-none">· {task.title}</span>}
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 text-faint">{open ? '' : firstLine(message.content)}</span>
-          <Icon name="chevron" size={11} className={`flex-none transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
-        </button>
-        {open && (
-          <div className="rounded-[12px] bg-sunken px-3 py-2 text-[13px]">
-            <Clamp max={280} label="汇报"><Markdown text={message.content} /></Clamp>
-          </div>
-        )}
-      </div>
-    )
+    return <SystemNote message={message} taskTitle={task?.title} />
   }
   const human = message.role === 'user' && !message.kind
   return (

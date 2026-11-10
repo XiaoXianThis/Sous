@@ -84,7 +84,7 @@ function TalkItem({ talk }: { talk: Talk }) {
         <span className="font-semibold text-ink flex-none">{from}</span>
         <Icon name="forward" size={11} className="text-faint flex-none" />
         <span className="text-muted flex-none">{to}</span>
-        <span className="text-faint flex-none">· {talk.title}</span>
+        <span className="text-faint min-w-0 overflow-hidden text-ellipsis whitespace-nowrap shrink-[0.5]">· {talk.title}</span>
         {!open && <span className="text-muted overflow-hidden text-ellipsis whitespace-nowrap min-w-0">{first}</span>}
         <span className="flex-1"></span>
         <time className="text-faint tabular-nums flex-none">{time}</time>

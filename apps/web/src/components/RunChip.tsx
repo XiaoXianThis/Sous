@@ -32,13 +32,13 @@ export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (
       <Who persona={system ? undefined : persona} agent={system ? 'sous' : run.agent} size={28} />
       <span className="grid min-w-0 text-left leading-tight">
         <span className="font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{run.purpose === 'git' ? gitOpText(run.git) : (what[run.purpose] ?? run.title ?? '')}</span>
-        <span className="flex items-center gap-1.5 text-[11px] text-muted whitespace-nowrap">
-          <span className={`inline-flex items-center gap-0.5 font-semibold tone-${info.tone}`}><Icon name={info.icon} size={10} stroke={2.4} />{info.text}</span>
-          <span className="inline-flex items-center gap-0.5"><Icon name="laptop" size={10} />{nodeName(run.node_id)}</span>
-          {steps > 0 && <span className="inline-flex items-center gap-0.5"><Icon name="list" size={10} />{steps}</span>}
+        <span className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted whitespace-nowrap">
+          <span className={`inline-flex items-center gap-0.5 flex-none font-semibold tone-${info.tone}`}><Icon name={info.icon} size={10} stroke={2.4} />{info.text}</span>
+          <span className="inline-flex items-center gap-0.5 min-w-0"><Icon name="laptop" size={10} className="flex-none" /><span className="overflow-hidden text-ellipsis">{nodeName(run.node_id)}</span></span>
+          {steps > 0 && <span className="inline-flex items-center gap-0.5 flex-none"><Icon name="list" size={10} />{steps}</span>}
         </span>
       </span>
-      {run.task_id && <Icon name="forward" size={14} className="text-faint" />}
+      {run.task_id && <Icon name="forward" size={14} className="text-faint flex-none" />}
     </button>
   )
 }

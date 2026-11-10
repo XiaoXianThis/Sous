@@ -23,11 +23,13 @@ function linkify(text: string): { text: string; url?: string }[] {
   return out
 }
 
-const noticeLook: Record<string, { icon: string; text: string; color: string }> = {
-  notice: { icon: 'bell', text: '提醒', color: 'var(--warm)' },
-  report: { icon: 'check-circle', text: '任务汇报', color: 'var(--ok)' },
-  inspector: { icon: 'shield', text: '巡检', color: 'var(--info)' },
+const noticeLook: Record<string, { icon: string; text: string }> = {
+  notice: { icon: 'bell', text: '提醒' },
+  report: { icon: 'check-circle', text: '任务汇报' },
+  inspector: { icon: 'shield', text: '巡检' },
 }
+
+const triggerIcon: Record<string, string> = { schedule: 'calendar', followup: 'refresh', task: 'refresh', other: 'refresh' }
 
 /** The files of a user message: pictures as thumbnails, the rest as download chips. */
 function Attachments({ list }: { list: Attachment[] }) {
@@ -159,12 +161,55 @@ export function Thinking({ text, live }: { text: string; live: boolean }) {
 }
 
 /**
+ * One folded line in the conversation: an icon, a label, an optional one-line
+ * title (cut with an ellipsis, never wider than the column), the time and a
+ * chevron; a click shows `children` below it. Used for the supervisor's tool
+ * calls and for everything the system (not the user or the supervisor's
+ * answer) puts into the conversation: triggers, notices, reports, inspections.
+ */
+export function FoldRow({ icon, label, title, extra, time, live = false, testid, children }: {
+  icon: string
+  label: ReactNode
+  title?: string
+  extra?: ReactNode
+  time?: string
+  live?: boolean
+  testid?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0" data-testid={testid}>
+      <button
+        type="button"
+        className="justify-self-start inline-flex items-center gap-1.5 max-w-full min-w-0 h-7 -ml-1 px-1.5 rounded-[8px] border-0 bg-transparent text-left text-muted text-[13px] hover:bg-hover hover:text-ink transition-colors whitespace-nowrap"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={title || undefined}
+      >
+        <Icon name={icon} size={14} className={`flex-none ${live ? 'text-accent' : ''}`} />
+        <span className={`flex-none ${live ? 'think-shimmer' : ''}`}>{label}</span>
+        {title && <span className="min-w-0 overflow-hidden text-ellipsis">· {title}</span>}
+        {extra}
+        {time && <time className="flex-none text-[11.5px] text-faint tabular-nums">{time}</time>}
+        <Icon name="chevron" size={12} className={`flex-none text-faint transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && <div className="min-w-0 rise">{children}</div>}
+    </div>
+  )
+}
+
+/** The body of an opened system line: a quiet bar on the left, like the reasoning. */
+function FoldBody({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0 border-l-2 border-line-strong pl-3.5 pr-1">{children}</div>
+}
+
+/**
  * The tools the supervisor called after a message: one folded line ("调用了
  * N 个工具"), a click lists each call as name · arguments with the status dot
  * of the Run step list. Not the Run's tools; those live in RunChip.
  */
 export function SupervisorTools({ tools }: { tools: ToolNote[] }) {
-  const [open, setOpen] = useState(false)
   const failed = tools.filter((t) => t.error).length
   const steps: ToolCall[] = tools.map((t, i) => ({
     id: String(i),
@@ -173,29 +218,50 @@ export function SupervisorTools({ tools }: { tools: ToolNote[] }) {
     kind: '',
   }))
   return (
-    <div className="grid gap-1.5 min-w-0" data-testid="supervisor-tools">
-      <button
-        type="button"
-        className="justify-self-start inline-flex items-center gap-1.5 h-7 -ml-1 px-1.5 rounded-[8px] border-0 bg-transparent text-muted text-[13px] hover:bg-hover hover:text-ink transition-colors whitespace-nowrap"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-      >
-        <Icon name="bolt" size={14} />
-        <span>调用了 {tools.length} 个工具</span>
-        {failed > 0 && <span className="text-danger">· {failed} 个失败</span>}
-        <Icon name="chevron" size={12} className={`text-faint transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
-      </button>
-      {open && (
-        <div className="pl-1 min-w-0">
-          <ToolList tools={steps} live={false} />
-        </div>
-      )}
-    </div>
+    <FoldRow
+      icon="bolt"
+      label={`调用了 ${tools.length} 个工具`}
+      extra={failed > 0 && <span className="flex-none text-danger">· {failed} 个失败</span>}
+      testid="supervisor-tools"
+    >
+      <div className="pl-1 min-w-0">
+        <ToolList tools={steps} live={false} />
+      </div>
+    </FoldRow>
+  )
+}
+
+/** The first non-empty line, without a bracketed 【head】, for a folded line. */
+export function firstLine(s: string): string {
+  return s.split('\n').find((l) => l.trim())?.trim().replace(/^【[^】]*】/, '').trim() ?? ''
+}
+
+/**
+ * A message the system wrote into the conversation (a notice, a task report,
+ * an inspection), folded to one line like the tool calls; open shows it in
+ * full. `taskTitle` names the task a report is about.
+ */
+export function SystemNote({ message, taskTitle, time }: { message: Message; taskTitle?: string; time?: string }) {
+  const look = noticeLook[message.kind ?? ''] ?? noticeLook.notice
+  const live = !!message.streaming
+  const head = firstLine(message.content)
+  const title = [taskTitle, head].filter(Boolean).join('：')
+  return (
+    <FoldRow icon={look.icon} label={look.text} title={title} time={time} live={live} testid={`message-${message.kind}`}>
+      <FoldBody>
+        {message.thinking && <Thinking text={message.thinking} live={live && !message.content} />}
+        {(message.content || live) && (
+          <Clamp max={message.kind === 'report' ? 240 : 360} follow={live} label={look.text}>
+            <Markdown text={message.content} streaming={live} />
+          </Clamp>
+        )}
+        {!live && message.content && <CopyButton text={message.content} className="justify-self-start -ml-1.5" />}
+      </FoldBody>
+    </FoldRow>
   )
 }
 
 export default function MessageView({ message }: { message: Message }) {
-  const [showTrigger, setShowTrigger] = useState(false)
   const time = new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
   if (message.kind === 'silent') {
@@ -208,33 +274,16 @@ export default function MessageView({ message }: { message: Message }) {
   }
 
   if (message.kind === 'trigger') {
+    // Written by the hub (role user), not typed by the user: one folded line
+    // like the tool calls, the full text on a click.
     const t = triggerView(message.content)
-    const scheduled = t.kind === 'schedule'
+    const label = t.kind === 'schedule' ? '定时任务' : t.kind === 'followup' ? '跟进' : t.kind === 'task' ? (t.label ?? '任务') : '系统'
     return (
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-2" data-testid="message-trigger">
-        <button
-          type="button"
-          className="group/trig flex items-center gap-2.5 w-full min-w-0 border-0 bg-transparent p-0 text-[12px] text-muted"
-          onClick={() => setShowTrigger(!showTrigger)}
-          aria-expanded={showTrigger}
-          title={t.title}
-        >
-          <span className="h-px bg-line flex-1 min-w-4"></span>
-          <span className="flex items-center gap-1.5 min-w-0 max-w-[calc(100%-48px)] h-7 pl-2 pr-2.5 rounded-full bg-sunken group-hover/trig:text-ink transition-colors">
-            <Icon name={scheduled ? 'calendar' : 'refresh'} size={13} className="text-warm flex-none" />
-            <span className="font-medium text-warm flex-none">{scheduled ? '定时任务' : t.kind === 'followup' ? '跟进' : t.kind === 'task' ? t.label : '系统'}</span>
-            {t.title && <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t.title}</span>}
-            <time className="text-faint tabular-nums flex-none">{time}</time>
-            <Icon name="chevron" size={11} className={`text-faint flex-none transition-transform duration-200 ${showTrigger ? '' : '-rotate-90'}`} />
-          </span>
-          <span className="h-px bg-line flex-1 min-w-4"></span>
-        </button>
-        {showTrigger && (
-          <div className="selectable justify-self-center w-full max-w-[640px] whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.7] text-muted bg-sunken rounded-[14px] px-4 py-3 rise">
-            {t.body || message.content}
-          </div>
-        )}
-      </div>
+      <FoldRow icon={triggerIcon[t.kind]} label={label} title={t.title} time={time} testid="message-trigger">
+        <FoldBody>
+          <p className="selectable m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-[13px] leading-[1.7] text-muted">{t.body || message.content}</p>
+        </FoldBody>
+      </FoldRow>
     )
   }
 
@@ -302,32 +351,8 @@ export default function MessageView({ message }: { message: Message }) {
     )
   }
 
-  if (notice) {
-    return (
-      <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 overflow-hidden group bg-panel shadow-card rounded-[16px] px-4 pt-3 pb-3.5" data-testid={`message-${message.kind}`}>
-        <header className="flex items-center gap-2 min-w-0 h-6">
-          <span
-            className="grid place-items-center w-6 h-6 rounded-[8px] flex-none"
-            style={{ color: notice.color, background: `color-mix(in srgb, ${notice.color} 14%, transparent)` }}
-          >
-            <Icon name={notice.icon} size={14} stroke={2} />
-          </span>
-          <span className="text-[13px] font-semibold" style={{ color: notice.color }}>{notice.text}</span>
-          <time className="text-[11.5px] text-faint tabular-nums">{time}</time>
-          <span className="flex-1"></span>
-          {!message.streaming && message.content && (
-            <CopyButton text={message.content} className="-my-1 -mr-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
-          )}
-        </header>
-        {message.thinking && <Thinking text={message.thinking} live={!!message.streaming && !message.content} />}
-        {(message.content || message.streaming) && (
-          <Clamp max={message.kind === 'report' ? 240 : 360} follow={message.streaming} label={notice.text}>
-            <Markdown text={message.content} streaming={message.streaming} />
-          </Clamp>
-        )}
-      </article>
-    )
-  }
+  if (notice) return <SystemNote message={message} time={time} />
+
 
   return (
     <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 group" data-testid={`message-${message.kind ?? message.role}`}>

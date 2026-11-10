@@ -6,11 +6,11 @@ export function PlanList({ plan }: { plan: { content: string; status: string }[]
   return (
     <ul className="m-0 p-0 list-none grid gap-1 text-[13px]">
       {plan.map((e, i) => (
-        <li key={i} className="flex gap-2 items-start">
-          <span className={`mt-[3px] ${e.status === 'completed' ? 'text-ok' : e.status === 'in_progress' ? 'text-info' : 'text-faint'}`}>
+        <li key={i} className="flex gap-2 items-start min-w-0">
+          <span className={`mt-[3px] flex-none ${e.status === 'completed' ? 'text-ok' : e.status === 'in_progress' ? 'text-info' : 'text-faint'}`}>
             <Icon name={e.status === 'completed' ? 'check-circle' : e.status === 'in_progress' ? 'circle-dashed' : 'circle'} size={14} stroke={2} className={e.status === 'in_progress' ? 'spin' : ''} />
           </span>
-          <span className={e.status === 'completed' ? 'text-muted line-through decoration-faint' : ''}>{e.content}</span>
+          <span className={`min-w-0 [overflow-wrap:anywhere] ${e.status === 'completed' ? 'text-muted line-through decoration-faint' : ''}`}>{e.content}</span>
         </li>
       ))}
     </ul>
