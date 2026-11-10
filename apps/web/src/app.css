@@ -505,7 +505,7 @@
 /* Attachments, text, then tools and send on one shared row. */
 .chat-phone .composer-box { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 2px; }
 .chat-phone .composer-box > .composer-tray { grid-row: 1; grid-column: 1 / -1; }
-.chat-phone .composer-box > .composer-tools { grid-row: 3; grid-column: 1; justify-self: start; max-width: 100%; margin: 0; }
+.chat-phone .composer-box > .composer-tools { grid-row: 3; grid-column: 1; justify-self: stretch; max-width: 100%; margin: 0; }
 .chat-phone .composer-box > .composer-input { grid-row: 2; grid-column: 1 / -1; }
 .chat-phone .composer-input > textarea { min-height: 36px; padding-top: 6px; }
 .chat-phone .composer-input > .mention-layer { padding-top: 6px; }

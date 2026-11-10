@@ -385,7 +385,6 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               <Icon name={topics ? 'list' : 'layers'} size={17} />
             </button>
           )}
-          {ctxView && ctxView.segment > 0 && <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />}
           <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
           {actions}
         </div>
@@ -585,6 +584,14 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               </span>
             ) : null}
             <span className="flex-1"></span>
+            {/* Last in the tools row, so it sits right next to the send button: on desktop after the flex-1
+                spacer; on phone (spacer hidden) ml-auto pushes it to the end of the stretched tools cell. The
+                ring is a type-less button, i.e. a submit inside this form — preventDefault stops that. */}
+            {ctxView && ctxView.segment > 0 && (
+              <span className="composer-ring flex-none ml-auto grid" onClick={(e) => e.preventDefault()}>
+                <ContextRing view={ctxView} onOpen={() => setContextOpen(true)} />
+              </span>
+            )}
           </div>
             <button
               className="composer-send self-end w-8 h-8 rounded-full border-0 flex-none bg-ink text-page grid place-items-center transition-transform active:scale-95 disabled:bg-sunken disabled:text-faint disabled:opacity-100 max-[760px]:w-9 max-[760px]:h-9 max-[760px]:bg-accent max-[760px]:text-accent-text"
