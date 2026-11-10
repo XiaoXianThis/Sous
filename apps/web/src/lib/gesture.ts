@@ -1,6 +1,7 @@
 // Pure math behind the touch gestures in ios.ts: sheet drag-to-dismiss, the
 // edge swipe back, timeline resizing, and the keyboard
-// insets. Kept free of the DOM so it can be unit tested.
+// insets, plus the scroll anchoring of the topic folds (TopicList). Kept free
+// of the DOM so it can be unit tested.
 
 /** How far a touch must move before it counts as a drag rather than a tap. */
 export const SLOP = 8
@@ -52,6 +53,23 @@ export function scrollAfterResize(o: { prevHeight: number; height: number; scrol
   const max = Math.max(0, o.scrollHeight - o.height)
   const top = o.stick ? max : o.scrollTop + (o.prevHeight - o.height)
   return Math.min(max, Math.max(0, top))
+}
+
+/**
+ * Keep one element (the anchor) where the eye left it when the layout around
+ * it switches, e.g. a topic folding open into the whole chat area or back into
+ * the list. Offsets are px from the scroller's top edge: `at` is where the
+ * anchor should be, `now` where the new layout put it at the current
+ * `scrollTop`; `height` is the scroller's clientHeight and `scrollHeight` its
+ * content in the new layout. Returns the scrollTop that brings the anchor back
+ * to `at`, within what the content allows, and `off`: how far below `at` the
+ * anchor still sits after that (non-zero only when the scroll was clamped;
+ * the caller can cover it with a transform that animates away).
+ */
+export function keepAnchor(o: { at: number; now: number; scrollTop: number; scrollHeight: number; height: number }): { scrollTop: number; off: number } {
+  const max = Math.max(0, o.scrollHeight - o.height)
+  const top = Math.min(max, Math.max(0, o.scrollTop + o.now - o.at))
+  return { scrollTop: top, off: o.now - (top - o.scrollTop) - o.at }
 }
 
 export interface ViewportBox {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { axisOf, scrollAfterResize, rubber, shouldDismiss, velocityOf, viewportVars } from './gesture'
+import { axisOf, keepAnchor, scrollAfterResize, rubber, shouldDismiss, velocityOf, viewportVars } from './gesture'
 
 describe('axisOf', () => {
   it('waits until the touch moves past the slop', () => {
@@ -71,6 +71,26 @@ describe('scrollAfterResize', () => {
   it('moves with a taller viewport', () => { expect(scrollAfterResize({ ...base, prevHeight: 300, height: 600, scrollTop: 500 })).toBe(200) })
   it('clamps to zero', () => { expect(scrollAfterResize({ ...base, height: 900 })).toBe(0) })
   it('clamps to the maximum', () => { expect(scrollAfterResize({ ...base, scrollTop: 1700 })).toBe(1500) })
+})
+
+describe('keepAnchor', () => {
+  it('scrolls so the anchor stays where it was', () => {
+    // Folding back: the list starts over at 0 and the card sits at 900; it was at 240.
+    expect(keepAnchor({ at: 240, now: 900, scrollTop: 0, scrollHeight: 3000, height: 700 })).toEqual({ scrollTop: 660, off: 0 })
+  })
+  it('scrolls up when the anchor moved up', () => {
+    expect(keepAnchor({ at: 300, now: 100, scrollTop: 500, scrollHeight: 3000, height: 700 })).toEqual({ scrollTop: 300, off: 0 })
+  })
+  it('leaves the rest to a transform when the content is too short to scroll', () => {
+    // Opening: the card fills the area, nothing scrolls; it was 400 down and now sits at 12.
+    expect(keepAnchor({ at: 400, now: 12, scrollTop: 0, scrollHeight: 700, height: 700 })).toEqual({ scrollTop: 0, off: -388 })
+  })
+  it('clamps at the end of the content', () => {
+    expect(keepAnchor({ at: 0, now: 900, scrollTop: 0, scrollHeight: 1200, height: 700 })).toEqual({ scrollTop: 500, off: 400 })
+  })
+  it('does nothing when the anchor did not move', () => {
+    expect(keepAnchor({ at: 50, now: 50, scrollTop: 120, scrollHeight: 2000, height: 700 })).toEqual({ scrollTop: 120, off: 0 })
+  })
 })
 
 describe('viewportVars', () => {
