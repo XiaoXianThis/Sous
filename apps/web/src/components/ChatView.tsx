@@ -283,8 +283,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     try {
       const topic = await onSend(text, ids, mentions)
       if (typeof topic === 'string' && topic && topics) {
-        // Show the topic the message started, open.
-        uiStore.state.openTopic = topic
+        // Bring the topic the message started into view, folded: opening it is the user's click.
+        uiStore.state.revealTopic = topic
         uiStore.emit()
       }
       setDraft('')

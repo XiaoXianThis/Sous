@@ -65,8 +65,10 @@ interface UIState {
   projectThread: Record<string, string>
   /** A project whose dialog should open (a link to its chat); '' when none. */
   openProject: string
-  /** A topic to show expanded in the chat (a push link, a new topic); '' when none. */
+  /** A topic to show expanded in the chat (a push link the user followed); '' when none. */
   openTopic: string
+  /** A topic to bring into view, folded, with a short highlight (one a message just started); '' when none. */
+  revealTopic: string
 }
 
 export const ui = new Store<UIState>({
@@ -84,6 +86,7 @@ export const ui = new Store<UIState>({
   projectThread: {},
   openProject: '',
   openTopic: '',
+  revealTopic: '',
 })
 
 interface WBState {

@@ -524,6 +524,10 @@
  */
 .chat-scroll:has(> .topic-col > [data-filled]) { display: flex; flex-direction: column; }
 .chat-scroll > .topic-col:has(> [data-filled]) { flex: 1 1 auto; min-height: 0; width: 100%; grid-template-rows: minmax(0, 1fr); }
+/* A topic a message just started: it stays folded, an accent ring fades out over about a second (TopicList's FLASH_MS). */
+@keyframes topic-flash { 0%, 35% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+.card[data-flash] { outline: 2px solid transparent; outline-offset: 0; animation: topic-flash 1.2s ease-out; }
+@media (prefers-reduced-motion: reduce) { .card[data-flash] { animation: none; outline-color: var(--accent); } }
 
 .push-in { animation: push-in .42s cubic-bezier(.2, .9, .25, 1); }
 [data-page].push-in { box-shadow: -10px 0 30px -6px rgb(0 0 0 / .12); }
