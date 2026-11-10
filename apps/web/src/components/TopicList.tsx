@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { chat, go, ui, useChat, useUi, useWb } from '../lib/app'
 import { mergeHistory, visibleMessages } from '../lib/reduce'
 import { taskState, taskStates } from '../lib/status'
+import { keepAnchor } from '../lib/gesture'
 import { ago } from '../lib/time'
 import { lastLine, markSeen, messagesOf, readSeen, taskSummary, topicCards, unread, waitingIn, type TopicCardView, type TopicGroup } from '../lib/topics'
 import type { Message, Task, Topic } from '../lib/types'
@@ -80,6 +81,25 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
   // The topic a link or a new message asked for: shown even in a folded group.
   const [focus, setFocus] = useState('')
   const [seen, setSeen] = useState(readSeen)
+  // "需要你处理" steps aside while a topic is open; it comes back as it was.
+  const [needsOpen, setNeedsOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  // Where each card sat before a toggle (useFold anchors it across the layout switch).
+  const spots = useRef(new Map<string, Spot>())
+  const spotOf = (key: string) => {
+    let s = spots.current.get(key)
+    if (!s) spots.current.set(key, (s = {}))
+    return s
+  }
+  /** Notes where the card of `key` sits now, before a toggle changes the layout under it. */
+  function mark(key: string, opening: boolean) {
+    const s = spotOf(key)
+    const card = [...(root.current?.querySelectorAll<HTMLElement>('[data-fold]') ?? [])].find((e) => e.dataset.fold === key)
+    const sc = card ? scrollParent(card) : null
+    s.at = card && sc ? card.getBoundingClientRect().top - sc.getBoundingClientRect().top : undefined
+    // Opened from the list: folding puts it back there. Opened over another open card: no list place.
+    if (opening) s.list = root.current?.hasAttribute('data-filled') ? undefined : s.at
+  }
   const msgs = chatState.messages[threadId] ?? []
   const approvals = wbState.inbox?.approvals ?? []
   const answering = chatState.answering[threadId]
@@ -91,6 +111,8 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
   useEffect(() => {
     const id = uiState.openTopic
     if (!id) return
+    // Already open: keep the list place it opened from.
+    if (id !== expandedId) mark(id, true)
     setExpandedId(id)
     setFocus(id)
     ui.state.openTopic = ''
@@ -123,6 +145,7 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
   useEffect(() => {
     if (shownThread.current === threadId) return
     shownThread.current = threadId
+    spots.current.clear()
     setExpandedId('')
   }, [threadId])
 
@@ -131,16 +154,15 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
     : expandedId === EARLIER ? (data.earlier.count > 0 ? EARLIER : '')
       : data.topics.some((t) => t.id === expandedId) ? expandedId : ''
 
-  useEffect(() => {
-    if (!focus || !data) return
-    requestAnimationFrame(() => document.querySelector(`[data-topic="${CSS.escape(focus)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
-  }, [focus, data])
-
   if (!data) return <p className="m-0 text-[13px] text-faint px-1">正在读取话题…</p>
   const cards = topicCards(data.topics, msgs, approvals, answering)
   const topicIds = new Set(data.topics.map((t) => t.id))
   const groups: TopicGroup[] = ['attention', 'active', 'closed']
-  const toggle = (id: string) => setExpandedId((cur) => (cur === id ? '' : id))
+  const toggle = (id: string) => {
+    const opening = openId !== id
+    mark(id, opening)
+    setExpandedId(opening ? id : '')
+  }
   // Something open: it alone fills the column (same place in the tree, so it folds back in place).
   const filled = openId !== ''
   const onSeen = (id: string, seq: number) => {
@@ -149,8 +171,8 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
   }
 
   return (
-    <div className={`grid grid-cols-[minmax(0,1fr)] ${filled ? 'grid-rows-[minmax(0,1fr)] h-full min-h-0' : 'gap-4'}`} data-testid="topic-list" data-filled={filled ? '' : undefined}>
-      {inbox && !filled && <NeedsYou />}
+    <div ref={root} className={`grid grid-cols-[minmax(0,1fr)] ${filled ? 'grid-rows-[minmax(0,1fr)] h-full min-h-0' : 'gap-4'}`} data-testid="topic-list" data-filled={filled ? '' : undefined}>
+      {inbox && !filled && <NeedsYou open={needsOpen} setOpen={setNeedsOpen} />}
       {cards.length === 0 && data.earlier.count === 0 && <div className="grid justify-items-center gap-3 text-center pt-[12dvh] px-2 rise">{empty}</div>}
       {groups.map((g) => {
         const list = cards.filter((c) => c.group === g)
@@ -181,6 +203,7 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
                 answering={answering}
                 open={c.topic.id === openId}
                 flash={c.topic.id === flash}
+                spot={spotOf(c.topic.id)}
                 onToggle={() => toggle(c.topic.id)}
                 isUnread={unread(c.topic, msgs, seen)}
                 onSeen={onSeen}
@@ -193,16 +216,15 @@ export default function TopicList({ threadId, sendIn, empty, inbox = false }: {
         )
       })}
       {data.earlier.count > 0 && (!filled || openId === EARLIER) && (
-        <Earlier threadId={threadId} msgs={msgs} count={data.earlier.count} open={openId === EARLIER} onToggle={() => toggle(EARLIER)} />
+        <Earlier threadId={threadId} msgs={msgs} count={data.earlier.count} open={openId === EARLIER} spot={spotOf(EARLIER)} onToggle={() => toggle(EARLIER)} />
       )}
     </div>
   )
 }
 
 /** What needs the user now: approvals they decide and tasks waiting for them. */
-function NeedsYou() {
+function NeedsYou({ open, setOpen }: { open: boolean; setOpen: (open: boolean) => void }) {
   const wbState = useWb()
-  const [open, setOpen] = useState(false)
   const approvals = (wbState.inbox?.approvals ?? []).filter((a) => a.review === 'user' && a.status === 'pending')
   const tasks = wbState.inbox?.tasks ?? []
   if (approvals.length + tasks.length === 0) return null
@@ -257,14 +279,41 @@ function useTopicMessages(threadId: string, topicId: string, open: boolean) {
 const FOLD = { duration: 0.3, ease: [0.2, 0.85, 0.25, 1] as [number, number, number, number] }
 
 /**
+ * Where a fold sat on screen, in px from its scroller's top edge (TopicList
+ * notes it just before a toggle switches the layout):
+ * - `at`: just before this toggle (consumed by the fold that follows);
+ * - `list`: in the list, before it opened, so folding puts it back there.
+ */
+export interface Spot { at?: number; list?: number }
+
+/** The nearest ancestor that scrolls vertically (the chat area). */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const y = getComputedStyle(p).overflowY
+    if (y === 'auto' || y === 'scroll') return p
+  }
+  return null
+}
+
+/**
  * Folds a card open and shut with Motion: its height goes from what it showed
  * to what it shows now (0 ↔ auto for the body), clipped with overflow: hidden
  * only while it moves, and the body fades. `shown` keeps the body mounted
- * until the fold has closed. A height is not a transform, so MotionConfig's
- * reducedMotion="user" (src/main.tsx) leaves it alone: this checks
- * useReducedMotion itself and jumps when the system asks for less motion.
+ * until the fold has closed.
+ *
+ * Opening fills the chat area and folding brings the list back, so the
+ * scroller's content changes under the card (and the browser clamps its
+ * scrollTop). With `spot`, the card is anchored across that switch: the
+ * scroller is set so the card lands where it sat in the list (keepAnchor in
+ * gesture.ts), and whatever scrolling cannot cover (the filled area does not
+ * scroll) starts as a translateY that animates to 0, so the card leaves from
+ * where the eye saw it and nothing else in the chat area moves.
+ *
+ * Height is not a transform, so MotionConfig's reducedMotion="user"
+ * (src/main.tsx) leaves it alone: this checks useReducedMotion itself and jumps
+ * (anchoring still applies) when the system asks for less motion.
  */
-function useFold(open: boolean) {
+function useFold(open: boolean, spot?: Spot) {
   const [scope, animate] = useAnimate<HTMLElement>()
   const body = useRef<HTMLDivElement>(null)
   const reduce = useReducedMotion()
@@ -274,18 +323,21 @@ function useFold(open: boolean) {
     setWas(open)
     setLeaving(!open)
   }
-  // The height the card last showed: the next fold starts there.
+  // The height the card last showed at rest: the next fold starts there.
   const size = useRef(0)
+  // A fold is running: its in-between heights are not a size to start from.
+  const moving = useRef(false)
   useEffect(() => {
     const el = scope.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => { size.current = el.getBoundingClientRect().height })
+    const ro = new ResizeObserver(() => { if (!moving.current) size.current = el.getBoundingClientRect().height })
     ro.observe(el)
     return () => ro.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const run = useRef(0)
   const first = useRef(true)
+  const playing = useRef<{ stop: () => void }[]>([])
   useLayoutEffect(() => {
     if (first.current) {
       first.current = false
@@ -294,28 +346,64 @@ function useFold(open: boolean) {
     const el = scope.current
     if (!el) return
     const n = ++run.current
-    const from = size.current
+    // Toggled again mid-fold: start from the height it shows right now.
+    for (const a of playing.current) a.stop()
+    playing.current = []
+    const from = moving.current ? el.getBoundingClientRect().height : size.current
     el.style.height = ''
+    el.style.transform = ''
     const b = body.current
     // Open: whatever the layout gives it now. Shut: everything above the body.
     const to = open || !b ? el.getBoundingClientRect().height : b.offsetTop - (parseFloat(getComputedStyle(b).marginTop) || 0)
+
+    // Anchor it across the layout switch (with its final height, so the scroll is valid at the end too).
+    let shift = 0
+    const sc = spot?.at !== undefined ? scrollParent(el) : null
+    if (spot && spot.at !== undefined && sc) {
+      el.style.height = `${to}px`
+      const target = !open && spot.list !== undefined ? spot.list : spot.at
+      const now = el.getBoundingClientRect().top - sc.getBoundingClientRect().top
+      const k = keepAnchor({ at: target, now, scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, height: sc.clientHeight })
+      if (k.scrollTop !== sc.scrollTop) sc.scrollTop = k.scrollTop
+      // It now sits at target + off; it was seen at spot.at.
+      shift = spot.at - (target + k.off)
+      el.style.height = ''
+    }
+    if (spot) {
+      spot.at = undefined
+      if (!open) spot.list = undefined
+    }
+
     const settle = () => {
       if (run.current !== n) return
+      moving.current = false
+      playing.current = []
+      // Folded: hide the body before the height goes back to auto, or the
+      // card would show all of it for the frame until React unmounts it.
+      if (!open && b) b.style.display = 'none'
       el.style.height = ''
       el.style.overflow = ''
+      el.style.transform = ''
+      el.style.zIndex = ''
+      size.current = el.getBoundingClientRect().height
       if (!open) setLeaving(false)
     }
-    if (reduce || !from || !to || Math.abs(from - to) < 1) return settle()
+    if (reduce || !from || !to || (Math.abs(from - to) < 1 && Math.abs(shift) < 1)) return settle()
     // Done: back to the layout's height (it follows resizes), after Motion's last frame is written.
     const done = () => frame.postRender(settle)
+    moving.current = true
     el.style.overflow = 'hidden'
     el.style.height = `${from}px`
-    // Folding back into the list: keep it where the eye is.
-    if (!open) el.scrollIntoView?.({ block: 'nearest' })
-    void animate(el, { height: [from, to] }, FOLD).then(done)
+    // Over its neighbours while it slides past them.
+    el.style.zIndex = '1'
+    const moves = Math.abs(shift) >= 1
+    if (moves) el.style.transform = `translateY(${shift}px)`
+    const fold = animate(el, moves ? { height: [from, to], y: [shift, 0] } : { height: [from, to] }, FOLD)
+    playing.current.push(fold)
+    void fold.then(done)
     if (b) {
       if (open) b.style.opacity = '0'
-      void animate(b, { opacity: open ? [0, 1] : 0 }, { duration: open ? 0.22 : 0.16, ease: 'easeOut' })
+      playing.current.push(animate(b, { opacity: open ? [0, 1] : 0 }, { duration: open ? 0.22 : 0.16, ease: 'easeOut' }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -342,7 +430,7 @@ function useFollow(shown: boolean, tail: unknown) {
   return { ref, onScroll: measure }
 }
 
-function TopicCard({ card, threadId, msgs, answering, open, flash, onToggle, isUnread, onSeen, sendIn, topicIds, onChanged }: {
+function TopicCard({ card, threadId, msgs, answering, open, flash, spot, onToggle, isUnread, onSeen, sendIn, topicIds, onChanged }: {
   card: TopicCardView
   threadId: string
   msgs: Message[]
@@ -350,6 +438,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, onToggle, isU
   open: boolean
   /** Just started by a message: highlighted for a moment (app.css, .card[data-flash]). */
   flash: boolean
+  spot: Spot
   onToggle: () => void
   isUnread: boolean
   onSeen: (id: string, seq: number) => void
@@ -366,7 +455,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, onToggle, isU
   const own = visibleMessages(messagesOf(msgs, t.id, answering))
   const waiting = waitingIn(msgs, t.id)
   const streaming = own.some((m) => m.streaming)
-  const fold = useFold(open)
+  const fold = useFold(open, spot)
   const tip = own[own.length - 1]
   const follow = useFollow(fold.shown, `${own.length}:${tip?.content.length ?? 0}:${tip?.thinking?.length ?? 0}:${answering === t.id}`)
 
@@ -388,7 +477,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, onToggle, isU
   const info = groupInfo[card.group]
   return (
     // Open, the card fills the chat area: title row on top, reply box at the bottom, the rest scrolls between.
-    <article ref={fold.scope} className="card relative flex flex-col min-w-0 min-h-0" data-topic={t.id} data-flash={flash ? '' : undefined} data-testid="topic-card">
+    <article ref={fold.scope} className="card relative flex flex-col min-w-0 min-h-0" data-topic={t.id} data-fold={t.id} data-flash={flash ? '' : undefined} data-testid="topic-card">
       <header className="flex-none flex items-start gap-2 min-w-0 px-3.5 pt-3 pb-2.5">
         <button type="button" className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 items-center flex-1 min-w-0 border-0 bg-transparent p-0 text-left" aria-expanded={open} onClick={onToggle}>
           <Icon name={card.busy ? 'refresh' : info.icon} size={14} className={`${card.busy ? 'spin tone-accent' : info.tone} flex-none`} />
@@ -559,13 +648,13 @@ function TopicReply({ onSend }: { onSend: (text: string) => Promise<unknown> }) 
 }
 
 /** Messages from before topics, as one collapsed group. */
-function Earlier({ threadId, msgs, count, open, onToggle }: { threadId: string; msgs: Message[]; count: number; open: boolean; onToggle: () => void }) {
+function Earlier({ threadId, msgs, count, open, spot, onToggle }: { threadId: string; msgs: Message[]; count: number; open: boolean; spot: Spot; onToggle: () => void }) {
   useTopicMessages(threadId, '', open)
   const own = visibleMessages(msgs.filter((m) => !m.topic_id && !m.streaming))
-  const fold = useFold(open)
+  const fold = useFold(open, spot)
   // Open, it fills the chat area like a topic: the toggle stays on top, the messages scroll under it.
   return (
-    <section ref={fold.scope} className="relative flex flex-col min-w-0 min-h-0" aria-label="更早的对话">
+    <section ref={fold.scope} className="relative flex flex-col min-w-0 min-h-0" aria-label="更早的对话" data-fold={EARLIER}>
       <button type="button" className="flex-none flex items-center gap-1.5 border-0 bg-transparent p-0 px-1 text-[12px] font-semibold text-muted hover:text-ink w-fit" aria-expanded={open} onClick={onToggle}>
         <Icon name="chevron" size={11} className={`transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
         更早的对话 · {count} 条
