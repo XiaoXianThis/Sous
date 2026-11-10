@@ -15,7 +15,7 @@
   | Kiro | 按 Kiro CLI 的说明登录（sous 对 Kiro 的支持尚未实测） |
 
 - Claude Code 和 Codex 是通过 ACP 适配器运行的，需要先装好 Node.js（包含 `npx`）。
-- 代码任务完成后，sous 会 push 分支并创建 PR，所以这台电脑上的 git 要能 push 到项目的 `origin`，并且装好、登录 GitHub CLI：`gh auth login`。sous 永远不会合并 PR。
+- 代码任务做完后，改动留在任务分支上（或就地），sous 不会自己提交、推送或开 PR。只有你明确让它推送或开 PR 时，这台电脑上的 git 才要能 push 到项目的 `origin`，并且装好、登录 GitHub CLI：`gh auth login`。sous 不会自己合并 PR。
 - 决定一个**工作空间**：放项目的目录，比如 `~/Code`。sous 会在这里找 git 仓库（往下两层），远端地址和已登记项目一致的仓库自动成为那个项目在这台电脑上的位置；新建或 clone 的项目也放在这里。新建项目默认用 [wokspace](https://github.com/XiaoXianThis/wokspace) 规范，需要电脑上装了 `wok`。
 
 ## 2. 安装 sous 客户端
@@ -78,7 +78,7 @@ sous pair https://agent.wxian.cc 123456 --name 云服务器 --role server
 
 - 服务器只接运维任务（部署、重启、查服务），不接写代码的任务；不能使用完全开放模式；改文件、删除、启停服务都要你在网页上批准（见 `docs/decisions/0014`）。
 - 网页上可以把开发机改成服务器，但服务器改回开发机只能在那台机器的 `~/.sous/node.json` 里删掉 `"role"`。
-- 在项目设置里登记部署目标：哪台服务器、哪个目录、部署命令（最好是仓库里的部署脚本）、健康检查命令，以及是否在 sous 开的 PR 合并后自动部署。自动部署需要至少一台在线的开发机装好并登录 `gh`，sous 用它查 PR 是否已合并。
+- 在项目设置里登记部署目标：哪台服务器、哪个目录、部署命令（最好是仓库里的部署脚本）、健康检查命令，以及部署分支和是否在它出现新提交时自动部署。自动部署看的是 origin 上部署分支的最新提交（按提交时间），不是 PR 是否合并，也不需要装 `gh`；机器每 10 分钟在后台 fetch 一次，sous 推送后也会重新扫描。
 - 服务器上一般没有浏览器：登录 agent 时优先用 API Key（“设置 → 机器 → 管理”里填），或者 agent 提供的设备码登录。
 
 ## 4. 让它一直运行
@@ -97,7 +97,7 @@ sous service start
 sous status
 ```
 
-macOS：项目在 `~/Documents`、`~/Desktop` 这类受保护目录下时，LaunchAgent 启动的 sous 一访问就会弹窗要权限，没人点任务就停住。给 `sous` 开「完全磁盘访问权限」，并用固定身份签名，让授权在重建之后依然有效（Release 的更新要再重签一次），见 [macos-signing-and-permissions.md](macos-signing-and-permissions.md)。
+macOS：项目在 `~/Documents`、`~/Desktop` 这类受保护目录下时，LaunchAgent 启动的 sous 一访问就会弹窗要权限，没人点任务就停住。给 `sous` 开「完全磁盘访问权限」，并用固定身份签名，让授权在重建之后依然有效（从发布产物开始签名的版本起，Release 的更新也带同一个签名，不用再重签），见 [macos-signing-and-permissions.md](macos-signing-and-permissions.md)。
 
 **Windows**：`sous service install` 会注册成 Windows 服务，但它以 SYSTEM 账户运行，读不到你账户下各个 agent 的登录信息，所以暂时不要用它。改用“任务计划程序”，在登录时运行 `sous daemon`（PowerShell）：
 
@@ -139,7 +139,7 @@ sous update           # 安装最新版本（daemon 在运行时由它来装并�
 sous 的文件都在 `~/.sous/`（Windows 上是 `%USERPROFILE%\.sous\`），可以用 `--home` 或环境变量 `SOUS_HOME` 改到别处：
 
 - `node.json`：配对信息和设备令牌（只有你能读）。
-- `worktrees/<仓库名>/<id>/`：每个代码任务的独立 git worktree，同一个任务的多次执行共用它，分支名为 `sous/<标题>-<id>`。任务完成或取消后 worktree 会被删除，分支保留。你的原始仓库和工作区不会被修改。
+- `worktrees/<仓库名>/<id>/`：每个代码任务的独立 git worktree，同一个任务的多次执行共用它，分支名为 `sous/<标题>-<id>`。任务做完后 worktree 会保留，方便看 diff 或返工；分支合并、丢弃、开了 PR 或任务取消后才删除 worktree，分支保留。你的原始仓库和工作区不会被修改。
 - `scratch/<id>/`：不涉及仓库的一般任务的工作目录。
 - `outbox.jsonl`：还没被 Hub 确认的事件。
 - `runs/<id>.json`：正在执行的 Run 的状态（agent 的会话、已送达的追加消息），重启后用来恢复，Run 结束就删除。

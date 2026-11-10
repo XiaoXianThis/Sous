@@ -10,7 +10,7 @@
 ## Decision
 
 - 第一期由主管在对话中直接调用 `task_create` / `task_update` 维护任务。
-- 模型角色改为 supervisor、reviewer、approver、inspector 四个。0007 里提到的 extractor 角色，第一期不启用。
+- 模型角色改为 supervisor、reviewer、approver、inspector 四个（0020 又增加 `compactor`，用来整理对话的摘要）。0007 里提到的 extractor 角色，第一期不启用。
 - 等到会议模式或长段转写需要批量提炼任务时，再引入 extractor。
 
 ## Alternatives

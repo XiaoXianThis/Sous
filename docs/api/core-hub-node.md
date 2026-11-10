@@ -50,7 +50,7 @@
 | N→H | `approval.request` | `{approval_id, run_id, title, tool_kind?, detail?, options: [{option_id, name, kind}], category?, review?: "user"\|"ai", facts?: PolicyFacts, evidence?: ApprovalEvidence}` | ✅ |
 | H→N | `approval.decide` | `{approval_id, run_id, option_id, note?}`：`option_id` 为空表示取消这个请求 | — |
 | H→N | `ack` | `{seq}` | — |
-| H→N | `workspace.remove` | `{task_id, repo_path}`：任务关闭后删除它的 worktree（保留分支）；这个任务还有 Run 在跑时忽略 | — |
+| H→N | `workspace.remove` | `{task_id, repo_path}`：任务的 worktree 不再需要时（分支合并、丢弃、开了 PR，或任务取消）删除它（保留分支）；这个任务还有 Run 在跑时忽略 | — |
 | H→N | `node.request` | `{op, args}`：远程管理请求，帧 `id` 就是请求 id（见下文“远程管理”） | — |
 | N→H | `node.response` | `{req_id, ok, result?, error?: {code, message}}` | ❌ 只转给等待的调用方 |
 | N→H | `node.stream` | `{job_id, offset, data}`：作业的终端输出，`offset` 是这块之前的字节数，不会切断 UTF-8 字符 | ❌ 只转发 |
