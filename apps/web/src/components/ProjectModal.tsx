@@ -1,3 +1,4 @@
+import { frame, useAnimate } from 'motion/react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { go, ui } from '../lib/app'
 import { setArchived } from '../lib/projects'
@@ -17,8 +18,27 @@ import ShellPanel from './ShellPanel'
 import TaskRow from './TaskRow'
 import TaskView from './TaskView'
 
-const rectOf = (r: DOMRect) => ({ left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, borderRadius: '16px' })
+// The dialog's animations run on Motion (motion.dev), with the curves of the hand-written ones they replace.
+type Ease = [number, number, number, number]
+const GROW = { duration: 0.26, ease: [0.2, 0.85, 0.25, 1] as Ease }
+const SHRINK = { duration: 0.22, ease: [0.4, 0, 0.6, 1] as Ease }
+const PUSH = { duration: 0.42, ease: [0.2, 0.9, 0.25, 1] as Ease }
+const POP = { duration: 0.26, ease: [0.3, 0.7, 0.4, 1] as Ease }
+/** Keyframes that move a box from one rectangle to another. */
+const between = (a: DOMRect, b: DOMRect) => ({
+  left: [a.left, b.left], top: [a.top, b.top], width: [a.width, b.width], height: [a.height, b.height],
+})
+/** No animation at all when the system asks for reduced motion: open in place, close at once. */
 const motion = () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+/** How far a swipe (or an animation) has moved the page to the right. */
+function shiftOf(el: HTMLElement): number {
+  const m = /^matrix\((.+)\)$/.exec(getComputedStyle(el).transform)
+  return m ? parseFloat(m[1].split(',')[4]) || 0 : 0
+}
+/** Hands the box back to its classes once Motion has written its last frame. */
+function release(el: HTMLElement, ...props: ('left' | 'top' | 'width' | 'height' | 'borderRadius' | 'transform')[]) {
+  frame.postRender(() => { for (const p of props) el.style[p] = '' })
+}
 
 /**
  * A project card opened as a dialog. It grows out of the card and shrinks back
@@ -37,7 +57,9 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
   onTask: (id: string) => void
   onClose: () => void
 }) {
-  const panel = useRef<HTMLDivElement>(null)
+  // The panel is Motion's scope: its animations stop if the dialog goes away mid-way.
+  const [panel, animate] = useAnimate<HTMLDivElement>()
+  const backdrop = useRef<HTMLDivElement>(null)
   const closing = useRef(false)
   const [shown, setShown] = useState(false)
   const p = card.project
@@ -50,37 +72,59 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
 
   useLayoutEffect(() => {
     const el = panel.current
-    // On a phone it is a pushed page (.push-in), not a card growing.
-    if (el && from && motion() && !phone) {
-      const to = el.getBoundingClientRect()
-      el.animate([rectOf(from), rectOf(to)], { duration: 260, easing: 'cubic-bezier(.2,.85,.25,1)' })
+    const bd = backdrop.current
+    if (el && motion()) {
+      if (phone) {
+        // A pushed page: in from the right, the backdrop fading in with it.
+        const w = el.offsetWidth
+        el.style.transform = `translateX(${w}px)`
+        void animate(el, { x: [w, 0] }, PUSH).then(() => release(el, 'transform'))
+        if (bd) void animate(bd, { opacity: [0, 1] }, { duration: PUSH.duration * 0.7, ease: 'easeOut' })
+      } else if (from) {
+        // Grows out of the card it was opened from, then goes back to its classes (they follow resizes).
+        const to = el.getBoundingClientRect()
+        Object.assign(el.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`, borderRadius: '16px' })
+        void animate(el, { ...between(from, to), borderRadius: [16, 18] }, GROW).then(() => {
+          if (!closing.current) release(el, 'left', 'top', 'width', 'height', 'borderRadius')
+        })
+        if (bd) void animate(bd, { opacity: [0, 1] }, { duration: 0.18, ease: 'easeOut' })
+      }
     }
     setShown(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function close() {
     const el = panel.current
+    const bd = backdrop.current
+    // Once: a second close while one animates does nothing.
     if (closing.current) return
     closing.current = true
+    if (!el || !motion()) return onClose()
     if (phone) {
-      // Slide out to the right, from wherever an edge swipe left it.
-      if (!el || !motion()) return onClose()
-      const now = getComputedStyle(el).transform
-      const a = el.animate([{ transform: now === 'none' ? 'translateX(0)' : now }, { transform: 'translateX(100%)' }], {
-        duration: 260, easing: 'cubic-bezier(.3,.7,.4,1)', fill: 'forwards',
-      })
-      el.parentElement?.querySelector('.backdrop')?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, fill: 'forwards' })
-      a.onfinish = onClose
+      // Slide out to the right, from wherever an edge swipe left it (its CSS transition would smear every frame).
+      el.style.transition = 'none'
+      void animate(el, { x: [shiftOf(el), el.offsetWidth] }, POP).then(onClose)
+      if (bd) void animate(bd, { opacity: 0 }, POP)
       return
     }
+    // Shrinks back into its card.
     const cardEl = document.querySelector<HTMLElement>(`[data-project-card="${CSS.escape(p.id)}"]`)
-    if (!el || !cardEl || !motion()) return onClose()
-    const a = el.animate([rectOf(el.getBoundingClientRect()), rectOf(cardEl.getBoundingClientRect())], {
-      duration: 220, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards',
-    })
-    el.parentElement?.querySelector('.backdrop')?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, fill: 'forwards' })
-    a.onfinish = onClose
+    if (!cardEl) return onClose()
+    void animate(el, { ...between(el.getBoundingClientRect(), cardEl.getBoundingClientRect()), borderRadius: [18, 16] }, SHRINK).then(onClose)
+    if (bd) void animate(bd, { opacity: 0 }, SHRINK)
   }
+
+  // Phone: the project chat is a page pushed in from the right.
+  const chatPage = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const el = chatPage.current
+    if (!chatOpen || !phone || !el || !motion()) return
+    const w = el.offsetWidth
+    el.style.transform = `translateX(${w}px)`
+    void animate(el, { x: [w, 0] }, PUSH).then(() => release(el, 'transform'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatOpen])
 
   useEffect(() => {
     // On a phone Escape (and the edge swipe, through it) steps back one level, like the bar's back button.
@@ -105,13 +149,14 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
 
   return (
     <>
-      <div className="backdrop" role="presentation" onClick={close}></div>
+      {/* Motion fades this backdrop with the panel, in place of .backdrop's CSS fade-in. */}
+      <div ref={backdrop} className="backdrop" style={{ animation: 'none' }} role="presentation" onClick={close}></div>
       <div
         ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={`项目 ${p.name}`}
-        className={`fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5dvh] h-[90dvh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:shadow-none ${phone ? 'push-in' : ''}`}
+        className={`fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5dvh] h-[90dvh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:shadow-none`}
         style={{
           visibility: shown ? 'visible' : 'hidden',
           gridTemplateColumns: docked ? `minmax(0,1fr) clamp(300px, ${chatWidth}px, 50%)` : 'minmax(0,1fr)',
@@ -235,7 +280,8 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         </div>
         {chatOpen && (
           <aside
-            className={`relative min-w-0 min-h-0 bg-chrome border-l border-line max-[760px]:absolute max-[760px]:inset-0 max-[760px]:z-10 max-[760px]:border-l-0 max-[760px]:bg-page ${phone ? 'push-in' : ''}`}
+            ref={chatPage}
+            className="relative min-w-0 min-h-0 bg-chrome border-l border-line max-[760px]:absolute max-[760px]:inset-0 max-[760px]:z-10 max-[760px]:border-l-0 max-[760px]:bg-page"
             aria-label="项目对话"
             data-page={phone ? '' : undefined}
           >

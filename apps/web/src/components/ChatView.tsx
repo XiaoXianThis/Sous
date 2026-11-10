@@ -393,7 +393,9 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
 
       <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
         {topics && onSendIn ? (
-          <div className="mx-auto max-w-[820px] px-3 pt-3 pb-4 grid grid-cols-[minmax(0,1fr)]">
+          // .topic-col: with a topic open (TopicList's data-filled) app.css makes the column a flex box the
+          // card fills, so only the card's messages scroll; all folded, the list flows and scrolls here.
+          <div className="topic-col mx-auto max-w-[820px] px-3 pt-3 pb-4 grid grid-cols-[minmax(0,1fr)]">
             <TopicList threadId={threadId} sendIn={onSendIn} empty={empty} inbox={inbox} />
           </div>
         ) : (

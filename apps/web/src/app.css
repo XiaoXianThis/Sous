@@ -516,6 +516,15 @@
 .chat-phone[data-typing] > .chat-scroll { padding-bottom: calc(var(--composer-h, 96px) + 46px); }
 
 /* A pushed phone page (settings detail, project): it slides in from the right. */
+/*
+ * The topic view with a topic open (TopicList's root has data-filled): the
+ * chat column turns into a flex box and the open card fills it (flex-1 +
+ * min-h-0), so the card's own message list is the only thing that scrolls.
+ * All folded, .topic-col is a plain block and .chat-scroll scrolls the list.
+ */
+.chat-scroll:has(> .topic-col > [data-filled]) { display: flex; flex-direction: column; }
+.chat-scroll > .topic-col:has(> [data-filled]) { flex: 1 1 auto; min-height: 0; width: 100%; grid-template-rows: minmax(0, 1fr); }
+
 .push-in { animation: push-in .42s cubic-bezier(.2, .9, .25, 1); }
 [data-page].push-in { box-shadow: -10px 0 30px -6px rgb(0 0 0 / .12); }
 
