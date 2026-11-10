@@ -387,20 +387,20 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 	}
 
 	seen := map[string]int{} // tool calls made this turn
-	checkDispatch := hasDispatchTools(req.Tools)
-	dispatched, checkedDispatch := false, false
+	verifier := claimVerifier{s: s, receipts: map[string]taskReceipt{}, threadID: threadID, replyTo: tr.upTo}
+	checkedDispatch := false
 	for step := 0; step < MaxSteps; step++ {
+		verifier.step = step
 		if step > 0 {
 			addNote(&req, takeIn())
 		}
 		if len(texts) > 0 {
 			emit(provider.Delta{Text: "\n\n"})
 		}
-		// Hold text until explicit dispatch claims can be checked. Thinking
-		// still streams; rejected claims never appear as successful actions.
-		holdText := checkDispatch && !dispatched
+		// Hold every text step until its IDs and state claims are checked.
+		// Thinking still streams; a previous receipt never bypasses the guard.
 		stream := func(d provider.Delta) {
-			if !holdText || d.Text == "" {
+			if d.Text == "" {
 				emit(d)
 			}
 		}
@@ -423,26 +423,32 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 		s.record(threadID, "supervisor", provider.ModelOf(resp, s.opt.Model), s.opt.Provider, resp)
 		calls := resp.Message.ToolCalls()
 		t := resp.Message.PlainText()
-		if checkDispatch && !dispatched && claimsDispatch(t) {
-			slog.Warn("supervisor: unverified dispatch claim", "thread", threadID, "reply_to", tr.upTo, "step", step)
-			if len(calls) == 0 {
-				if !checkedDispatch && step < MaxSteps-1 {
-					checkedDispatch = true
-					req.Messages = append(req.Messages, resp.Message, provider.Text(provider.RoleUser, dispatchCheckNote))
-					continue
-				}
-				emit(provider.Delta{Text: dispatchUnconfirmed})
-				reply(dispatchUnconfirmed, nil)
-				return pick, true
+		if claimsDispatch(t) && len(taskIDPattern.FindAllString(t, -1)) == 0 {
+			if len(calls) == 0 && !checkedDispatch && step < MaxSteps-1 {
+				checkedDispatch = true
+				slog.Warn("supervisor: unverified dispatch claim", "thread", threadID, "task_id", "", "verdict", "missing_id")
+				req.Messages = append(req.Messages, resp.Message, provider.Text(provider.RoleUser, dispatchCheckNote))
+				continue
 			}
-			// A claim made before its tool call is premature. Execute the
-			// calls, then let the next model step report their actual result.
-			t = ""
+			if len(calls) > 0 {
+				t = ""
+			} // wait for the result before reporting
 		}
-		if t != "" {
-			if holdText {
-				emit(provider.Delta{Text: t})
+		t = verifier.check(ctx, t)
+		if t != resp.Message.PlainText() {
+			// Subsequent model steps see the same corrected words as the user.
+			parts := append([]provider.Part(nil), resp.Message.Parts...)
+			replacement := t
+			for i := range parts {
+				if parts[i].Text != "" {
+					parts[i].Text, replacement = replacement, ""
+				}
 			}
+			resp.Message.Parts = parts
+		}
+
+		if t != "" {
+			emit(provider.Delta{Text: t})
 			texts = append(texts, t)
 			spoke = true
 		}
@@ -493,7 +499,7 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 			default:
 				r = s.opt.Tools.Call(ctx, c)
 			}
-			dispatched = dispatched || dispatchReceipt(c, r)
+			verifier.collect(ctx, r)
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
 			notes = append(notes, toolNote(c, r))
 		}
@@ -633,14 +639,14 @@ func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(eve
 	}
 	out := make([]provider.Message, 0, len(msgs))
 	add := func(m store.Message) {
-		if m.Error || m.Kind == event.KindSilent {
+		if (m.Error || m.Kind == event.KindSilent) && len(m.Tools) == 0 {
 			return
 		}
 		role := provider.RoleUser
 		if m.Role == "assistant" {
 			role = provider.RoleAssistant
 		}
-		content := m.Content
+		content := historyText(m)
 		if m.Role == "user" && m.Context != nil && len(label) > 0 && label[0] != nil {
 			if l := label[0](*m.Context); l != "" {
 				content = "【用户写这条消息时，正在工作台上看：" + l + "。消息里的“这个”“它”多半指它】\n" + content
@@ -663,8 +669,8 @@ func toProviderWith(files *attach.Store, msgs []store.Message, label ...func(eve
 		if m.Role == "user" {
 			var parts []string
 			for _, r := range replies[m.Seq] {
-				if !r.Error && r.Kind != event.KindSilent && strings.TrimSpace(r.Content) != "" {
-					parts = append(parts, consultLabel(r)+r.Content)
+				if (!r.Error && r.Kind != event.KindSilent && strings.TrimSpace(r.Content) != "") || len(r.Tools) > 0 {
+					parts = append(parts, consultLabel(r)+historyText(r))
 				}
 			}
 			if len(parts) > 0 {

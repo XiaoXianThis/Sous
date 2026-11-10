@@ -281,7 +281,7 @@ func TestRelevantMemoriesReachThePrompt(t *testing.T) {
 }
 
 func TestTriggerStartsATurn(t *testing.T) {
-	p := &scripted{responses: []provider.Response{{Message: provider.Text(provider.RoleAssistant, "昨天完成了 2 个任务。")}}}
+	p := &scripted{responses: []provider.Response{{Message: provider.Text(provider.RoleAssistant, "昨天的进展如下。")}}}
 	log, main, _ := setup(t, p, nil)
 	ev := event.New(event.TriggerFired, event.ActorTrigger, main, event.TriggerPayload{
 		Kind: event.TriggerCron, Key: "schedule:s1", ScheduleID: "", MessageID: "m1", Title: "日报", Content: "【定时任务「日报」】\n汇总昨天的进展",
@@ -290,7 +290,7 @@ func TestTriggerStartsATurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	msgs := waitMessages(t, log, main, 2)
-	if msgs[0].Kind != event.KindTrigger || msgs[0].Role != "user" || msgs[1].Content != "昨天完成了 2 个任务。" || msgs[1].ReplyTo != msgs[0].Seq {
+	if msgs[0].Kind != event.KindTrigger || msgs[0].Role != "user" || msgs[1].Content != "昨天的进展如下。" || msgs[1].ReplyTo != msgs[0].Seq {
 		t.Fatalf("messages: %+v", msgs)
 	}
 	if got := p.requests[0].Messages[0].PlainText(); !strings.Contains(got, "汇总昨天的进展") {
@@ -354,7 +354,7 @@ func TestStepsKeepTheOrderOfWordsAndTools(t *testing.T) {
 			assistant = append(assistant, m.PlainText())
 		}
 	}
-	if len(assistant) != 1 || assistant[0] != "我先建任务\n\n建好了" {
+	if len(assistant) != 1 || assistant[0] != "我先建任务\n【本轮工具】probe → ok\n\n建好了" {
 		t.Fatalf("history: %q", assistant)
 	}
 }

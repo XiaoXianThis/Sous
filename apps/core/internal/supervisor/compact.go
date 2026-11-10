@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,7 +156,7 @@ func (s *Supervisor) compact(ctx context.Context, threadID, reason string) (err 
 	fold, cut := s.foldRange(ctx, msgs, seg.CoversUpTo, reason)
 	var shown []store.Message
 	for _, m := range fold {
-		if !m.Error && m.Kind != event.KindSilent && strings.TrimSpace(m.Content) != "" {
+		if (!m.Error && m.Kind != event.KindSilent && strings.TrimSpace(m.Content) != "") || len(m.Tools) > 0 {
 			shown = append(shown, m)
 		}
 	}
@@ -309,7 +310,7 @@ func (s *Supervisor) summarize(ctx context.Context, threadID, old string, msgs [
 		}
 		missing := missingItems(old, summary)
 		if len(missing) == 0 {
-			return summary, nil
+			return preserveToolReceipts(old, summary, msgs), nil
 		}
 		if attempt == 0 {
 			req.Messages = append(req.Messages, resp.Message, provider.Text(provider.RoleUser,
@@ -320,7 +321,7 @@ func (s *Supervisor) summarize(ctx context.Context, threadID, old string, msgs [
 		slog.Warn("supervisor: summary dropped items, putting them back", "thread", threadID, "items", len(missing))
 		summary = restore(summary, missing)
 	}
-	return summary, nil
+	return preserveToolReceipts(old, summary, msgs), nil
 }
 
 // record stores the usage of a call made for a thread.
@@ -333,4 +334,79 @@ func (s *Supervisor) record(threadID, role, model string, p provider.Provider, r
 	if _, err := s.opt.Log.Append(s.ctx, ev); err != nil {
 		slog.Error("supervisor: store usage", "err", err)
 	}
+}
+
+const (
+	receiptArchive      = "\n\n【工具回执存档：历史结果，不代表当前状态】\n"
+	receiptArchiveRunes = 6000
+	olderReceipts       = "【更早工具回执已折叠：执行结果需用 thread_read 核对原消息，不能凭主管文字确认成功】"
+)
+
+// Keep exact evidence independently of the summarizer. Subsequent folds
+// carry the archive once, with stable message/call references, even if the
+// model omits it or repeats it. Never turn a historical receipt into state.
+func preserveToolReceipts(old, summary string, msgs []store.Message) string {
+	_, archive, _ := strings.Cut(old, receiptArchive)
+	summary, _, _ = strings.Cut(summary, receiptArchive)
+	var entries []string
+	seen := map[string]bool{}
+	add := func(line string) {
+		if line != "" && !seen[line] {
+			entries = append(entries, line)
+			seen[line] = true
+		}
+	}
+	for _, line := range strings.Split(archive, "\n") {
+		if strings.HasPrefix(line, "【本轮工具 #") {
+			add(line)
+		}
+	}
+	for _, m := range msgs {
+		for i, n := range m.Tools {
+			text := historyText(store.Message{Role: "assistant", Tools: []event.ToolNote{n}})
+			text = strings.TrimPrefix(text, "\n【本轮工具】")
+			add(fmt.Sprintf("【本轮工具 #%d.%d】%s", m.Seq, i+1, text))
+		}
+	}
+	// Keep the most recent receipts within a fixed budget. Older evidence
+	// is explicitly marked unavailable, never silently replaced by claims.
+	sort.SliceStable(entries, func(i, j int) bool {
+		var si, sj, ci, cj int64
+		fmt.Sscanf(entries[i], "【本轮工具 #%d.%d】", &si, &ci)
+		fmt.Sscanf(entries[j], "【本轮工具 #%d.%d】", &sj, &cj)
+		if si == sj {
+			return ci < cj
+		}
+		return si < sj
+	})
+	omitted := strings.Contains(archive, olderReceipts)
+	used, from := len([]rune(olderReceipts))+1, len(entries)
+	for from > 0 {
+		size := len([]rune(entries[from-1])) + 1
+		if used+size > receiptArchiveRunes {
+			break
+		}
+		used += size
+		from--
+	}
+	if from > 0 {
+		omitted = true
+		entries = entries[from:]
+	}
+	if omitted {
+		entries = append([]string{olderReceipts}, entries...)
+	}
+	// The model may have copied an archive entry into prose. Retain only
+	// the code-owned copy, so repeated compactions are idempotent.
+	var prose []string
+	for _, line := range strings.Split(summary, "\n") {
+		if !strings.Contains(line, "【本轮工具 #") {
+			prose = append(prose, line)
+		}
+	}
+	summary = strings.TrimSpace(strings.Join(prose, "\n"))
+	if len(entries) == 0 {
+		return summary
+	}
+	return summary + receiptArchive + strings.Join(entries, "\n")
 }

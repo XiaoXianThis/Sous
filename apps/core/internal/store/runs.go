@@ -647,3 +647,21 @@ func (s *Store) TaskApprovals(ctx context.Context, taskID string) ([]Approval, e
 	}
 	return scanApprovals(rows)
 }
+
+// LatestTaskExecution returns the latest execution, including a finished one.
+// An older active run must not confirm a newer queued or failed attempt.
+func (s *Store) LatestTaskExecution(ctx context.Context, taskID string) (Run, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runCols+` FROM runs WHERE task_id = ?
+ AND purpose IN ('work', 'rebase', 'deliver', 'review') ORDER BY created_at DESC, rowid DESC LIMIT 1`, taskID)
+	if err != nil {
+		return Run{}, err
+	}
+	rs, err := scanRuns(rows)
+	if err != nil {
+		return Run{}, err
+	}
+	if len(rs) == 0 {
+		return Run{}, ErrNotFound
+	}
+	return rs[0], nil
+}
