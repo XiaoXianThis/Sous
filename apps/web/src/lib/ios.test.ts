@@ -229,13 +229,15 @@ describe('installTouch', () => {
       const layer = mountLayer('<p>项目</p>')
       const keys: string[] = []
       const onKey = (e: KeyboardEvent) => {
-        keys.push(e.key)
+        // Cancelable like a real key press, so a layer that steps back instead (Radix's onEscapeKeyDown) can stop the close.
+        keys.push(`${e.key}${e.cancelable ? '' : ' (not cancelable)'}`)
         layer.remove()
       }
-      window.addEventListener('keydown', onKey)
+      // Radix's layers listen on the document.
+      document.addEventListener('keydown', onKey)
       drag(document.body, { x: 5, y: 300 }, { x: 300, y: 310 })
       vi.advanceTimersByTime(1000)
-      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey)
       expect(keys).toEqual(['Escape'])
     })
 

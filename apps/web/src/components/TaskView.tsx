@@ -11,6 +11,7 @@ import RunCard from './RunCard'
 import StageBar from './StageBar'
 import TalkLog from './TalkLog'
 import TaskDetail from './TaskDetail'
+import { SheetPageContext } from './Sheet'
 
 /**
  * A task's detail inside the project dialog: a fixed header (title, actions),
@@ -167,7 +168,9 @@ export default function TaskView({ id }: { id: string }) {
             <>
 
               {showForm && (
+                // The form is a dialog elsewhere; here it is laid flat into the card (.embed).
                 <div className="card px-4 py-3.5 embed">
+                  <SheetPageContext.Provider value>
                   <TaskDetail
                     id={id}
                     compact
@@ -179,6 +182,7 @@ export default function TaskView({ id }: { id: string }) {
                       ui.emit()
                     }}
                   />
+                  </SheetPageContext.Provider>
                 </div>
               )}
 

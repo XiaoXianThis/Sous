@@ -25,7 +25,8 @@ async function set(settings: string) {
   })
 }
 const click = (b: Element) => act(async () => (b as HTMLElement).click())
-const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key })) })
+// Radix listens on the document, where a key press (or the phone's edge swipe, lib/ios.ts) arrives.
+const press = (key: string) => act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
 
 beforeEach(() => {
   // The machines page loads its list; keep it pending.
@@ -75,7 +76,18 @@ describe('SettingsModal on a phone', () => {
     phone = false
     await set('home')
     await render()
-    expect(el.querySelector('.ios-row')).toBeNull()
-    expect(el.querySelector('[aria-current="page"]')?.textContent).toBe('机器')
+    // A modal dialog drawn in <body>.
+    const d = document.querySelector('[role=dialog][aria-label=设置]')!
+    expect(d.getAttribute('aria-modal')).toBe('true')
+    expect(document.querySelector('.ios-row')).toBeNull()
+    expect(d.querySelector('[aria-current="page"]')?.textContent).toBe('机器')
+  })
+
+  it('stays in place under the tab bar on a phone, not modal', async () => {
+    await set('home')
+    await render()
+    const d = el.querySelector('[role=dialog][aria-label=设置]')!
+    expect(d).not.toBeNull()
+    expect(d.hasAttribute('aria-modal')).toBe(false)
   })
 })

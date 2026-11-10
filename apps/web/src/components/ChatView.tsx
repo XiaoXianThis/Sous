@@ -15,6 +15,7 @@ import Icon from './Icon'
 import MessageView from './Message'
 import RunChip from './RunChip'
 import TopicList from './TopicList'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './ui/popover'
 
 type Item = { kind: 'message'; seq: number; message: Message } | { kind: 'run'; seq: number; run: RunView }
 
@@ -85,6 +86,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const phone = usePhone()
   const section = useRef<HTMLElement>(null)
   const composer = useRef<HTMLFormElement>(null)
+  const composerBox = useRef<HTMLDivElement>(null)
   const [ctxView, reloadContext] = useThreadContext(threadId)
   const [contextOpen, setContextOpen] = useState(false)
   // @ references: the projects picked so far, the query at the caret and the highlighted candidate.
@@ -165,15 +167,6 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       syncLayer()
     }
   }, [draft])
-
-  useEffect(() => {
-    if (!picking) return
-    const onClick = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('.picker')) setPicking(false)
-    }
-    window.addEventListener('click', onClick)
-    return () => window.removeEventListener('click', onClick)
-  }, [picking])
 
   function onScroll() {
     if (scroller.current) stick.current = scroller.current.scrollHeight - scroller.current.scrollTop - scroller.current.clientHeight < 80
@@ -343,39 +336,42 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
         <div className="flex items-center gap-2 min-w-0">
         {leading}
-        <div className="relative picker min-w-0">
-          <button
-            className={phone ? 'glass-pill glass max-w-full' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
-            onClick={() => setPicking(!picking)}
-            aria-expanded={picking}
-            aria-haspopup="listbox"
+        <Popover open={picking} onOpenChange={setPicking}>
+          <PopoverTrigger asChild>
+            <button
+              className={phone ? 'glass-pill glass max-w-full min-w-0' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
+              aria-haspopup="listbox"
+            >
+              <span className="relative grid place-items-center flex-none">
+                {avatar}
+                <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--chrome)] ${dot}`} title={statusText[uiState.status]}></span>
+              </span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[14px]">{title}</span>
+              <Icon name="chevron" size={12} className="text-faint flex-none" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            role="listbox"
+            aria-label="对话"
+            sideOffset={4}
+            className="w-[min(272px,calc(100vw-16px))] max-h-[min(55dvh,var(--radix-popover-content-available-height))] p-1 grid gap-0.5 content-start"
           >
-            <span className="relative grid place-items-center flex-none">
-              {avatar}
-              <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--chrome)] ${dot}`} title={statusText[uiState.status]}></span>
-            </span>
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[14px]">{title}</span>
-            <Icon name="chevron" size={12} className="text-faint flex-none" />
-          </button>
-          {picking && (
-            <div className="absolute top-full left-0 z-[25] mt-1 w-[272px] max-h-[55dvh] overflow-y-auto bg-raised rounded-[12px] p-1 grid gap-0.5 shadow-pop rise" role="listbox" aria-label="对话">
-              {threads.length === 0 && <p className="m-0 px-2.5 py-2 text-[12.5px] text-muted">还没有对话，发一条消息就会开始</p>}
-              {threads.map((t) => (
-                <button
-                  key={t.id}
-                  role="option"
-                  aria-selected={t.id === threadId}
-                  className={`border-0 text-left px-2 h-8 rounded-[8px] flex gap-2 items-center text-[13px] min-w-0 ${t.id === threadId ? 'bg-hover font-medium' : 'bg-transparent hover:bg-hover'}`}
-                  onClick={() => void pick(t.id)}
-                >
-                  <Icon name={threadIcon(t)} size={14} className="text-muted flex-none" />
-                  <span className="overflow-hidden text-ellipsis whitespace-nowrap flex-1">{threadLabel(t)}</span>
-                  {t.id === threadId && <Icon name="check" size={14} className="text-accent flex-none" stroke={2.4} />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            {threads.length === 0 && <p className="m-0 px-2.5 py-2 text-[12.5px] text-muted">还没有对话，发一条消息就会开始</p>}
+            {threads.map((t) => (
+              <button
+                key={t.id}
+                role="option"
+                aria-selected={t.id === threadId}
+                className={`border-0 text-left px-2 h-8 rounded-[8px] flex gap-2 items-center text-[13px] min-w-0 ${t.id === threadId ? 'bg-hover font-medium' : 'bg-transparent hover:bg-hover'}`}
+                onClick={() => void pick(t.id)}
+              >
+                <Icon name={threadIcon(t)} size={14} className="text-muted flex-none" />
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap flex-1">{threadLabel(t)}</span>
+                {t.id === threadId && <Icon name="check" size={14} className="text-accent flex-none" stroke={2.4} />}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
         </div>
         {phone ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
@@ -437,7 +433,10 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
         {phone && typing && <button type="button" className="kb-hide glass-btn glass" aria-label="收起键盘"
           onPointerDown={(e) => e.preventDefault()} onClick={() => input.current?.blur()}><Icon name="chevron" size={18} /></button>}
         {sendError && <p className="text-danger text-[12.5px] m-0 ml-2 flex items-center gap-1" role="alert"><Icon name="alert" size={13} />{sendError}</p>}
+        <Popover open={mentionOpen} onOpenChange={(o) => { if (!o && mq) setDismissed(mq.start) }}>
+        <PopoverAnchor asChild>
         <div
+          ref={composerBox}
           className={phone
             ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
             : 'relative grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
@@ -486,35 +485,45 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               ))}
             </ul>
           )}
-          {mentionOpen && (
-            <div className="mention-menu absolute bottom-full left-0 z-[30] mb-2 w-[min(320px,100%)] max-h-[min(300px,40dvh)] overflow-y-auto bg-raised rounded-[12px] p-1 grid gap-0.5 shadow-pop rise">
-              <p className="m-0 px-2 pt-1 pb-0.5 text-[11.5px] text-faint">引用项目</p>
-              {candidates.length === 0 ? (
-                <p className="m-0 px-2 py-2 text-[12.5px] text-muted" role="status">
-                  {projects.length === 0 ? '没有可引用的项目' : `没有匹配“${mq.query}”的项目`}
-                </p>
-              ) : (
-                <div id={listId} role="listbox" aria-label="引用项目" className="grid gap-0.5">
-                  {candidates.map((p, i) => (
-                    <button
-                      key={p.id}
-                      id={`${listId}-${i}`}
-                      type="button"
-                      role="option"
-                      tabIndex={-1}
-                      aria-selected={i === highlighted}
-                      className={`border-0 text-left px-2 h-8 rounded-[8px] flex items-center text-[13px] min-w-0 ${i === highlighted ? 'bg-hover text-ink' : 'bg-transparent text-ink'}`}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onMouseEnter={() => setActive(i)}
-                      onClick={() => chooseMention(p)}
-                    >
-                      <span className="overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {/* The @ list: above the composer (below when there is no room), focus staying in the text. */}
+            {mentionOpen && (
+              <PopoverContent
+                role="presentation"
+                side="top"
+                sideOffset={8}
+                className="mention-menu w-[min(320px,var(--radix-popover-trigger-width))] max-h-[min(300px,40dvh,var(--radix-popover-content-available-height))] p-1 grid gap-0.5 content-start"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+                onCloseAutoFocus={(e) => e.preventDefault()}
+                // Clicks and focus in the composer (moving the caret) keep it open.
+                onInteractOutside={(e) => { if (composerBox.current?.contains(e.target as Node)) e.preventDefault() }}
+              >
+                <p className="m-0 px-2 pt-1 pb-0.5 text-[11.5px] text-faint">引用项目</p>
+                {candidates.length === 0 ? (
+                  <p className="m-0 px-2 py-2 text-[12.5px] text-muted" role="status">
+                    {projects.length === 0 ? '没有可引用的项目' : `没有匹配“${mq.query}”的项目`}
+                  </p>
+                ) : (
+                  <div id={listId} role="listbox" aria-label="引用项目" className="grid gap-0.5">
+                    {candidates.map((p, i) => (
+                      <button
+                        key={p.id}
+                        id={`${listId}-${i}`}
+                        type="button"
+                        role="option"
+                        tabIndex={-1}
+                        aria-selected={i === highlighted}
+                        className={`border-0 text-left px-2 h-8 rounded-[8px] flex items-center text-[13px] min-w-0 ${i === highlighted ? 'bg-hover text-ink' : 'bg-transparent text-ink'}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseEnter={() => setActive(i)}
+                        onClick={() => chooseMention(p)}
+                      >
+                        <span className="overflow-hidden text-ellipsis whitespace-nowrap">{p.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </PopoverContent>
+            )}
           <div className="composer-input relative col-span-2 min-w-0">
             {mentions.length > 0 && (
               <div ref={layer} className="mention-layer" aria-hidden="true">
@@ -602,6 +611,8 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               <Icon name={sending ? 'refresh' : 'send'} size={16} stroke={2.2} className={sending ? 'spin' : ''} />
             </button>
         </div>
+        </PopoverAnchor>
+        </Popover>
       </form>
       {contextOpen && ctxView && (
         <ContextPanel threadId={threadId} view={ctxView} onClose={() => setContextOpen(false)} onChanged={reloadContext} />

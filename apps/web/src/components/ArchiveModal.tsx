@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { archivedCards, type ProjectCard } from '../lib/workbench'
 import Icon from './Icon'
+import { Dialog, DialogClose, DialogContent, DialogTitle } from './ui/dialog'
 
 /**
  * The archived projects, opened from the workbench's "打开" button: latest
@@ -13,41 +14,26 @@ export default function ArchiveModal({ cards, renderCard, onClose }: {
   renderCard: (card: ProjectCard) => ReactNode
   onClose: () => void
 }) {
-  const panel = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const total = cards.filter((c) => c.archived).length
   const shown = archivedCards(cards, query)
 
-  useEffect(() => {
-    input.current?.focus()
-    // Escape closes only the topmost dialog (a project opened from here sits above).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return
-      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
-      if (dialogs[dialogs.length - 1] === panel.current) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <>
-      <div className="backdrop" role="presentation" onClick={onClose}></div>
-      <div
-        ref={panel}
-        role="dialog"
-        aria-modal="true"
+    // Escape and the backdrop close only the topmost dialog: a project opened from here sits above (Radix).
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent
         aria-label="已归档的项目"
+        onOpenAutoFocus={(e) => { e.preventDefault(); input.current?.focus() }}
         className="fixed z-[31] overflow-hidden bg-page shadow-pop grid grid-rows-[auto_minmax(0,1fr)] left-[max(16px,calc((100vw-1180px)/2))] top-[5dvh] h-[90dvh] w-[min(1180px,calc(100vw-32px))] rounded-[18px] rise max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none"
       >
         <header className="flex items-center gap-3 px-5 pt-4 pb-3 bg-panel border-b border-line min-w-0 flex-wrap max-[760px]:px-3.5 max-[760px]:pt-[calc(var(--safe-t)+10px)]">
           <span className="grid place-items-center w-9 h-9 rounded-[12px] bg-sunken text-muted flex-none">
             <Icon name="archive" size={18} />
           </span>
-          <h2 className="m-0 text-[17px] font-semibold tracking-tight flex items-baseline gap-1.5">
+          <DialogTitle className="m-0 text-[17px] font-semibold tracking-tight flex items-baseline gap-1.5">
             已归档的项目<span className="text-[13px] text-faint tabular-nums font-medium">{total}</span>
-          </h2>
+          </DialogTitle>
           <span className="flex-1"></span>
           <label className="relative flex items-center w-[min(320px,100%)] max-[760px]:order-last max-[760px]:w-full">
             <Icon name="search" size={16} className="absolute left-2.5 text-faint pointer-events-none" />
@@ -61,10 +47,10 @@ export default function ArchiveModal({ cards, renderCard, onClose }: {
               onChange={(e) => setQuery(e.currentTarget.value)}
             />
           </label>
-          <button className="icon-btn bg-sunken rounded-full" aria-label="关闭" onClick={onClose}><Icon name="x" size={16} /></button>
+          <DialogClose className="icon-btn bg-sunken rounded-full" aria-label="关闭"><Icon name="x" size={16} /></DialogClose>
         </header>
 
-        <div className="overflow-y-auto p-5 min-h-0 max-[760px]:p-3.5 max-[760px]:pb-[calc(16px+var(--safe-b))]">
+        <div className="overflow-y-auto overscroll-contain p-5 min-h-0 max-[760px]:p-3.5 max-[760px]:pb-[calc(16px+var(--safe-b))]">
           {shown.length ? (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] auto-rows-fr gap-4 max-[760px]:grid-cols-1">
               {shown.map(renderCard)}
@@ -79,7 +65,7 @@ export default function ArchiveModal({ cards, renderCard, onClose }: {
             </div>
           )}
         </div>
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }

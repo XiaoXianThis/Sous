@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { ui, useUi } from '../lib/app'
 import { usePhone } from '../lib/phone'
 import { setTheme, useTheme, type ThemePref } from '../lib/theme'
@@ -11,7 +10,8 @@ import Personas from './Personas'
 import PhoneHeader, { BackButton } from './PhoneHeader'
 import Schedules from './Schedules'
 import Settings from './Settings'
-import { SheetPlaceContext } from './Sheet'
+import { SheetPageContext } from './Sheet'
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import Usage from './Usage'
 import Versions from './Versions'
 
@@ -85,18 +85,16 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
     ui.emit()
   }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || document.querySelector('[data-nested-sheet]')) return
-      // On a phone a settings page goes back to the list first.
-      if (phone && uiState.settings !== 'home') {
-        ui.state.settings = 'home'
-        ui.emit()
-      } else close()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  // Escape (and the phone's edge swipe, through it) reaches settings only when no dialog
+  // opened from a settings page is above it: Radix hands it to the topmost layer.
+  const onEscape = (e: KeyboardEvent) => {
+    e.preventDefault()
+    // On a phone a settings page goes back to the list first.
+    if (phone && uiState.settings !== 'home') {
+      ui.state.settings = 'home'
+      ui.emit()
+    } else close()
+  }
 
   const current = tabs.find((t) => t.key === uiState.settings) ?? tabs[0]
   const page = (key: string) => (
@@ -144,8 +142,20 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
     }
     return (
       // Settings are the third tab on a phone: a grouped list that pushes each page in from the right.
-      // The tab bar stays on top (Shell), so there is no close button.
-      <div className="fixed inset-0 z-[27] bg-chrome" role="dialog" aria-label="设置">
+      // The tab bar stays on top (Shell), so there is no close button. That is why this one is not
+      // modal and stays in place rather than in <body>: on a phone #root is fixed (a stacking context
+      // of its own), and anything drawn in <body> would cover the tab bar.
+      <Dialog open modal={false} onOpenChange={(open) => { if (!open) close() }}>
+      <DialogContent
+        portal={false}
+        overlay={false}
+        aria-modal={undefined}
+        aria-label="设置"
+        className="fixed inset-0 z-[27] bg-chrome"
+        onEscapeKeyDown={onEscape}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogTitle className="sr-only">设置</DialogTitle>
         <div className="absolute inset-0 overflow-y-auto" aria-hidden={open ? true : undefined}>
           <PhoneHeader title="设置" />
           <div className="grid gap-6 px-4 pb-[var(--tabbar-space)]">
@@ -176,28 +186,30 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
         {open && (
           <div key={open.key} className="absolute inset-0 overflow-y-auto bg-chrome push-in settings-page" data-page>
             <PhoneHeader title={open.text} leading={<BackButton label="返回设置" onClick={home} />} />
-            <div className="embed px-4 pb-[var(--tabbar-space)]"><SheetPlaceContext.Provider value="root">{page(open.key)}</SheetPlaceContext.Provider></div>
+            <div className="embed px-4 pb-[var(--tabbar-space)]"><SheetPageContext.Provider value>{page(open.key)}</SheetPageContext.Provider></div>
           </div>
         )}
-      </div>
+      </DialogContent>
+      </Dialog>
     )
   }
 
   return (
-    <>
+    <Dialog open onOpenChange={(open) => { if (!open) close() }}>
       {/* Clicking outside does not close settings: only the close button and Escape do. */}
-      <div className="backdrop z-[28]" role="presentation"></div>
-      <div
-        className="fixed z-[29] inset-0 m-auto w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100dvh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:m-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
-        role="dialog"
-        aria-modal="true"
+      <DialogContent
+        overlay="backdrop"
+        dismissOnOverlay={false}
+        onEscapeKeyDown={onEscape}
+        onInteractOutside={(e) => e.preventDefault()}
+        className="fixed z-[31] inset-0 m-auto w-[min(980px,calc(100vw-48px))] h-[min(700px,calc(100dvh-64px))] bg-page rounded-[16px] shadow-pop overflow-hidden grid grid-cols-[208px_1fr] settings-page rise max-[760px]:m-0 max-[760px]:w-full max-[760px]:h-full max-[760px]:rounded-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_1fr]"
         aria-label="设置"
       >
         <nav
           className="bg-chrome px-2 pt-3 pb-3 grid content-start gap-px shadow-[inset_-1px_0_0_var(--line)] max-[760px]:flex max-[760px]:flex-nowrap max-[760px]:overflow-x-auto max-[760px]:gap-1 max-[760px]:px-2 max-[760px]:pt-[calc(8px+var(--safe-t))] max-[760px]:pb-2 max-[760px]:shadow-[inset_0_-1px_0_var(--line)] max-[760px]:items-center"
           aria-label="设置分类"
         >
-          <h2 className="m-0 px-2.5 pt-1 pb-3 text-[12px] font-semibold text-muted uppercase tracking-wider max-[760px]:hidden">设置</h2>
+          <DialogTitle className="m-0 px-2.5 pt-1 pb-3 text-[12px] font-semibold text-muted uppercase tracking-wider max-[760px]:hidden">设置</DialogTitle>
           <button className="icon-btn hidden max-[760px]:inline-grid flex-none" aria-label="关闭设置" onClick={close}><Icon name="x" size={17} /></button>
           {tabs.map((t) => {
             const on = current.key === t.key
@@ -227,11 +239,11 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
           </header>
           <div className="overflow-y-auto px-6 pt-5 pb-10 max-[760px]:px-4 max-[760px]:pt-4 max-[760px]:pb-[calc(24px+var(--safe-b))]">
             <div className="embed max-w-[760px]">
-              <SheetPlaceContext.Provider value="root">{page(current.key)}</SheetPlaceContext.Provider>
+              <SheetPageContext.Provider value>{page(current.key)}</SheetPageContext.Provider>
             </div>
           </div>
         </div>
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }

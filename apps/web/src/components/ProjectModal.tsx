@@ -17,6 +17,7 @@ import { BackButton } from './PhoneHeader'
 import ShellPanel from './ShellPanel'
 import TaskRow from './TaskRow'
 import TaskView from './TaskView'
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 
 // The dialog's animations run on Motion (motion.dev), with the curves of the hand-written ones they replace.
 type Ease = [number, number, number, number]
@@ -126,13 +127,6 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatOpen])
 
-  useEffect(() => {
-    // On a phone Escape (and the edge swipe, through it) steps back one level, like the bar's back button.
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') (phone ? back.go : close)() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
-
   const files = tab === 'details' && p.id !== 'misc'
   // Phone: the bar's back button steps back one level at a time, like a navigation stack.
   const back = chatOpen
@@ -142,19 +136,32 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
       : files && file
         ? { label: '返回文件列表', go: () => onFile('') }
         : { label: '返回工作台', go: close }
+  // Radix hands Escape (and the phone's edge swipe, through it) to the topmost layer only, so a
+  // dialog or menu opened from here closes first. On a phone it steps back one level, like the bar's back button.
+  const onEscape = (e: KeyboardEvent) => {
+    e.preventDefault()
+    ;(phone ? back.go : close)()
+  }
   const shell = tab === 'shell' && p.id !== 'misc'
   // Once opened, the terminals stay mounted while other tabs show, so their screens survive.
   const [shellSeen, setShellSeen] = useState(shell)
   useEffect(() => { if (shell) setShellSeen(true) }, [shell])
 
   return (
-    <>
-      {/* Motion fades this backdrop with the panel, in place of .backdrop's CSS fade-in. */}
-      <div ref={backdrop} className="backdrop" style={{ animation: 'none' }} role="presentation" onClick={close}></div>
-      <div
+    // Mounted while open: the parent unmounts it once the closing animation is done (onClose), so
+    // Radix never hides it by itself and Motion runs both ways on the same elements.
+    <Dialog open onOpenChange={(open) => { if (!open) close() }}>
+      <DialogContent
         ref={panel}
-        role="dialog"
-        aria-modal="true"
+        // Motion fades this backdrop with the panel, in place of .backdrop's CSS fade-in.
+        overlayRef={backdrop}
+        overlayStyle={{ animation: 'none' }}
+        onEscapeKeyDown={onEscape}
+        // The panel is still hidden in this commit (until `shown`): take focus on the next frame.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          requestAnimationFrame(() => panel.current?.focus({ preventScroll: true }))
+        }}
         aria-label={`项目 ${p.name}`}
         className={`fixed z-[31] overflow-hidden bg-panel shadow-pop grid left-[calc((100vw-var(--pm-w))/2)] top-[5dvh] h-[90dvh] w-[var(--pm-w)] rounded-[18px] max-[760px]:inset-0 max-[760px]:left-0 max-[760px]:top-0 max-[760px]:h-full max-[760px]:w-full max-[760px]:rounded-none max-[760px]:shadow-none`}
         style={{
@@ -169,7 +176,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
             <div className="flex items-center gap-2 min-w-0">
               <BackButton label={back.label} onClick={back.go} />
               <div className="flex-1 min-w-0 flex items-center justify-center gap-2">
-                <h2 className="m-0 text-[17px] font-semibold tracking-tight truncate">{p.name}</h2>
+                <DialogTitle className="m-0 text-[17px] font-semibold tracking-tight truncate">{p.name}</DialogTitle>
                 {card.archived && <ArchivedBadge />}
               </div>
               <div className="glass-group glass">
@@ -190,7 +197,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
         ) : (
           <header className="flex items-center gap-4 h-[54px] px-5 min-w-0">
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <h2 className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap flex-none max-w-[40%]">{p.name}</h2>
+              <DialogTitle className="m-0 text-[17px] font-semibold tracking-tight overflow-hidden text-ellipsis whitespace-nowrap flex-none max-w-[40%]">{p.name}</DialogTitle>
               {card.archived && <ArchivedBadge />}
               {p.id !== 'misc' && <div className="min-w-0 overflow-hidden"><Locations locations={card.locations} compact /></div>}
             </div>
@@ -298,7 +305,7 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
             <ProjectChat project={p} task={selectedTask} onClose={() => setChatOpen(false)} />
           </aside>
         )}
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }

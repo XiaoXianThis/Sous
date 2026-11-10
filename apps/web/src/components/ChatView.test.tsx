@@ -42,8 +42,9 @@ async function render() {
 }
 
 const box = () => el.querySelector('textarea') as HTMLTextAreaElement
-const options = () => Array.from(el.querySelectorAll('[role=option]')).map((o) => o.textContent)
-const menu = () => el.querySelector('.mention-menu')
+// The @ list is a Radix popover drawn in <body>, so these look in the whole document.
+const options = () => Array.from(document.querySelectorAll('[role=option]')).map((o) => o.textContent)
+const menu = () => document.querySelector('.mention-menu')
 
 /** Types text at the caret like a user would: value, caret, then the input event. */
 async function type(text: string) {
@@ -92,7 +93,7 @@ describe('@ references', () => {
     act(() => box().focus())
     await type('@')
     await key('ArrowDown')
-    expect(el.querySelector('[aria-selected=true]')?.textContent).toBe('blog')
+    expect(document.querySelector('[aria-selected=true]')?.textContent).toBe('blog')
     await key('Enter')
     expect(box().value).toBe('@blog ')
     expect(box().selectionStart).toBe(6)
@@ -110,7 +111,7 @@ describe('@ references', () => {
     await type('改一下')
     box().setSelectionRange(0, 0)
     await type('@so')
-    await act(async () => (el.querySelector('[role=option]') as HTMLButtonElement).click())
+    await act(async () => (document.querySelector('[role=option]') as HTMLButtonElement).click())
     expect(box().value).toBe('@sous 改一下')
     await key('Enter')
     expect(sent[0].mentions).toEqual([{ project_id: 'p1', name: 'sous' }])

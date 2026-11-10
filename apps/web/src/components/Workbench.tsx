@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { go, ui, useUi, useWb } from '../lib/app'
 import { taskState, taskStateDetail } from '../lib/status'
 import { latestRun, projectCards, taskSummary, type CardTask, type ProjectCard } from '../lib/workbench'
@@ -11,8 +11,10 @@ import ProjectSetupSheet from './ProjectSetupSheet'
 import PhoneHeader from './PhoneHeader'
 import TaskRow from './TaskRow'
 import { usePhone } from '../lib/phone'
+import { Dialog, DialogContent } from './ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
-function Stat({ icon, value, label, tone, onClick, expanded, tip }: {
+function Stat({ icon, value, label, tone, onClick, expanded, tip, idle = false, ...rest }: {
   icon: string
   value: string | number
   label: string
@@ -21,11 +23,14 @@ function Stat({ icon, value, label, tone, onClick, expanded, tip }: {
   expanded?: boolean
   /** What the number counts. */
   tip?: string
-}) {
+  /** Clicking does nothing (drawn without the hover ring). */
+  idle?: boolean
+} & Omit<ComponentProps<'button'>, 'onClick'>) {
   return (
     <button
+      {...rest}
       className={`inline-flex items-center gap-1.5 h-9 px-3 rounded-[12px] border-0 bg-panel shadow-soft text-[13px] font-semibold tabular-nums transition-shadow ${
-        onClick ? 'hover:shadow-[0_0_0_1px_var(--line-strong)]' : 'cursor-default'
+        onClick && !idle ? 'hover:shadow-[0_0_0_1px_var(--line-strong)]' : 'cursor-default'
       }`}
       onClick={onClick}
       aria-label={`${label}：${value}`}
@@ -64,7 +69,6 @@ export default function Workbench() {
   const uiState = useUi()
   const [setup, setSetup] = useState(false)
   const [attention, setAttention] = useState(false)
-  const popRef = useRef<HTMLDivElement>(null)
   const [tabs, setTabs] = useState<Record<string, ProjectTab>>({})
   const [open, setOpen] = useState<{ id: string; from: DOMRect | null; file: string } | null>(null)
   const [archive, setArchive] = useState(false)
@@ -119,15 +123,6 @@ export default function Workbench() {
     if (uiState.route.view === 'inbox' && pending > 0) setAttention(true)
   }, [uiState.route.view, pending > 0])
 
-  useEffect(() => {
-    if (!attention) return
-    // On a phone the list is a sheet with its own backdrop.
-    const down = (e: MouseEvent) => { if (!phone && !popRef.current?.contains(e.target as Node)) setAttention(false) }
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setAttention(false) }
-    document.addEventListener('mousedown', down)
-    window.addEventListener('keydown', key)
-    return () => { document.removeEventListener('mousedown', down); window.removeEventListener('keydown', key) }
-  }, [attention, phone])
   useEffect(() => { if (pending === 0) setAttention(false) }, [pending])
 
   const attentionBody = (
@@ -211,19 +206,20 @@ export default function Workbench() {
           {data && (
             <div className="flex items-center flex-wrap gap-2" aria-label="概况">
               <Stat icon="play" value={running} label="进行中" tone="accent" tip="正在执行、排队或由模型 / agent 验收的任务" />
-              <div className="relative" ref={popRef}>
-                <Stat icon="hand" value={pending} label="要你处理" tone="warning" tip="等你审批、验收，或受阻、失败、等机器的任务" expanded={attention} onClick={pending ? () => setAttention((v) => !v) : undefined} />
-                {attention && pending > 0 && !phone && (
-                  <div
-                    id="attention"
-                    role="dialog"
-                    aria-label="要你处理"
-                    className="absolute right-0 top-full mt-2 z-20 w-[min(440px,calc(100vw-28px))] max-h-[70dvh] overflow-y-auto card shadow-pop p-3 grid gap-2.5 rise"
-                  >
-                    {attentionBody}
-                  </div>
-                )}
-              </div>
+              {/* Radix places it: below the button, flipped above or slid sideways to stay on screen. */}
+              <Popover open={attention && pending > 0 && !phone} onOpenChange={(o) => setAttention(o && pending > 0)}>
+                <PopoverTrigger asChild>
+                  <Stat icon="hand" value={pending} label="要你处理" tone="warning" tip="等你审批、验收，或受阻、失败、等机器的任务" expanded={attention && pending > 0} idle={!pending} />
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  sideOffset={8}
+                  aria-label="要你处理"
+                  className="w-[min(440px,calc(100vw-16px))] max-h-[min(70dvh,var(--radix-popover-content-available-height))] bg-panel rounded-[var(--radius)] p-3 grid gap-2.5 content-start"
+                >
+                  {attentionBody}
+                </PopoverContent>
+              </Popover>
               <Stat icon="circle-dashed" value={todo} label="待办" tone="neutral" />
               <Stat icon="laptop" value={`${online}/${data.nodes.length}`} label="机器在线" tone="success" onClick={openMachines} />
             </div>
@@ -259,12 +255,11 @@ export default function Workbench() {
         )}
       </div>
       {phone && attention && pending > 0 && (
-        <>
-          <div className="backdrop" onClick={() => setAttention(false)}></div>
-          <div className="sheet !gap-2.5" role="dialog" aria-label="要你处理">
-            <div className="grid gap-2.5 overflow-y-auto -mx-1 px-1">{attentionBody}</div>
-          </div>
-        </>
+        <Dialog open onOpenChange={(open) => { if (!open) setAttention(false) }}>
+          <DialogContent className="sheet !gap-2.5" aria-label="要你处理">
+            <div className="grid gap-2.5 overflow-y-auto overscroll-contain -mx-1 px-1">{attentionBody}</div>
+          </DialogContent>
+        </Dialog>
       )}
       {archive && <ArchiveModal cards={allCards} renderCard={renderCard} onClose={closeArchive} />}
       {modalCard && (
