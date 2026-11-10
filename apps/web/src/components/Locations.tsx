@@ -5,6 +5,7 @@ import { ago } from '../lib/time'
 import type { GitState, RepoResult } from '../lib/types'
 import type { Location } from '../lib/workbench'
 import Icon from './Icon'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 const chip = 'inline-flex items-center gap-1 h-[22px] rounded-[9px] px-1.5 text-[12px] font-medium no-underline max-w-full min-w-0 whitespace-nowrap transition-colors'
 
@@ -69,13 +70,14 @@ export default function Locations({ locations, compact = false }: { locations: L
         }
         const mark = gitMark(l.git)
         return (
-          <span key={l.kind + l.id} className="relative inline-flex min-w-0">
+          <Popover key={l.kind + l.id} open={open === l.id} onOpenChange={(o) => setOpen(o ? l.id : '')}>
+            <PopoverTrigger asChild>
             <button
               className={`${chip} border-0 bg-sunken text-muted hover:text-ink ${l.online === false ? 'opacity-55' : ''}`}
               title={l.title}
               aria-label={`${l.name}${l.online === false ? '（离线）' : ''}${mark ? `，${describe(l.git!)}` : ''}`}
-              aria-expanded={open === l.id}
-              onClick={(e) => { e.stopPropagation(); setOpen(open === l.id ? '' : l.id) }}
+              // Inside a clickable card: the card does not open too.
+              onClick={(e) => e.stopPropagation()}
             >
               <span className="relative grid">
                 <Icon name={l.icon} size={13} />
@@ -84,8 +86,9 @@ export default function Locations({ locations, compact = false }: { locations: L
               {mark && <span className="text-warm tabular-nums">{mark}</span>}
               <span className={`w-1.5 h-1.5 rounded-full flex-none ${l.online ? 'bg-ok' : 'bg-faint'}`}></span>
             </button>
+            </PopoverTrigger>
             {open === l.id && <Place l={l} onClose={() => setOpen('')} onMachines={machines} />}
-          </span>
+          </Popover>
         )
       })}
     </div>
@@ -108,26 +111,23 @@ export function LocationsChip({ locations }: { locations: Location[] }) {
   if (locations.length === 0) return <Locations locations={locations} compact />
   const offline = locations.some((l) => l.kind === 'node' && l.online === false)
   return (
-    <span className="relative inline-flex min-w-0">
-      <button
-        className={`${chip} border-0 bg-sunken text-muted hover:text-ink`}
-        aria-label={`项目位置：${locations.map((l) => l.name).join('、')}`}
-        aria-expanded={open}
-        title={locations.map((l) => l.name).join('、')}
-        onClick={(e) => { e.stopPropagation(); setOpen(!open) }}
-      >
-        <Icon name="laptop" size={13} /><span className="tabular-nums">{n}</span>
-        {offline && <span className="w-1.5 h-1.5 rounded-full flex-none bg-faint"></span>}
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-[40]" onClick={(e) => { e.stopPropagation(); setOpen(false) }}></div>
-          <div className="absolute left-0 bottom-7 z-[41] w-max max-w-[300px] bg-raised rounded-[12px] p-2 shadow-pop rise" onClick={(e) => e.stopPropagation()}>
-            <Locations locations={locations} />
-          </div>
-        </>
-      )}
-    </span>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className={`${chip} border-0 bg-sunken text-muted hover:text-ink`}
+          aria-label={`项目位置：${locations.map((l) => l.name).join('、')}`}
+          title={locations.map((l) => l.name).join('、')}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icon name="laptop" size={13} /><span className="tabular-nums">{n}</span>
+          {offline && <span className="w-1.5 h-1.5 rounded-full flex-none bg-faint"></span>}
+        </button>
+      </PopoverTrigger>
+      {/* Opens above the chip (it sits at the bottom of a card), below when there is no room. */}
+      <PopoverContent side="top" sideOffset={6} aria-label="项目位置" className="w-max max-w-[min(300px,calc(100vw-16px))] p-2" onClick={(e) => e.stopPropagation()}>
+        <Locations locations={locations} />
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -152,9 +152,11 @@ function Place({ l, onClose, onMachines }: { l: Location; onClose: () => void; o
   }
 
   return (
-    <>
-      <div className="fixed inset-0 z-[40]" onClick={(e) => { e.stopPropagation(); onClose() }}></div>
-      <div className="absolute left-0 top-7 z-[41] w-[300px] bg-raised rounded-[12px] p-3 grid gap-2 shadow-pop rise text-[13px] text-ink font-normal whitespace-normal" onClick={(e) => e.stopPropagation()}>
+    <PopoverContent
+      aria-label={l.name}
+      className="w-[min(300px,calc(100vw-16px))] p-3 grid gap-2 content-start text-[13px] text-ink font-normal whitespace-normal"
+      onClick={(e) => e.stopPropagation()}
+    >
         <div className="flex items-center gap-2">
           <Icon name={l.icon} size={15} />
           <strong className="flex-1">{l.name}</strong>
@@ -181,7 +183,6 @@ function Place({ l, onClose, onMachines }: { l: Location; onClose: () => void; o
           </button>
           <button className="link text-[12.5px]" onClick={() => { onClose(); onMachines() }}>机器设置</button>
         </div>
-      </div>
-    </>
+    </PopoverContent>
   )
 }

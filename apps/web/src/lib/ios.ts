@@ -202,7 +202,9 @@ export function installTouch(win: Window = window): () => void {
           d.el.style.willChange = ''
           return
         }
-        doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        // Cancelable like a real key press: a layer that steps back instead of closing (Radix's
+        // onEscapeKeyDown) cancels it, and Radix then leaves the layer open.
+        doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
       }
       // Still here after its close animation: it does not close this way.
       setTimeout(() => { if (d.layer.isConnected) reset() }, 400)

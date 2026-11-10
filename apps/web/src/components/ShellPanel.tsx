@@ -5,6 +5,7 @@ import { reauthenticate } from '../lib/passkey'
 import type { Project } from '../lib/types'
 import Icon from './Icon'
 import ShellTerm from './ShellTerm'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu'
 
 interface Tab {
   node_id: string
@@ -111,28 +112,32 @@ export default function ShellPanel({ project }: { project: Project }) {
     api.jobCancel(t.node_id, t.job_id).catch(() => {})
   }
 
-  function plus() {
+  /** "+": a project on one machine opens its shell at once; otherwise the menu picks the machine. */
+  function plus(want: boolean) {
+    if (!want) return setMenu(false)
     const ok = places.filter((p) => !p.blocked)
     if (places.length === 1 && ok.length === 1) void open(ok[0].node_id)
-    else setMenu(!menu)
+    else setMenu(true)
   }
 
+  const row = 'flex items-center gap-2.5 text-left rounded-[10px] px-2.5 py-2 border-0 bg-transparent min-w-0'
+  const place = (p: Place) => (
+    <>
+      <Icon name="laptop" size={16} />
+      <span className="grid min-w-0 flex-1">
+        <span className="text-[13px] font-medium">{p.name}{p.blocked && <span className="text-faint font-normal">（{p.blocked}）</span>}</span>
+        <span className="text-[12px] text-muted font-mono overflow-hidden text-ellipsis whitespace-nowrap" title={p.path}>{p.path}</span>
+      </span>
+    </>
+  )
+  const none = places.length === 0 && <p className="m-0 p-2 text-muted text-[13px]">这个项目还不在任何机器上</p>
+  // The same list, laid out in the empty panel.
   const picker = (
-    <div className="grid gap-1 min-w-[260px]" role="menu">
-      {places.length === 0 && <p className="m-0 p-2 text-muted text-[13px]">这个项目还不在任何机器上</p>}
+    <div className="grid gap-1 min-w-[260px] max-w-full" role="menu">
+      {none}
       {places.map((p) => (
-        <button
-          key={p.node_id}
-          role="menuitem"
-          disabled={!!p.blocked || busy}
-          className="flex items-center gap-2.5 text-left rounded-[10px] px-2.5 py-2 border-0 bg-transparent hover:bg-hover disabled:opacity-50 disabled:hover:bg-transparent min-w-0"
-          onClick={() => void open(p.node_id)}
-        >
-          <Icon name="laptop" size={16} />
-          <span className="grid min-w-0 flex-1">
-            <span className="text-[13px] font-medium">{p.name}{p.blocked && <span className="text-faint font-normal">（{p.blocked}）</span>}</span>
-            <span className="text-[12px] text-muted font-mono overflow-hidden text-ellipsis whitespace-nowrap" title={p.path}>{p.path}</span>
-          </span>
+        <button key={p.node_id} role="menuitem" disabled={!!p.blocked || busy} className={`${row} hover:bg-hover disabled:opacity-50 disabled:hover:bg-transparent`} onClick={() => void open(p.node_id)}>
+          {place(p)}
         </button>
       ))}
     </div>
@@ -160,17 +165,21 @@ export default function ShellPanel({ project }: { project: Project }) {
             </button>
           </div>
         ))}
-        <div className="relative flex-none">
-          <button className="icon-btn" aria-label="新终端" data-tip="新终端：选一台机器" data-tip-pos="bottom" disabled={busy} onClick={plus}>
-            <Icon name="plus" size={16} />
-          </button>
-          {menu && (
-            <>
-              <div className="fixed inset-0 z-[40]" onClick={() => setMenu(false)}></div>
-              <div className="absolute left-0 top-9 z-[41] bg-panel shadow-pop rounded-[14px] p-1.5">{picker}</div>
-            </>
-          )}
-        </div>
+        <DropdownMenu open={menu} onOpenChange={plus}>
+          <DropdownMenuTrigger asChild disabled={busy}>
+            <button className="icon-btn flex-none" aria-label="新终端" data-tip="新终端：选一台机器" data-tip-pos="bottom">
+              <Icon name="plus" size={16} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="bg-panel rounded-[14px] w-[min(320px,calc(100vw-16px))] min-w-[260px] grid gap-1 content-start">
+            {none}
+            {places.map((p) => (
+              <DropdownMenuItem key={p.node_id} disabled={!!p.blocked || busy} className={`${row} h-auto data-[disabled]:opacity-50`} onSelect={() => void open(p.node_id)}>
+                {place(p)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div ref={body} className="min-h-0 px-3 pb-3 grid grid-rows-[auto_minmax(0,1fr)]">

@@ -39,16 +39,13 @@ export default function Memories({ onClose }: { onClose: () => void }) {
     return () => clearTimeout(timer)
   }, [filter, query, chat.memoryRev])
 
+  // Escape leaves an edit; closing is the settings dialog's (Radix gives Escape to the topmost layer).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (editing) setEditing(null)
-        else onClose()
-      }
-    }
+    if (!editing) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditing(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [editing, onClose])
+  }, [editing])
 
   function startEdit(m?: Memory) {
     setEditing(m?.id ?? 'new')

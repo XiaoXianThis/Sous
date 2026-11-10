@@ -53,7 +53,8 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (/[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react'
-          if (/[\\/](@hugeicons|@radix-ui)[\\/]/.test(id)) return 'ui'
+          // Icons, Radix (popovers, menus, dialogs) and the class helpers of components/ui.
+          if (/[\\/](@hugeicons|@radix-ui|clsx|tailwind-merge)[\\/]/.test(id)) return 'ui'
           // Motion (motion.dev; `motion` re-exports framer-motion, motion-dom, motion-utils).
           if (/[\\/](motion|framer-motion|motion-dom|motion-utils)[\\/]/.test(id)) return 'motion'
           if (/[\\/](react-markdown|remark-|rehype-|micromark|mdast-|hast-|unified|unist-|vfile|property-information|decode-named|character-|space-separated|comma-separated|devlop|bail|trough|zwitch|ccount|longest-streak|markdown-table|html-url|estree|trim-lines|is-plain|inline-style|style-to)/.test(id)) return 'markdown'

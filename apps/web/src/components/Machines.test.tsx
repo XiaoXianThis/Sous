@@ -114,8 +114,10 @@ describe('Machines agent switches', () => {
     await render()
     await click(entry()!)
     expect(popup().classList.contains('sheet')).toBe(true)
-    expect(popup().closest('[data-nested-sheet]')?.parentElement).toBe(document.body)
-    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    // A dialog drawn in <body>, out of the settings panel (which clips it) and above the tab bar.
+    expect(el.contains(popup())).toBe(false)
+    expect(popup().parentElement).toBe(document.body)
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
     expect(document.querySelector('[aria-label="未启用的 agent"]')).toBeNull()
     expect(el.querySelector('[aria-label="机器"]')).not.toBeNull()
   })

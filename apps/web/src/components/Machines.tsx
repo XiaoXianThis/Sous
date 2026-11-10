@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import { usePhone } from '../lib/phone'
 import AgentSwitch from './AgentSwitch'
 import { ago } from '../lib/time'
@@ -9,9 +8,10 @@ import { jobTitle, latestJob } from '../lib/jobs'
 import type { AgentInfo, Node, Updates } from '../lib/types'
 import AgentIcon from './AgentIcon'
 import AgentPanel from './AgentPanel'
-import Sheet, { SheetPlaceContext } from './Sheet'
+import Sheet, { SheetPageContext } from './Sheet'
 import Icon from './Icon'
 import ConfigEditor from './ConfigEditor'
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from './ui/popover'
 
 const osName: Record<string, string> = { darwin: 'macOS', linux: 'Linux', windows: 'Windows' }
 
@@ -30,11 +30,10 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   const [wsBusy, setWsBusy] = useState(false)
   const [panel, setPanel] = useState<{ node: string; agent: string } | null>(null)
   const [nodeFile, setNodeFile] = useState<string | null>(null)
-  const [inactive, setInactive] = useState<{ id: string; left: number; top: number } | null>(null)
+  /** The machine whose agents that are off are listed (a popover; a sheet on a phone). */
+  const [inactive, setInactive] = useState<string | null>(null)
   const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
   const [agentErrors, setAgentErrors] = useState<Record<string, string>>({})
-  const popover = useRef<HTMLDivElement>(null)
-  const trigger = useRef<HTMLButtonElement | null>(null)
   const phone = usePhone()
   const [detecting, setDetecting] = useState<Record<string, boolean>>({})
 
@@ -75,27 +74,6 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void load()
   }, [chat.nodesRev])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !panel && !nodeFile) {
-        if (inactive) { setInactive(null); trigger.current?.focus() }
-        else onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [panel, nodeFile, inactive, onClose])
-
-  useEffect(() => {
-    if (!inactive || phone) return
-    popover.current?.focus()
-    const outside = (e: PointerEvent) => {
-      if (!popover.current?.contains(e.target as globalThis.Node) && !trigger.current?.contains(e.target as globalThis.Node)) setInactive(null)
-    }
-    document.addEventListener('pointerdown', outside)
-    return () => document.removeEventListener('pointerdown', outside)
-  }, [inactive, phone])
 
   async function setDisabled(n: Node, a: AgentInfo, disabled: boolean) {
     if (agentBusy[n.id]) return
@@ -201,7 +179,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
     return a.job
   }
 
-  const inactiveNode = nodes.find((n) => n.id === inactive?.id)
+  const inactiveNode = nodes.find((n) => n.id === inactive)
   const inactiveRows = inactiveNode && (
     <div className="grid gap-1">
       {sortAgents(inactiveNode.agents ?? []).filter((a) => !a.installed || a.disabled).map((a) => (
@@ -222,7 +200,8 @@ export default function Machines({ onClose }: { onClose: () => void }) {
 
   const pairCommand = code ? `sous pair ${location.origin} ${code.code}` : ''
   return (
-    <SheetPlaceContext.Provider value="nested">
+    // Laid flat into a settings page; what it opens are dialogs again.
+    <SheetPageContext.Provider value={false}>
       <div className="backdrop" role="presentation" onClick={onClose}></div>
       <div className="sheet gap-2.5" role="dialog" aria-modal="true" aria-label="机器">
         <header className="flex items-center justify-between">
@@ -358,11 +337,28 @@ export default function Machines({ onClose }: { onClose: () => void }) {
               {agentErrors[n.id] && <p className="text-danger text-[13px] m-0" role="alert">{agentErrors[n.id]}</p>}
               <div className="flex justify-end items-center gap-0.5 -mb-1.5 -mr-1.5">
                 {n.agents?.some((a) => !a.installed || a.disabled) && (
-                  <button className="link mr-auto text-[13px]" aria-haspopup="dialog" aria-expanded={inactive?.id === n.id} onClick={(e) => {
-                    trigger.current = e.currentTarget
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    setInactive(inactive?.id === n.id ? null : { id: n.id, left: Math.max(8, Math.min(rect.left, window.innerWidth - 368)), top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - 328)) })
-                  }}>+ {n.agents.filter((a) => !a.installed || a.disabled).length} 个未启用</button>
+                  // A popover on a desktop (Radix keeps it on screen); on a phone the trigger opens the sheet below.
+                  <Popover open={!phone && inactive === n.id} onOpenChange={(o) => setInactive(o ? n.id : null)}>
+                    <PopoverTrigger asChild>
+                      <button className="link mr-auto text-[13px]" aria-haspopup="dialog" aria-expanded={inactive === n.id}>
+                        + {n.agents.filter((a) => !a.installed || a.disabled).length} 个未启用
+                      </button>
+                    </PopoverTrigger>
+                    {!phone && inactive === n.id && (
+                      <PopoverContent
+                        align="start"
+                        sideOffset={8}
+                        aria-label="未启用的 agent"
+                        className="w-[min(360px,calc(100vw-16px))] max-h-[min(320px,var(--radix-popover-content-available-height))] rounded-[14px] bg-panel p-3"
+                      >
+                        <header className="flex items-center justify-between gap-3 mb-1">
+                          <strong className="text-[14px]">未启用的 agent</strong>
+                          <PopoverClose className="icon-btn w-7 h-7" aria-label="关闭未启用的 agent"><Icon name="x" size={14} /></PopoverClose>
+                        </header>
+                        {inactiveRows}
+                      </PopoverContent>
+                    )}
+                  </Popover>
                 )}
                 {n.online && n.admin === 'on' && (
                   <>
@@ -386,20 +382,10 @@ export default function Machines({ onClose }: { onClose: () => void }) {
         </ul>
       </div>
 
-      {inactive && inactiveNode && (phone ? (
-        <Sheet title="未启用的 agent" onClose={() => setInactive(null)}>{inactiveRows}</Sheet>
-      ) : createPortal(
-        <div ref={popover} tabIndex={-1} role="dialog" aria-label="未启用的 agent" className="fixed z-[60] w-[360px] max-w-[calc(100vw-16px)] max-h-[320px] overflow-y-auto rounded-[14px] bg-panel shadow-pop p-3" style={{ left: inactive.left, top: inactive.top }}>
-          <header className="flex items-center justify-between gap-3 mb-1">
-            <strong className="text-[14px]">未启用的 agent</strong>
-            <button className="icon-btn w-7 h-7" aria-label="关闭未启用的 agent" onClick={() => { setInactive(null); trigger.current?.focus() }}><Icon name="x" size={14} /></button>
-          </header>
-          {inactiveRows}
-        </div>, document.body
-      ))}
+      {phone && inactive && inactiveNode && <Sheet title="未启用的 agent" onClose={() => setInactive(null)}>{inactiveRows}</Sheet>}
       {/* Opened from a machine, on top of this sheet. */}
       {panel && panelNode && <AgentPanel node={panelNode} name={panel.agent} actionError={agentErrors[panelNode.id]} switching={agentBusy[panelNode.id]} onSetDisabled={(disabled) => { const agent = panelNode.agents?.find((a) => a.name === panel.agent); if (agent) void setDisabled(panelNode, agent, disabled) }} onClose={() => setPanel(null)} />}
       {nodeFile && fileNode && <ConfigEditor nodeId={fileNode.id} agent="sous" file="node" title={`${fileNode.name} · node.json`} onClose={() => setNodeFile(null)} />}
-    </SheetPlaceContext.Provider>
+    </SheetPageContext.Provider>
   )
 }
