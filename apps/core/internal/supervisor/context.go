@@ -103,6 +103,8 @@ func clip(m store.Message) store.Message {
 // plain is m as text: its files by name. Summaries and token counts of the
 // history use it; the model itself sees the files (toProviderWith).
 func plain(m store.Message) store.Message {
+	m.Content = historyText(m)
+	m.Tools = nil
 	if len(m.Attachments) == 0 {
 		return m
 	}

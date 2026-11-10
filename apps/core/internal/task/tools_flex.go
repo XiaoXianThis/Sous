@@ -246,7 +246,7 @@ func (t gitTool) Call(ctx context.Context, raw json.RawMessage) (string, error) 
 	if !done {
 		return fmt.Sprintf("%s还在进行（可能在等用户批准）；结果出来后会自动汇报在对话里。", gitOpName[t.op]), nil
 	}
-	return GitReport(r), nil
+	return gitToolResult(r)
 }
 
 type consultTool struct{ e *Engine }
@@ -402,4 +402,14 @@ func nodeError(err error) error {
 		return fmt.Errorf("%w: 机器不在线", ErrConflict)
 	}
 	return err
+}
+
+// A completed Git run can still have failed or been cancelled. Preserve
+// that distinction in the receipt instead of returning a successful tool.
+func gitToolResult(r store.Run) (string, error) {
+	report := GitReport(r)
+	if r.Status != event.RunStatusSucceeded {
+		return "", errors.New(report)
+	}
+	return report, nil
 }

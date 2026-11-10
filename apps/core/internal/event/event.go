@@ -155,11 +155,12 @@ type MessagePayload struct {
 
 // ToolNote is one tool call of the supervisor as the chat shows it: the
 // name, a short summary of the arguments with anything that looks like a
-// credential masked, and the first line of the error when it failed.
+// credential masked, and the masked first line of its result or error.
 type ToolNote struct {
-	Name  string `json:"name"`
-	Args  string `json:"args,omitempty"`
-	Error string `json:"error,omitempty"`
+	Name   string `json:"name"`
+	Args   string `json:"args,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Result string `json:"result,omitempty"`
 }
 
 // MessageToolsPayload sets the supervisor's tool calls shown under a message.

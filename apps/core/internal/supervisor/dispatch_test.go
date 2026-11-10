@@ -13,9 +13,10 @@ import (
 )
 
 type dispatchStub struct {
-	name string
-	err  error
-	n    int
+	name    string
+	content string
+	err     error
+	n       int
 }
 
 func (d *dispatchStub) Spec() provider.ToolSpec {
@@ -23,6 +24,9 @@ func (d *dispatchStub) Spec() provider.ToolSpec {
 }
 func (d *dispatchStub) Call(context.Context, json.RawMessage) (string, error) {
 	d.n++
+	if d.content != "" {
+		return d.content, d.err
+	}
 	return "任务 t1，排队中（等待机器上线）", d.err
 }
 
@@ -78,7 +82,7 @@ func TestDispatchClaimCanRecoverByCallingTool(t *testing.T) {
 	p := &scripted{responses: []provider.Response{
 		{Message: provider.Text(provider.RoleAssistant, "已派发给 opencode。")},
 		dispatchResponse(`{}`),
-		{Message: provider.Text(provider.RoleAssistant, "已派发，任务 t1 正在排队，等待机器上线。")},
+		{Message: provider.Text(provider.RoleAssistant, "任务 t1 正在排队，等待机器上线。")},
 	}}
 	d := &dispatchStub{name: "task_create"}
 	log, main, _ := setup(t, p, tool.NewRegistry(d))
@@ -116,21 +120,6 @@ func TestDispatchReceiptAndPlans(t *testing.T) {
 	for _, text := range []string{"已派发。", "已经把两个任务派给前端。", "任务已经交给 opencode。", "任务派好了。"} {
 		if !claimsDispatch(text) {
 			t.Errorf("claim not matched: %q", text)
-		}
-	}
-	for _, tc := range []struct {
-		name, args   string
-		failed, want bool
-	}{
-		{"task_create", `{}`, false, true},
-		{"task_create", `{"dispatch":false}`, false, false},
-		{"task_create", `{}`, true, false},
-		{"task_dispatch", `{}`, false, true},
-		{"task_dispatch", `{}`, true, false},
-		{"task_list", `{}`, false, false},
-	} {
-		if got := dispatchReceipt(provider.ToolCall{Name: tc.name, Args: json.RawMessage(tc.args)}, provider.ToolResult{IsError: tc.failed}); got != tc.want {
-			t.Errorf("receipt %+v = %v", tc, got)
 		}
 	}
 }

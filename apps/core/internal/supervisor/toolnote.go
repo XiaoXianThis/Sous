@@ -9,6 +9,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
 
 const (
@@ -18,7 +19,8 @@ const (
 	// noteArgsRunes bounds the whole argument summary.
 	noteArgsRunes = 160
 	// noteErrorRunes bounds the one-line error of a failed call.
-	noteErrorRunes = 120
+	noteErrorRunes  = 120
+	noteResultRunes = 400
 )
 
 // toolNote describes one call of the supervisor for the chat.
@@ -29,6 +31,8 @@ func toolNote(c provider.ToolCall, r provider.ToolResult) event.ToolNote {
 		if n.Error == "" {
 			n.Error = "失败"
 		}
+	} else {
+		n.Result = clipRunes(firstLine(redact.Mask(r.Content)), noteResultRunes)
 	}
 	return n
 }
@@ -83,4 +87,27 @@ func clipRunes(s string, n int) string {
 	}
 	r := []rune(s)
 	return string(r[:n]) + "…"
+}
+
+// historyText keeps tool evidence beside the words it qualifies. Old rows
+// without a result are explicitly unknown, rather than implied successes.
+func historyText(m store.Message) string {
+	text := m.Content
+	if m.Error || m.Kind == event.KindSilent {
+		text = ""
+	}
+	if m.Role != "assistant" {
+		return text
+	}
+	for _, n := range m.Tools {
+		result := n.Result
+		if n.Error != "" {
+			result = "失败：" + n.Error
+		}
+		if result == "" {
+			result = "未保存结果，不能据此确认执行成功"
+		}
+		text += "\n【本轮工具】" + n.Name + " → " + result
+	}
+	return text
 }
