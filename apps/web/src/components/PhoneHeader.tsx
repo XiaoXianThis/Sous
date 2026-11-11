@@ -9,8 +9,10 @@ import Icon from './Icon'
  * bar and the title shows small in its middle. Lives inside the page's scroll
  * container, at its very top.
  */
-export default function PhoneHeader({ title, leading, actions, fade, children }: {
+export default function PhoneHeader({ title, leading, actions, fade, compact, children }: {
   title: string
+  /** No large title: the small one stays in the bar, so the page starts higher. */
+  compact?: boolean
   leading?: ReactNode
   /** Trailing actions, each a `.phone-bar-btn`; drawn in one glass capsule. */
   actions?: ReactNode
@@ -35,17 +37,17 @@ export default function PhoneHeader({ title, leading, actions, fade, children }:
 
   return (
     <>
-      <div ref={bar} className={`phone-bar ${collapsed ? 'is-collapsed' : ''}`} style={fade ? ({ '--fade': fade } as React.CSSProperties) : undefined}>
+      <div ref={bar} className={`phone-bar ${collapsed || compact ? 'is-collapsed' : ''}`} style={fade ? ({ '--fade': fade } as React.CSSProperties) : undefined}>
         {/* Equal side columns keep the small title centered on the screen. */}
         <div className="grid grid-cols-[minmax(44px,1fr)_minmax(0,auto)_minmax(44px,1fr)] items-center h-[56px] px-3 gap-2">
           <div className="flex items-center min-w-0">{leading}</div>
-          <span className="phone-bar-title text-center text-[17px] font-semibold tracking-tight truncate" aria-hidden={!collapsed}>{title}</span>
+          <span className="phone-bar-title text-center text-[17px] font-semibold tracking-tight truncate" aria-hidden={!collapsed && !compact}>{title}</span>
           <div className="flex items-center justify-end min-w-0">
             {actions && <div className="glass-group glass">{actions}</div>}
           </div>
         </div>
       </div>
-      <h1 ref={big} className="m-0 px-5 pt-0.5 pb-3 text-[34px] leading-[1.12] font-bold tracking-[-0.025em]">{title}</h1>
+      {compact ? <h1 ref={big} className="sr-only">{title}</h1> : <h1 ref={big} className="m-0 px-5 pt-0.5 pb-3 text-[34px] leading-[1.12] font-bold tracking-[-0.025em]">{title}</h1>}
       {children}
     </>
   )

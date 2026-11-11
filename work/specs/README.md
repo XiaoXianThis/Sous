@@ -28,4 +28,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [message-hygiene](message-hygiene/) | core, web | 诊断与方案待拍板（[plan](message-hygiene/plan.md)，统计 SQL 待在 hub 上跑） |
 | [approval-friction](approval-friction/) | core | 已分批实施并自测，见[实施与16条对比](approval-friction/implementation.md)；medium/300额度仍按方案等待观测 |
 | [notes-meetings-agent-chat](notes-meetings-agent-chat/) | core, web | 设计和执行说明完成，待实现（顺序：记事本 → 会议 → 直接对话） |
-| [system-map](system-map/) | core, web | 已实现；页面改成模块协作的实时时序图（不再用 React Flow），已在独立 Hub 上做浏览器验收 |
+| [system-map](system-map/) | core, web | 已实现；工作台的“现场”视图（人、任务、机器的流转，Canvas2D 2.5D），模块状态在设置的“系统状态” |

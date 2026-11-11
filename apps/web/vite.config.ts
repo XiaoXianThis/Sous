@@ -38,7 +38,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': hub,
+      // ws: the system page's live stream is /api/v1/system/stream.
+      '/api': { target: hub, ws: true },
       '/ws': { target: hub, ws: true },
       '/healthz': hub,
     },

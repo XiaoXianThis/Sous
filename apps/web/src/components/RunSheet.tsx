@@ -107,7 +107,7 @@ export default function RunSheet({ id, onClose }: { id: string; onClose: () => v
                 <button className="btn small ghost" disabled={!!busy} onClick={() => void act('pause', () => api.pauseRun(run.id))}><Icon name="pause" size={12} />暂停</button>
               ) : null}
               {isActive(run) && <button className="btn small ghost hover:!text-danger" disabled={!!busy} onClick={() => void act('cancel', () => api.cancelRun(run.id))}><Icon name="stop" size={12} />取消</button>}
-              <button className="icon-btn solid" aria-label="在系统页里追踪" data-tip="在系统页里追踪" onClick={() => { onClose(); go({view:'system',id:'run:'+run.id}) }}><Icon name="system" size={16} /></button>
+              <button className="icon-btn solid" aria-label="在现场里追踪" data-tip="在现场里追踪" onClick={() => { onClose(); go({view:'system',id:'run:'+run.id}) }}><Icon name="system" size={16} /></button>
               {run.diffstat && run.purpose !== 'deliver' && <button className="icon-btn solid" aria-label="改动" data-tip="改动" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('diff')}><Icon name="diff" size={16} /></button>}
               {run.status !== 'queued' && <button className="icon-btn solid" aria-label="日志" data-tip="日志" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('log')}><Icon name="log" size={16} /></button>}
               {run.pr_url && <a className="icon-btn solid" aria-label="PR" data-tip="PR" data-tip-pos="bottom" href={run.pr_url} target="_blank" rel="noreferrer"><Icon name="pr" size={16} /></a>}
