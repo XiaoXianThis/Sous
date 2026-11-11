@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { ui as uiStore, useChat, useUi, useWb } from '../lib/app'
 import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
@@ -7,15 +7,17 @@ import { scrollAfterResize } from '../lib/gesture'
 import { activeProjects, filterProjects, insertMention, keptMentions, mentionQuery, splitMentions, type MentionQuery } from '../lib/mention'
 import { isAnswering, visibleMessages } from '../lib/reduce'
 import type { RunView } from '../lib/runs'
-import type { Mention, Message, Project, Thread } from '../lib/types'
+import type { DmTarget, Mention, Message, Project, Thread } from '../lib/types'
 import { ContextPanel, ContextRing, useThreadContext } from './ContextMeter'
 import { dividerAt } from '../lib/context'
+import AgentIcon from './AgentIcon'
 import ModelSwitch from './ModelSwitch'
 import Icon from './Icon'
 import MessageView from './Message'
 import RunChip from './RunChip'
 import TopicList from './TopicList'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './ui/popover'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from './ui/dropdown-menu'
 
 type Item = { kind: 'message'; seq: number; message: Message } | { kind: 'run'; seq: number; run: RunView }
 
@@ -43,7 +45,7 @@ export interface ChatContext {
  * the project chats share it; they differ in which threads they list and how
  * a message is sent.
  */
-export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, onSendIn, inbox = false, context, onDropContext, placeholder, empty, actions, leading, label }: {
+export default function ChatView({ threadId, threads, title, avatar, threadLabel, threadIcon, onPick, onNew, onSend, onSendIn, inbox = false, context, onDropContext, placeholder, empty, actions, leading, label, picker = true, disabled = false, focusSeq = 0, foot, targets, dmTarget, onDmTarget, onDm }: {
   /** The shown thread; '' before a project chat's first message. */
   threadId: string
   threads: Thread[]
@@ -67,6 +69,21 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   /** Drawn before the chat picker, e.g. a phone back button. */
   leading?: ReactNode
   label: string
+  /** A meeting has one conversation: its title is not a chat picker. */
+  picker?: boolean
+  /** A closed meeting keeps the timeline but takes no more messages. */
+  disabled?: boolean
+  /** Scrolls to this message number and flashes it (a minutes reference). */
+  focusSeq?: number
+  /** Drawn at the end of the timeline, e.g. a meeting's minutes draft. */
+  foot?: ReactNode
+  /** Who the user may talk to directly instead of sous (decision 0028). */
+  targets?: DmTarget[]
+  /** The chosen target's key, '' for sous. Controlled by the project chat. */
+  dmTarget?: string
+  onDmTarget?: (key: string) => void
+  /** Sends to one agent directly; without it the picker is not shown. */
+  onDm?: (target: DmTarget, text: string) => Promise<unknown>
 }) {
   const chatState = useChat()
   const uiState = useUi()
@@ -98,6 +115,15 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const layer = useRef<HTMLDivElement>(null)
   const listId = useId()
   const [mode, setModeState] = useState<ChatMode>(storedMode)
+  const [seqFocus, setSeqFocus] = useState(0)
+  const [ownTarget, setOwnTarget] = useState('')
+  const targetKey = dmTarget !== undefined ? dmTarget : ownTarget
+  const selected = targets?.find((t) => t.key === targetKey)
+  const dm = !!selected && !!onDm
+  function pickTarget(key: string) {
+    setOwnTarget(key)
+    onDmTarget?.(key)
+  }
   const topics = !!onSendIn && mode === 'topics'
   function setMode(m: ChatMode) {
     stick.current = true // the timeline opens at its end
@@ -157,6 +183,29 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
     if (stick.current && scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight })
   }, [topics, threadId, messages.length, lastLength, uiState.tab, uiState.chatOpen, answering])
 
+  // A minutes reference ([#12], linked as #seq-12): bring the cited message into view and flash it.
+  const flashed = useRef(0)
+  const wantedSeq = focusSeq || seqFocus
+  useEffect(() => {
+    if (!wantedSeq || !scroller.current || flashed.current === wantedSeq) return
+    const el = scroller.current.querySelector<HTMLElement>(`[data-seq="${wantedSeq}"]`)
+    if (!el) return
+    flashed.current = wantedSeq
+    stick.current = false
+    el.scrollIntoView({ block: 'center' })
+    el.setAttribute('data-flash', '')
+    const timer = setTimeout(() => el.removeAttribute('data-flash'), 1300)
+    return () => clearTimeout(timer)
+  }, [wantedSeq, messages.length])
+
+  function onTimelineClick(e: ReactMouseEvent<HTMLDivElement>) {
+    const href = (e.target as HTMLElement).closest('a')?.getAttribute('href') ?? ''
+    if (!href.startsWith('#seq-')) return
+    e.preventDefault()
+    setSeqFocus(0)
+    requestAnimationFrame(() => setSeqFocus(Number(href.slice(5))))
+  }
+
   useLayoutEffect(() => {
     resize()
     const el = input.current
@@ -186,7 +235,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
 
   // Files are uploaded as soon as they are added; the message refers to them by id.
   function addFiles(files: File[]) {
-    if (files.length === 0) return
+    if (dm || files.length === 0) return
     const room = MAX_FILES - pending.length
     if (files.length > room) setSendError(`一条消息最多 ${MAX_FILES} 个附件`)
     else setSendError('')
@@ -237,7 +286,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
   const mentions = keptMentions(draft, picked)
   const projects = activeProjects(wbState.data?.projects)
-  const mentionOpen = mq !== null && mq.start !== dismissed
+  const mentionOpen = !dm && mq !== null && mq.start !== dismissed
   const candidates = mentionOpen ? filterProjects(projects, mq.query) : []
   const highlighted = Math.min(active, Math.max(candidates.length - 1, 0))
 
@@ -266,15 +315,15 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   }
 
   const ids = readyIds(pending)
-  const canSend = (draft.trim() !== '' || ids.length > 0) && !uploading(pending) && !sending
+  const canSend = !disabled && (draft.trim() !== '' || ids.length > 0) && !uploading(pending) && !sending
 
   async function submit() {
     const text = draft.trim()
-    if ((!text && ids.length === 0) || uploading(pending) || sending) return
+    if (disabled || (!text && ids.length === 0) || uploading(pending) || sending) return
     setSending(true)
     setSendError('')
     try {
-      const topic = await onSend(text, ids, mentions)
+      const topic = dm && selected ? await onDm!(selected, text) : await onSend(text, ids, mentions)
       if (typeof topic === 'string' && topic && topics) {
         // Bring the topic the message started into view, folded: opening it is the user's click.
         uiStore.state.revealTopic = topic
@@ -336,7 +385,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       <header className="chat-head flex items-center gap-1 pt-[calc(10px+var(--safe-t))] pr-2.5 pb-2 pl-3 border-b border-line">
         <div className="flex items-center gap-2 min-w-0">
         {leading}
-        <Popover open={picking} onOpenChange={setPicking}>
+        {picker ? <Popover open={picking} onOpenChange={setPicking}>
           <PopoverTrigger asChild>
             <button
               className={phone ? 'glass-pill glass max-w-full min-w-0' : 'flex items-center gap-2 min-w-0 border-0 bg-transparent font-semibold pl-1 pr-2 h-9 rounded-[10px] hover:bg-hover'}
@@ -371,9 +420,17 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               </button>
             ))}
           </PopoverContent>
-        </Popover>
+        </Popover> : (
+          <div className="flex items-center gap-2 min-w-0 pl-1 pr-2 h-9">
+            <span className="relative grid place-items-center flex-none">
+              {avatar}
+              <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full shadow-[0_0_0_2px_var(--chrome)] ${dot}`} title={statusText[uiState.status]}></span>
+            </span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-semibold">{title}</span>
+          </div>
+        )}
         </div>
-        {phone ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
+        {phone && picker ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
           {onSendIn && (
             <button className="icon-btn" aria-label={topics ? '按时间看' : '按话题看'} data-tip={topics ? '按时间看' : '按话题看'} data-tip-pos="bottom"
@@ -381,12 +438,12 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               <Icon name={topics ? 'list' : 'layers'} size={17} />
             </button>
           )}
-          <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>
+          {picker && <button className="icon-btn" aria-label="新对话" data-tip="新对话" data-tip-pos="bottom" onClick={() => void create()}><Icon name="edit" size={17} /></button>}
           {actions}
         </div>
       </header>
 
-      <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll}>
+      <div className="chat-scroll flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain" ref={scroller} onScroll={onScroll} onClick={onTimelineClick}>
         {topics && onSendIn ? (
           // .topic-col: with a topic open (TopicList's data-filled) app.css makes the column a flex box the
           // card fills, so only the card's messages scroll; all folded, the list flows and scrolls here.
@@ -409,7 +466,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
                 </button>
               )}
               {item.kind === 'message' ? (
-              <MessageView message={item.message} />
+              <div data-seq={item.message.seq} className="min-w-0"><MessageView message={item.message} /></div>
             ) : (
               <RunChip view={item.run} nodeName={nodeName} />
             )}
@@ -425,6 +482,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               正在思考
             </div>
           )}
+          {foot}
         </div>
         )}
       </div>
@@ -439,7 +497,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
           ref={composerBox}
           className={phone
             ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
-            : 'relative grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text'}
+            : `relative grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text${dm ? ' !border-accent' : ''}`}
           onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) input.current?.focus() }}
           onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); setDragging(true) } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false) }}
@@ -535,7 +593,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               ref={input}
               value={draft}
               rows={1}
-              placeholder={topics ? `${placeholder.replace(/…$/, '')}（开一个新话题）…` : placeholder}
+              placeholder={dm && selected ? `只有 ${selected.label} 会看到…` : topics ? `${placeholder.replace(/…$/, '')}（开一个新话题）…` : placeholder}
               title={touch ? undefined : 'Enter 发送，Shift+Enter 换行，@ 引用项目'}
               onChange={(e) => { setDraft(e.target.value); syncMention() }}
               onSelect={syncMention}
@@ -550,6 +608,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               onInput={resize}
               onKeyDown={onKey}
               onPaste={onPaste}
+              disabled={disabled}
               aria-label="消息"
               aria-autocomplete="list"
               aria-expanded={mentionOpen && candidates.length > 0}
@@ -559,23 +618,66 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             ></textarea>
           </div>
           <div className="composer-tools flex items-center gap-1 min-w-0">
-            <input
+            {targets && (
+              <>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 h-7 min-w-0 rounded-[8px] border-0 bg-transparent px-1.5 text-[12px] text-muted hover:bg-hover hover:text-ink"
+                      aria-label="选择和谁说"
+                    >
+                      {selected ? <AgentIcon name={selected.agent ?? ''} size={14} /> : <Icon name="cloche" size={14} />}
+                      <span className="max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap">{selected ? selected.label : 'sous'}</span>
+                      <Icon name="chevron" size={10} className="text-faint flex-none" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" side="top" className="w-[240px]">
+                    <DropdownMenuItem onSelect={() => pickTarget('')}>
+                      <Icon name="cloche" size={14} /><span>sous</span>
+                    </DropdownMenuItem>
+                    {(['run', 'task', 'consult'] as const).map((kind) => {
+                      const list = targets.filter((t) => t.kind === kind)
+                      if (list.length === 0) return null
+                      return (
+                        <DropdownMenuGroup key={kind}>
+                          <DropdownMenuLabel>{kind === 'run' ? '正在运行' : kind === 'task' ? '任务的 agent' : '项目顾问'}</DropdownMenuLabel>
+                          {list.map((t) => (
+                            <DropdownMenuItem key={t.key} onSelect={() => pickTarget(t.key)}>
+                              <AgentIcon name={t.agent ?? ''} size={14} />
+                              <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{t.label}</span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuGroup>
+                      )
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {dm && (
+                  <button type="button" className="icon-btn flex-none" aria-label="回到和 sous 说话" data-tip="回到和 sous 说话" onClick={() => pickTarget('')}>
+                    <Icon name="x" size={13} />
+                  </button>
+                )}
+              </>
+            )}
+            {!dm && <input
               ref={fileInput}
               type="file"
               multiple
               hidden
               onChange={(e) => { addFiles(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = '' }}
-            />
-            <button
+            />}
+            {!dm && <button
               type="button"
               className="icon-btn flex-none"
               aria-label="添加图片或文件"
               data-tip="添加图片或文件（也可以直接粘贴、拖进来）"
+              disabled={disabled}
               onClick={() => fileInput.current?.click()}
             >
               <Icon name="paperclip" size={17} />
-            </button>
-            {!phone && <ModelSwitch />}
+            </button>}
+            {!phone && !dm && picker && <ModelSwitch />}
             <span className="w-1 flex-none"></span>
             {context ? (
               <span className="inline-flex gap-1 items-center text-[12px] text-muted bg-sunken rounded-[8px] h-7 pl-2 pr-0.5 max-w-full min-w-0" title="sous 会知道你在看这个">

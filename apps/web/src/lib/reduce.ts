@@ -11,6 +11,7 @@ export interface ChatState {
   /** Highest stored seq applied; the event stream resumes from here. */
   lastSeq: number
   /** Bumped whenever a memory changes, so open memory views reload. */
+  notesRev: number
   memoryRev: number
   /** Bumped whenever a machine changes, so the machine list reloads. */
   nodesRev: number
@@ -26,6 +27,8 @@ export interface ChatState {
   contextRev: number
   /** Bumped when a topic may have changed: its messages, its tasks or itself. */
   topicsRev: number
+  /** Bumped when a meeting's status or minutes change, so open meeting views reload. */
+  meetingsRev: number
   /** The topic the supervisor is working on, by thread (message.seen). */
   answering: Record<string, string>
   /** Messages the supervisor attached to another topic, by id: the topic they started. */
@@ -36,7 +39,7 @@ export interface ChatState {
 }
 
 export function emptyState(): ChatState {
-  return { threads: [], messages: {}, lastSeq: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, contextRev: 0, topicsRev: 0, answering: {}, moved: {}, runs: {}, jobs: {} }
+  return { threads: [], messages: {}, lastSeq: 0, notesRev: 0, memoryRev: 0, nodesRev: 0, tasksRev: 0, inboxRev: 0, schedulesRev: 0, runsRev: 0, contextRev: 0, topicsRev: 0, meetingsRev: 0, answering: {}, moved: {}, runs: {}, jobs: {} }
 }
 
 const DRAFT_SEQ = Number.MAX_SAFE_INTEGER
@@ -97,7 +100,19 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     if (ev.seq <= state.lastSeq) return false
     state.lastSeq = ev.seq
   }
+  if (ev.type === 'note.put' || ev.type === 'note.deleted' || ev.type === 'note.sent') { state.notesRev++; return true }
   const p = ev.payload ?? {}
+  if (ev.type.startsWith('meeting.') || ev.type.startsWith('minutes.')) {
+    const i = state.threads.findIndex((t) => t.id === ev.thread_id)
+    if (i >= 0 && !ev.type.startsWith('minutes.')) {
+      const t = state.threads[i]
+      if (ev.type === 'meeting.closed') state.threads[i] = { ...t, meeting_status: 'closed' }
+      else if (ev.type === 'meeting.reopened') state.threads[i] = { ...t, meeting_status: 'open' }
+      else if (ev.type === 'meeting.host') state.threads[i] = { ...t, host: p.host ?? undefined }
+    }
+    state.meetingsRev++
+    return true
+  }
   if (applyJobEvent(state.jobs, ev)) {
     if (ev.type === 'agent.job.ended') state.nodesRev++
     return true
@@ -132,6 +147,14 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
   if (ev.type === 'run.queued' || ev.type === 'run.started' || ev.type === 'run.ended' || ev.type === 'run.paused' || ev.type === 'run.resumed') {
     state.runsRev++
   }
+  if (ev.type === 'run.message.delivered') {
+    // A direct message reached a running Run's agent (decision 0028).
+    const msgs = list(state, ev.thread_id!)
+    for (const id of p.message_ids ?? []) {
+      const i = msgs.findIndex((m) => m.id === id)
+      if (i >= 0) msgs[i] = { ...msgs[i], delivered: true }
+    }
+  }
   if (applyRunEvent(state.runs, ev)) return true
   switch (ev.type) {
     case 'thread.created': {
@@ -141,6 +164,11 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
           title: p.title,
           kind: p.kind,
           ...(p.project_id && { project_id: p.project_id }),
+          ...(p.parent_thread_id && { parent_thread_id: p.parent_thread_id }),
+          ...(p.parent_topic_id && { parent_topic_id: p.parent_topic_id }),
+          ...(p.meeting_topic && { meeting_topic: p.meeting_topic }),
+          ...(p.host && { host: p.host }),
+          ...(p.kind === 'meeting' && { meeting_status: 'open' as const }),
           created_at: ev.ts,
           updated_at: ev.ts,
           archived: false,
@@ -152,7 +180,9 @@ export function applyEvent(state: ChatState, ev: HubEvent): boolean {
     case 'message.user':
     case 'message.assistant': {
       const role = ev.type === 'message.user' ? 'user' : 'assistant'
-      const topic = topicOfEvent(role, p.kind || undefined, p.message_id, p.topic_id)
+      // A meeting keeps one topic: messages without one join the meeting's.
+      const meetingTopic = state.threads.find((t) => t.id === ev.thread_id)?.meeting_topic
+      const topic = topicOfEvent(role, p.kind || undefined, p.message_id, p.topic_id || meetingTopic)
       upsertMessage(state, {
         id: p.message_id,
         thread_id: ev.thread_id!,

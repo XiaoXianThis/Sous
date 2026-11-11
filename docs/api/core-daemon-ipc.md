@@ -19,6 +19,7 @@
 | `threads.list` | — | 同 Hub 的 `GET /threads` |
 | `threads.create` | `{title}` | 新线程 |
 | `messages.list` | `{thread_id, before?, limit?}` | 同 Hub 的 `GET /threads/{id}/messages`（含 `last_seq`） |
+| `note.add` | `{text}` | `{note_id}`：新建记事本笔记 |
 | `chat.send` | `{thread_id?, content}` | `{thread_id, message_id, seq}`；不给 `thread_id` 就发到主线 |
 | `approvals.list` | — | 待审批的操作 `{approvals}` |
 | `approvals.decide` | `{id, option_id, note?}` | `{ok}` |

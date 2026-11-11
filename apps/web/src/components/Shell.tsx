@@ -2,12 +2,15 @@ import { lazy, Suspense, useEffect } from 'react'
 import { resolved, setTheme, useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
 import { useStoredWidth } from '../lib/resize'
+import { usePhone } from '../lib/phone'
 import ChatPanel from './ChatPanel'
 import Icon from './Icon'
 import ProjectSheet from './ProjectSheet'
 import ResizeHandle from './ResizeHandle'
 import RunSheet from './RunSheet'
+const SystemMap = lazy(() => import('./SystemMap'))
 const SettingsModal = lazy(() => import('./SettingsModal'))
+const NotesDialog = lazy(() => import('./NotesDialog'))
 import TaskDetail from './TaskDetail'
 import Workbench from './Workbench'
 
@@ -43,6 +46,7 @@ function RailButton({ tip, active = false, toggle = false, onClick, children, co
 }
 
 export default function Shell({ onLogout }: { onLogout: () => void }) {
+  const phone = usePhone()
   const chat = useChat()
   const uiState = useUi()
   const wb = useWb()
@@ -63,6 +67,11 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
     }
   }, [])
 
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); ui.state.notesOpen = true; ui.emit() } }
+    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
+  }, [])
+
   // The workbench follows tasks, machines, approvals and Run lifecycle events.
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -73,6 +82,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
   }, [chat.tasksRev, chat.nodesRev, chat.inboxRev, chat.runsRev])
 
   const view = uiState.route.view
+  useEffect(() => { if (phone && view === 'system' && !ui.state.settings) { ui.state.settings = 'system'; ui.emit() } }, [phone, view])
   const [chatWidth, setChatWidth, resetChatWidth] = useStoredWidth('sous.chatWidth', 400)
   useTheme()
   const theme = resolved()
@@ -107,7 +117,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
         style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
         <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+var(--safe-t))] pb-[calc(14px+var(--safe-b))]" aria-label="主导航">
           <img src="/icon.svg" alt="sous" width={32} height={32} className="rounded-[10px] mb-3" />
-          <RailButton tip="工作台" active count={pending} onClick={() => go({ view: 'overview', id: '' })}>
+          <RailButton tip="工作台" active={view !== 'system'} count={pending} onClick={() => go({ view: 'overview', id: '' })}>
             <Icon name="grid" size={20} />
           </RailButton>
           <RailButton
@@ -121,6 +131,9 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           >
             <Icon name="chat" size={21} />
           </RailButton>
+
+          <RailButton tip="系统" active={view === 'system'} onClick={() => go({ view: 'system', id: '' })}><Icon name="system" size={20} /></RailButton>
+          <RailButton tip="记事本" active={uiState.notesOpen} toggle onClick={() => { ui.state.notesOpen = !ui.state.notesOpen; ui.emit() }}><Icon name="note" size={20} /></RailButton>
 
           <span className="flex-1"></span>
 
@@ -150,7 +163,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
         </nav>
 
         <main className="work overflow-y-auto min-w-0 min-h-0 pt-[var(--safe-t)]" aria-label="工作台">
-          <Workbench />
+          {view === 'system' ? (!phone && <Suspense fallback={null}><SystemMap trace={uiState.route.id} /></Suspense>) : <Workbench />}
         </main>
 
         <aside className="side min-h-0 min-w-0">
@@ -223,6 +236,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
           }}
         />
       )}
+      {uiState.notesOpen && <Suspense fallback={null}><NotesDialog /></Suspense>}
       {uiState.settings !== '' && <Suspense fallback={null}><SettingsModal onLogout={onLogout} /></Suspense>}
       {wb.error && !wb.data && (
         <p className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-panel shadow-pop text-danger px-4 py-2.5 rounded-[16px] m-0 z-40 flex items-center gap-2" role="alert">

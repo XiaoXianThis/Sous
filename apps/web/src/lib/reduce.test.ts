@@ -7,6 +7,21 @@ const ev = (seq: number, type: string, payload: any, thread_id = 't1'): HubEvent
 })
 
 describe('applyEvent', () => {
+  it('refreshes notes for note events', () => { const s = emptyState(); ['note.put', 'note.sent', 'note.deleted'].forEach((t, i) => applyEvent(s, ev(i + 1, t, {}))); expect(s.notesRev).toBe(3) })
+  it('keeps a meeting one topic and tracks its status', () => {
+    const s = emptyState()
+    applyEvent(s, ev(1, 'thread.created', { title: '要不要换框架', kind: 'meeting', parent_thread_id: 'm1', meeting_topic: 'open1', host: { model: 'x' } }, 'mt'))
+    const t = s.threads.find((x) => x.id === 'mt')!
+    expect(t.meeting_topic).toBe('open1')
+    expect(t.meeting_status).toBe('open')
+    expect(t.parent_thread_id).toBe('m1')
+    applyEvent(s, ev(2, 'message.user', { message_id: 'u1', content: '先说目标' }, 'mt'))
+    expect(s.messages.mt[0].topic_id).toBe('open1')
+    applyEvent(s, ev(3, 'meeting.closed', { meeting_id: 'mt' }, 'mt'))
+    expect(s.threads.find((x) => x.id === 'mt')!.meeting_status).toBe('closed')
+    applyEvent(s, ev(4, 'minutes.drafted', { meeting_id: 'mt', version: 1 }, 'mt'))
+    expect(s.meetingsRev).toBe(2)
+  })
   it('adds threads with the main thread first', () => {
     const s = emptyState()
     applyEvent(s, ev(1, 'thread.created', { title: '新对话', kind: 'chat' }, 'c1'))

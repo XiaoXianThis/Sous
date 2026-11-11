@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
@@ -217,6 +219,77 @@ func profileDiff(snapshot, current []string) (changed, gone []string) {
 	return changed, gone
 }
 
+// withoutDMs drops the user's direct messages to agents and their answers:
+// they are not addressed to the supervisor, which only gets a summary of
+// them in the tail (decision 0028).
+func withoutDMs(msgs []store.Message) []store.Message {
+	out := make([]store.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Kind == event.KindDM {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// dmLines summarizes the direct messages of the current segment by agent
+// and task, newest first, at most eight lines.
+func (s *Supervisor) dmLines(ctx context.Context, after int64, msgs []store.Message) []string {
+	type group struct {
+		task, agent string
+		count       int
+		last        store.Message
+	}
+	idx := map[string]int{}
+	var groups []group
+	for _, m := range msgs {
+		if m.Seq <= after || m.Role != "user" || m.Kind != event.KindDM {
+			continue
+		}
+		agent := ""
+		if m.Source != nil {
+			agent = m.Source.Agent
+		}
+		key := m.TaskID + "\x00" + agent
+		i, ok := idx[key]
+		if !ok {
+			i = len(groups)
+			idx[key] = i
+			groups = append(groups, group{task: m.TaskID, agent: agent})
+		}
+		groups[i].count++
+		if m.Seq >= groups[i].last.Seq {
+			groups[i].last = m
+		}
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].last.Seq > groups[j].last.Seq })
+	if len(groups) > 8 {
+		groups = groups[:8]
+	}
+	titles := map[string]string{}
+	out := make([]string, 0, len(groups))
+	for _, g := range groups {
+		when := time.Unix(g.last.CreatedAt, 0).Format("15:04")
+		if g.task == "" {
+			out = append(out, fmt.Sprintf("项目顾问：%d 条，最近一次 %s（#%d）", g.count, when, g.last.Seq))
+			continue
+		}
+		title := titles[g.task]
+		if title == "" {
+			if t, err := s.opt.Log.Store.Task(ctx, g.task); err == nil {
+				title = t.Title
+			}
+			titles[g.task] = title
+		}
+		if title == "" {
+			title = "任务"
+		}
+		out = append(out, fmt.Sprintf("%s · 任务 %s「%s」：%d 条，最近一次 %s（#%d）", g.agent, g.task, title, g.count, when, g.last.Seq))
+	}
+	return out
+}
+
 // built is a turn's request and where its parts are.
 type built struct {
 	req      provider.Request
@@ -241,7 +314,7 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 		b.head = 0
 		msgs = append(msgs, provider.Text(provider.RoleUser, h))
 	}
-	msgs = append(msgs, toProviderWith(s.opt.Attachments, s.topicLabels(ctx, clipAnswered(history)), func(c event.MessageContext) string {
+	msgs = append(msgs, toProviderWith(s.opt.Attachments, withoutDMs(s.topicLabels(ctx, clipAnswered(history))), func(c event.MessageContext) string {
 		if s.opt.DescribeContext == nil {
 			return ""
 		}
@@ -260,6 +333,7 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 			Machines: s.environment(ctx, thread.ID),
 			Memories: s.recall(ctx, history, seg.Profile, changed), ProfileChanged: changed, ProfileGone: gone,
 			Topic: s.topicEnv(ctx, tool.TurnFrom(ctx).TopicID),
+			DMs:   s.dmLines(ctx, seg.CoversUpTo, history),
 		})
 		m := msgs[b.lastUser]
 		parts := append(append([]provider.Part{}, m.Parts...), provider.Part{Text: "\n\n" + tail})
@@ -271,7 +345,11 @@ func (s *Supervisor) build(ctx context.Context, thread store.Thread, seg store.S
 			ThreadTitle: thread.Title, ThreadKind: thread.Kind, Project: project,
 		}),
 		Messages: msgs,
-		Tools:    append(append(s.opt.Tools.Specs(), silentSpec), topicSpecs...),
+		Tools:    append(append(append(s.opt.Tools.Specs(), silentSpec), topicSpecs...), meetingProposeSpec),
+	}
+	if isMeeting(thread) {
+		b.req.System = prompts.Meeting(prompts.MeetingEnv{Title: thread.Title, Project: project, Brief: thread.Brief})
+		b.req.Tools = append(s.opt.Tools.Subset(meetingTools...).Specs(), silentSpec)
 	}
 	b.cacheAt()
 	return b

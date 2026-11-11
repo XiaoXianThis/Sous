@@ -12,6 +12,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 // Settings keys.
@@ -230,4 +231,23 @@ func shortEndpoint(e string) string {
 		return e[:48] + "…"
 	}
 	return e
+}
+
+// RegisterSystemProbes exposes push activity on the system map.
+func RegisterSystemProbes() {
+	sysmap.RegisterProbe("notify", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		n := sysmap.Sum("notify>push", 900)
+		state := sysmap.Idle
+		if n > 0 {
+			state = sysmap.OK
+		}
+		return sysmap.Status{State: state, Summary: fmt.Sprintf("最近 15 分钟发了 %d 条", n)}
+	}))
+	sysmap.RegisterProbe("push", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		state := sysmap.Idle
+		if sysmap.Sum("notify>push", 900) > 0 {
+			state = sysmap.OK
+		}
+		return sysmap.Status{State: state, Summary: "浏览器推送服务"}
+	}))
 }

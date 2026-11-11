@@ -67,6 +67,13 @@ export default function ProjectModal({ card, from, tab, onTab, file, onFile, tas
   const phone = usePhone()
   // The project chat is docked on the right and starts closed; the title bar's button opens it.
   const [chatOpen, setChatOpen] = useState(false)
+  useEffect(() => {
+    // A "private chat" link (a task's Run row) opens the dialog and its chat.
+    if (ui.state.projectChat !== p.id) return
+    setChatOpen(true)
+    ui.state.projectChat = ''
+    ui.emit()
+  }, [p.id, ui.state.projectChat])
   const [chatWidth, setChatWidth, resetChatWidth] = useStoredWidth('sous.projectChatWidth', 400)
   const docked = chatOpen && !phone
   const selectedTask = taskId ? card.listTasks.find((t) => t.task.id === taskId)?.task : undefined

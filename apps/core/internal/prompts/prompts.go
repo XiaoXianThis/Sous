@@ -150,6 +150,9 @@ type TurnEnv struct {
 	ProfileGone    []string
 	// Topic is the topic the turn answers (chat-topics), nil without one.
 	Topic *TopicEnv
+	// DMs summarizes the user's direct messages to agents in this segment
+	// (decision 0028), one line per agent and task.
+	DMs []string
 }
 
 // TopicEnv describes the topic a turn answers.
@@ -199,6 +202,12 @@ func Tail(env TurnEnv) string {
 	if len(env.Memories) > 0 {
 		b.WriteString("\n相关记忆：\n")
 		for _, m := range env.Memories {
+			fmt.Fprintf(&b, "- %s\n", m)
+		}
+	}
+	if len(env.DMs) > 0 {
+		b.WriteString("\n## 用户的私聊\n用户绕过你直接和这些 agent 说过话（原文不在上面的对话里，需要时用 thread_read 按编号读）：\n")
+		for _, m := range env.DMs {
 			fmt.Fprintf(&b, "- %s\n", m)
 		}
 	}

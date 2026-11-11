@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { showProject } from '../lib/app'
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { showProject, ui, useChat, useWb } from '../lib/app'
 import { attachmentUrl, formatSize, isImage } from '../lib/attachments'
 import { splitMentions } from '../lib/mention'
+import { renderRefs, supersededBy } from '../lib/meetings'
 import { triggerView } from '../lib/trigger'
 import type { ToolCall } from '../lib/runs'
 import type { Attachment, Message, ToolNote } from '../lib/types'
 import AgentIcon, { agentTitle } from './AgentIcon'
 import Icon from './Icon'
 import Markdown, { CopyButton } from './Markdown'
+import NewMeetingDialog from './NewMeetingDialog'
 import { ToolList } from './RunSteps'
 
 // Turns http(s) links in plain text into parts, so PR links are clickable.
@@ -32,7 +34,7 @@ const noticeLook: Record<string, { icon: string; text: string }> = {
 const triggerIcon: Record<string, string> = { schedule: 'calendar', followup: 'refresh', task: 'refresh', other: 'refresh' }
 
 /** The files of a user message: pictures as thumbnails, the rest as download chips. */
-function Attachments({ list }: { list: Attachment[] }) {
+export function Attachments({ list }: { list: Attachment[] }) {
   const images = list.filter((a) => isImage(a.mime))
   const files = list.filter((a) => !isImage(a.mime))
   return (
@@ -261,8 +263,70 @@ export function SystemNote({ message, taskTitle, time }: { message: Message; tas
   )
 }
 
+/** The supervisor's suggestion to hold a meeting; the user decides. */
+function ProposalCard({ message, time }: { message: Message; time: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <article className="card flex items-center gap-2.5 px-3 py-2.5 min-w-0" data-testid="message-meeting_proposal">
+      <Icon name="meeting" size={16} className="text-accent flex-none" />
+      <span className="min-w-0 flex-1 text-[13px] leading-[1.5] text-ink overflow-hidden text-ellipsis whitespace-nowrap" title={message.content}>sous 建议开个会：{firstLine(message.content)}</span>
+      <time className="text-[11.5px] text-faint tabular-nums flex-none">{time}</time>
+      <button className="btn small px-3 flex-none" onClick={() => setOpen(true)}>开会</button>
+      {open && <NewMeetingDialog parentThreadId={message.thread_id} parentTopicId={message.topic_id} initial={message.content} onClose={() => setOpen(false)} />}
+    </article>
+  )
+}
+
 export default function MessageView({ message }: { message: Message }) {
   const time = new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  const [expandedMinutes, setExpandedMinutes] = useState(false)
+  const chat = useChat()
+  const wb = useWb()
+
+  if (message.kind === 'minutes') {
+    const src = message.source
+    const later = supersededBy(chat.messages[message.thread_id] ?? [], message)
+    const openMeeting = () => {
+      if (!src?.meeting_id) return
+      ui.state.meeting = src.meeting_id
+      ui.emit()
+    }
+    // A citation opens the meeting at that message (a link the chat handles).
+    const onCite = (e: ReactMouseEvent<HTMLElement>) => {
+      const href = (e.target as HTMLElement).closest('a')?.getAttribute('href') ?? ''
+      if (!src?.meeting_id || !href.startsWith('#seq-')) return
+      e.preventDefault()
+      e.stopPropagation()
+      ui.state.meeting = src.meeting_id
+      ui.state.meetingSeq = Number(href.slice(5))
+      ui.emit()
+    }
+    if (later !== null && !expandedMinutes) {
+      return (
+        <button className="border-0 bg-transparent text-left text-[12px] text-muted px-1 py-0.5 hover:text-ink" data-testid="message-minutes" onClick={() => setExpandedMinutes(true)}>
+          会议纪要 · 第 {src?.version} 版 · 已被第 {later} 版取代
+        </button>
+      )
+    }
+    return (
+      <article className="card grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 px-4 py-3 border-l-[3px] border-accent" data-testid="message-minutes" onClick={onCite}>
+        <header className="flex items-center gap-2 min-w-0 h-6">
+          <Icon name="note" size={15} className="text-accent flex-none" />
+          <span className="text-[13px] font-semibold text-ink overflow-hidden text-ellipsis whitespace-nowrap">会议纪要 · 第 {src?.version} 版</span>
+          <time className="text-[11.5px] text-faint tabular-nums flex-none">{time}</time>
+          <span className="flex-1"></span>
+          {src?.meeting_id && (
+            <button className="link text-[12px] shrink-0" onClick={openMeeting}>查看原始记录</button>
+          )}
+        </header>
+        <div className="min-w-0"><Markdown text={renderRefs(message.content)} /></div>
+      </article>
+    )
+  }
+
+  if (message.kind === 'meeting_proposal') {
+    return <ProposalCard message={message} time={time} />
+  }
 
   if (message.kind === 'silent') {
     return (
@@ -312,9 +376,34 @@ export default function MessageView({ message }: { message: Message }) {
   const notice = message.kind ? noticeLook[message.kind] : undefined
   const user = message.role === 'user'
 
+  if (message.kind === 'dm' && !user) {
+    // A task agent's answer to a direct message: the consultant's look, but
+    // labelled with the agent and the task (decision 0028).
+    const src = message.source
+    const task = wb.data?.tasks.find((t) => t.id === (src?.task_id ?? message.task_id))
+    return (
+      <article className="grid grid-cols-[minmax(0,1fr)] gap-2 min-w-0 group border-l-[2px] border-line pl-3.5" data-testid="message-dm">
+        <header className="flex items-center gap-2 min-w-0 h-6">
+          <AgentIcon name={src?.agent ?? ''} size={18} />
+          <span className="text-[13px] font-semibold text-ink overflow-hidden text-ellipsis whitespace-nowrap">
+            {agentTitle(src?.agent || 'agent')} · 私聊{task ? ` · ${task.title}` : ''}
+          </span>
+          <time className="text-[11.5px] text-faint tabular-nums flex-none">{time}</time>
+          <span className="flex-1"></span>
+          {message.content && (
+            <CopyButton text={message.content} className="-my-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
+          )}
+        </header>
+        <Clamp max={280} label="私聊"><Markdown text={message.content} /></Clamp>
+      </article>
+    )
+  }
+
   if (user) {
     return (
       <article className="grid gap-1 justify-items-end group" data-testid={`message-${message.kind ?? message.role}`}>
+        {message.kind === 'dm' && <span className="text-[12px] text-faint flex items-center gap-1"><Icon name="chat" size={12} />私聊 → {agentTitle(message.source?.agent || 'agent')}</span>}
+        {!!message.context?.note_ids?.length && <span className="text-[12px] text-faint flex items-center gap-1"><Icon name="note" size={12} />来自笔记</span>}
         {message.attachments && message.attachments.length > 0 && <Attachments list={message.attachments} />}
         {message.content.trim() !== '' && <div className="selectable whitespace-pre-wrap [overflow-wrap:anywhere] text-[14px] leading-[1.6] bg-user-bubble text-user-text px-3.5 py-2.5 rounded-[12px] max-w-[min(85%,620px)]">
           {linkify(message.content).map((part, i) =>
@@ -344,6 +433,7 @@ export default function MessageView({ message }: { message: Message }) {
           )}
         </div>}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
+          {message.kind === 'dm' && message.delivered && <span className="text-[11px] text-faint px-1">已送达</span>}
           <time className="text-[11px] text-faint px-1 tabular-nums">{time}</time>
           {message.content.trim() !== '' && <CopyButton text={message.content} />}
         </div>

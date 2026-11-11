@@ -7,11 +7,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 const (
@@ -45,6 +47,8 @@ func deviceEvent(t event.Type) bool {
 	return false
 }
 
+var pageConns, deviceConns atomic.Int64
+
 // stream sends the events allow accepts (all of them when it is nil).
 func (s *Server) stream(w http.ResponseWriter, r *http.Request, allow func(event.Type) bool) {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
@@ -60,6 +64,17 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, allow func(event
 		return
 	}
 	defer conn.CloseNow()
+	counter := &pageConns
+	edge := "httpapi>ui"
+	if allow != nil {
+		counter = &deviceConns
+		edge = "httpapi>cli"
+	}
+	counter.Add(1)
+	defer counter.Add(-1)
+	record := func(ev event.Event) {
+		sysmap.Count(edge, sysmap.Refs{ThreadID: ev.ThreadID, TaskID: ev.TaskID, RunID: ev.RunID}, string(ev.Type))
+	}
 	ctx := conn.CloseRead(r.Context())
 
 	// Subscribe before reading the backlog so nothing falls in between; live
@@ -82,6 +97,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, allow func(event
 			if err := send(ctx, conn, ev); err != nil {
 				return
 			}
+			record(ev)
 		}
 		if len(evs) < backlogBatch {
 			break
@@ -111,6 +127,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, allow func(event
 			if err := send(ctx, conn, ev); err != nil {
 				return
 			}
+			record(ev)
 			if ev.Seq != 0 {
 				last = ev.Seq
 			}

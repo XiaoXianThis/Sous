@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 )
 
@@ -52,6 +54,24 @@ type Routes func(mux *http.ServeMux, protect func(pattern string, h http.Handler
 
 func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Server {
 	s := &Server{cfg: cfg, log: log, auth: a, mux: http.NewServeMux(), files: attach.Open(filepath.Join(cfg.DataDir, "attachments"))}
+	sysmap.RegisterProbe("httpapi", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		p, d := pageConns.Load(), deviceConns.Load()
+		return sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("%d 个页面、%d 台设备连着", p, d), Gauges: []sysmap.Gauge{{Label: "连接", Value: float64(p + d)}}}
+	}))
+	sysmap.RegisterProbe("ui", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		n := pageConns.Load()
+		if n == 0 {
+			return sysmap.Status{State: sysmap.Idle, Summary: "没有打开的页面"}
+		}
+		return sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("%d 个页面打开着", n)}
+	}))
+	sysmap.RegisterProbe("cli", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		n := deviceConns.Load()
+		if n == 0 {
+			return sysmap.Status{State: sysmap.Idle, Summary: "没有命令行连着"}
+		}
+		return sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("%d 台设备连着", n)}
+	}))
 	a.Routes(s.mux)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		// Both builds, so a stale page (an old build/web) shows (review 4.23).
@@ -75,6 +95,7 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 	protect("GET /api/v1/attachments/{id}", s.getAttachment)
 	protect("GET /api/v1/usage", s.usage)
 	s.memoryRoutes(protect)
+	s.noteRoutes(protect)
 	for _, r := range extra {
 		r(s.mux, protect)
 	}
@@ -96,11 +117,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 	}
+	// Counted before the handler runs, so the request comes before what it
+	// causes on the system page.
+	if strings.HasPrefix(r.URL.Path, "/api/v1/device/") {
+		sysmap.Count("cli>httpapi", refsOfPath(r.URL.Path), r.Method+" "+r.URL.Path)
+	} else if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/system/") {
+		sysmap.Count("ui>httpapi", refsOfPath(r.URL.Path), r.Method+" "+r.URL.Path)
+	}
 	sw := &statusWriter{ResponseWriter: w, status: 200}
 	s.mux.ServeHTTP(sw, r)
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		slog.Debug("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "dur", time.Since(start))
 	}
+}
+
+// refsOfPath finds the conversation, task or run a request acts on, so the
+// system page groups it with what it causes.
+func refsOfPath(p string) sysmap.Refs {
+	parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(p, "/api/v1/"), "device/"), "/")
+	if len(parts) < 2 || parts[1] == "" {
+		return sysmap.Refs{}
+	}
+	switch parts[0] {
+	case "threads":
+		return sysmap.Refs{ThreadID: parts[1]}
+	case "tasks":
+		return sysmap.Refs{TaskID: parts[1]}
+	case "runs":
+		return sysmap.Refs{RunID: parts[1]}
+	}
+	return sysmap.Refs{}
 }
 
 // secureHeaders is set on every answer. The PWA loads nothing from other
@@ -222,8 +268,17 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := s.log.Store.Thread(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	thread, err := s.log.Store.Thread(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "对话不存在")
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	if thread.Kind == event.KindMeeting && thread.MeetingStatus == event.MeetingClosedState {
+		writeError(w, http.StatusConflict, "meeting_closed", "会议已经结束，续会后才能发言")
 		return
 	}
 	var body struct {
@@ -266,17 +321,53 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var noteIDs []string
+	if body.Context != nil {
+		seen := map[string]bool{}
+		for _, noteID := range body.Context.NoteIDs {
+			if seen[noteID] {
+				continue
+			}
+			seen[noteID] = true
+			if len(noteIDs) >= 20 {
+				writeError(w, http.StatusBadRequest, "too_many", "笔记太多")
+				return
+			}
+			if _, err := s.log.Store.Note(r.Context(), noteID); errors.Is(err, store.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", "笔记不存在")
+				return
+			} else if err != nil {
+				internal(w, err)
+				return
+			}
+			noteIDs = append(noteIDs, noteID)
+		}
+		body.Context.NoteIDs = noteIDs
+	}
 	msgID := ids.New()
-	evs, err := s.log.Append(r.Context(), event.New(event.MessageUser, event.ActorUser, id,
-		event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts, TopicID: body.TopicID}))
+	topicID := body.TopicID
+	if topicID == "" {
+		if thread.Kind == event.KindMeeting {
+			topicID = thread.MeetingTopic
+		} else {
+			topicID = msgID
+		}
+	}
+	evs, err := s.log.Write(r.Context(), func(w *store.Writer) error {
+		if _, err := w.Append(event.New(event.MessageUser, event.ActorUser, id, event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts, TopicID: body.TopicID})); err != nil {
+			return err
+		}
+		if len(noteIDs) > 0 {
+			_, err := w.Append(event.New(event.NoteSent, event.ActorUser, id, event.NoteSentPayload{NoteIDs: noteIDs, ThreadID: id, TopicID: topicID, MessageID: msgID}))
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		internal(w, err)
 		return
 	}
-	topic := body.TopicID
-	if topic == "" {
-		topic = msgID
-	}
+	topic := topicID
 	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq, "topic_id": topic})
 }
 

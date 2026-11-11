@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +46,7 @@ const (
 const wrapUpNote = "\n\n【sous】这一轮调用工具的次数快到上限了。不要再调用工具：用几句话告诉用户做到了哪一步、还剩什么；用户说“继续”你就接着做。"
 
 type Options struct {
+	Fixed    func(providerID, model, effort string) provider.Provider
 	Log      *eventlog.Log
 	Provider provider.Provider
 	Model    string
@@ -75,10 +78,19 @@ type Options struct {
 	Gather time.Duration
 }
 
+type activity struct {
+	Topic      string
+	Step       int
+	Tool       string
+	Since      time.Time
+	Compacting bool
+}
+
 type Supervisor struct {
-	opt Options
-	ctx context.Context
-	wg  sync.WaitGroup
+	active map[string]*activity
+	opt    Options
+	ctx    context.Context
+	wg     sync.WaitGroup
 
 	mu       sync.Mutex
 	queues   map[string]chan struct{}
@@ -98,7 +110,32 @@ func New(opt Options) *Supervisor {
 	if opt.TaskBatch == 0 {
 		opt.TaskBatch = DefaultTaskBatch
 	}
-	return &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}, gathers: map[string]bool{}}
+	s := &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}, gathers: map[string]bool{}, active: map[string]*activity{}}
+	sysmap.RegisterProbe("supervisor", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		n := len(s.active)
+		state := sysmap.Idle
+		summary := "空闲"
+		if n > 0 {
+			state = sysmap.Busy
+			summary = fmt.Sprintf("%d 个对话在处理", n)
+		}
+		st := sysmap.Status{State: state, Summary: summary, Gauges: []sysmap.Gauge{{Label: "处理中", Value: float64(n)}, {Label: "等待中", Value: float64(len(s.batches) + len(s.gathers))}}}
+		for id, a := range s.active {
+			detail := "整理上下文"
+			if !a.Compacting {
+				toolText := ""
+				if a.Tool != "" {
+					toolText = " · 调用 " + a.Tool
+				}
+				detail = fmt.Sprintf("第 %d 步%s · %d 秒", a.Step+1, toolText, int(time.Since(a.Since).Seconds()))
+			}
+			st.Items = append(st.Items, sysmap.Item{ID: id, Detail: detail, State: sysmap.Busy, Link: "#/thread=" + id})
+		}
+		return st
+	}))
+	return s
 }
 
 // Start subscribes to stored events. Turns run until ctx is cancelled; Wait
@@ -315,6 +352,10 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 	}
 	pick := waiting[0]
 	tr := &turnState{thread: threadID, topic: pick.ID, upTo: pick.Newest, attachable: map[string]int64{}}
+	s.mu.Lock()
+	s.active[threadID] = &activity{Topic: pick.ID, Since: time.Now()}
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.active, threadID); s.mu.Unlock() }()
 	for _, m := range all {
 		tr.cursor = max(tr.cursor, m.Seq)
 	}
@@ -332,7 +373,7 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 
 	mainID, _ := st.MainThreadID(ctx)
 	turnCtx := func() context.Context {
-		return tool.WithTurn(s.ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: tr.upTo, TopicID: tr.topic})
+		return sysmap.WithRefs(tool.WithTurn(s.ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: tr.upTo, TopicID: tr.topic}), sysmap.Refs{ThreadID: threadID})
 	}
 	ctx = turnCtx()
 	// load rebuilds the request from the current segment, compacting
@@ -389,7 +430,13 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 	seen := map[string]int{} // tool calls made this turn
 	verifier := claimVerifier{s: s, receipts: map[string]taskReceipt{}, threadID: threadID, replyTo: tr.upTo}
 	checkedDispatch := false
+	proposedMeeting := false
 	for step := 0; step < MaxSteps; step++ {
+		s.mu.Lock()
+		if a := s.active[threadID]; a != nil {
+			a.Step = step
+		}
+		s.mu.Unlock()
 		verifier.step = step
 		if step > 0 {
 			addNote(&req, takeIn())
@@ -404,7 +451,11 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 				emit(d)
 			}
 		}
-		resp, err := s.opt.Provider.Stream(ctx, req, stream)
+		prov := s.opt.Provider
+		if isMeeting(thread) && thread.Host != nil && thread.Host.Model != "" && s.opt.Fixed != nil {
+			prov = s.opt.Fixed(thread.Host.ProviderID, thread.Host.Model, thread.Host.Effort)
+		}
+		resp, err := prov.Stream(ctx, req, stream)
 		if err != nil && step == 0 && !retried && isOverflow(err) {
 			retried = true
 			slog.Warn("supervisor: context overflow, compacting", "thread", threadID, "err", err)
@@ -420,7 +471,7 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 			reply(strings.Join(texts, "\n\n"), err)
 			return pick, true
 		}
-		s.record(threadID, "supervisor", provider.ModelOf(resp, s.opt.Model), s.opt.Provider, resp)
+		s.record(threadID, "supervisor", provider.ModelOf(resp, s.opt.Model), prov, resp)
 		calls := resp.Message.ToolCalls()
 		t := resp.Message.PlainText()
 		if claimsDispatch(t) && len(taskIDPattern.FindAllString(t, -1)) == 0 {
@@ -479,6 +530,15 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 		req.Messages = append(req.Messages, resp.Message)
 		results := provider.Message{Role: provider.RoleTool}
 		var notes []event.ToolNote
+		names := make([]string, 0, len(calls))
+		for _, c := range calls {
+			names = append(names, c.Name)
+		}
+		s.mu.Lock()
+		if a := s.active[threadID]; a != nil {
+			a.Tool = strings.Join(names, "、")
+		}
+		s.mu.Unlock()
 		for _, c := range calls {
 			var r provider.ToolResult
 			key := c.Name + "\x00" + string(c.Args)
@@ -493,6 +553,27 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 			case seen[key] > maxSameCall:
 				r = provider.ToolResult{CallID: c.ID, IsError: true,
 					Content: "这一轮已经用完全相同的参数调用过它了，结果不会变。换个办法，或者根据已有的结果回答。"}
+			case isMeeting(thread) && !slices.Contains(meetingTools, c.Name):
+				r = provider.ToolResult{CallID: c.ID, Content: "会议里不能用 " + c.Name + "：会议只讨论，不动手。把它写成行动项。", IsError: true}
+			case c.Name == meetingProposeSpec.Name:
+				if proposedMeeting {
+					r = provider.ToolResult{CallID: c.ID, Content: "这一轮已经提议过了", IsError: true}
+					break
+				}
+				var args struct {
+					Question string `json:"question"`
+				}
+				if err := json.Unmarshal(c.Args, &args); err != nil || strings.TrimSpace(args.Question) == "" {
+					r = provider.ToolResult{CallID: c.ID, Content: "会议问题不能为空", IsError: true}
+					break
+				}
+				ev := event.New(event.MessageAssistant, event.ActorSupervisor, threadID, event.MessagePayload{MessageID: ids.New(), Kind: event.KindMeetingProposal, Content: strings.TrimSpace(args.Question), TopicID: tr.topic})
+				if _, err := s.opt.Log.Append(ctx, ev); err != nil {
+					r = provider.ToolResult{CallID: c.ID, Content: err.Error(), IsError: true}
+				} else {
+					proposedMeeting = true
+					r = provider.ToolResult{CallID: c.ID, Content: "已经提议开会，等用户决定"}
+				}
 			case isTopicTool(c.Name):
 				r = s.topicCall(ctx, tr, c)
 				ctx = turnCtx() // an attached message moves upTo on
@@ -503,6 +584,11 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 			results.Parts = append(results.Parts, provider.Part{ToolResult: &r})
 			notes = append(notes, toolNote(c, r))
 		}
+		s.mu.Lock()
+		if a := s.active[threadID]; a != nil {
+			a.Tool = ""
+		}
+		s.mu.Unlock()
 		if anchor != "" {
 			anchorTools = append(anchorTools, notes...)
 			s.tools(threadID, anchor, anchorTools)
@@ -798,4 +884,11 @@ func attachmentParts(files *attach.Store, atts []event.Attachment) []provider.Pa
 		}
 	}
 	return parts
+}
+
+// Active reports whether a thread is currently being processed.
+func (s *Supervisor) Active(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[id] != nil
 }

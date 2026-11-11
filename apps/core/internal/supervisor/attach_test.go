@@ -55,3 +55,15 @@ func TestUserFilesReachTheModel(t *testing.T) {
 		t.Errorf("plain: %q", c)
 	}
 }
+
+func TestNoteIDsAreNotIncludedInModelText(t *testing.T) {
+	messages := []store.Message{{Role: "user", Content: "请看看", Context: &event.MessageContext{NoteIDs: []string{"private-note-id"}}}}
+	out := toProviderWith(nil, messages, func(event.MessageContext) string { return "" })
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if strings.Contains(p.Text, "private-note-id") {
+				t.Fatalf("note id leaked: %q", p.Text)
+			}
+		}
+	}
+}

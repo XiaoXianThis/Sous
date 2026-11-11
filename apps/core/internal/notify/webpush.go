@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"io"
 	"math/big"
 	"net/http"
@@ -255,6 +256,7 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, m Message, urgent b
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
+	sysmap.Count("notify>push", sysmap.Refs{}, m.Title)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

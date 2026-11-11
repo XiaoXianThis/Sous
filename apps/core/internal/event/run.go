@@ -69,6 +69,8 @@ type RunQueuedPayload struct {
 	// ContinuePrompt replaces Prompt when ResumeSession loads (decision
 	// 0025): the agent remembers the task, so it gets only what is new.
 	ContinuePrompt string `json:"continue_prompt,omitempty"`
+	// ChatFrom is the task status a direct chat interrupted (decision 0028).
+	ChatFrom string `json:"chat_from,omitempty"`
 }
 
 type RunStartedPayload struct {

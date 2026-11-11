@@ -7,6 +7,8 @@ import type { Approval, Message, Task, Topic } from './types'
 
 /** Whether a message without a topic starts its own. */
 export function startsTopic(role: Message['role'], kind?: string): boolean {
+  // A direct message to an agent stays where it is: it is not a topic of its own.
+  if (kind === 'dm') return false
   return role === 'user' || kind === 'report' || kind === 'notice' || kind === 'inspector'
 }
 
@@ -16,16 +18,16 @@ export function topicOfEvent(role: Message['role'], kind: string | undefined, id
   return startsTopic(role, kind) ? id : undefined
 }
 
-/** Replies that answer: not steps or a consultant's words. */
+/** Replies that answer: not steps, a consultant's words, or a direct message. */
 function answers(m: Message): boolean {
-  return m.role === 'assistant' && m.kind !== 'step' && m.kind !== 'consult' && !m.streaming && (m.reply_to ?? 0) > 0
+  return m.role === 'assistant' && m.kind !== 'step' && m.kind !== 'consult' && m.kind !== 'dm' && !m.streaming && (m.reply_to ?? 0) > 0
 }
 
 /** The user messages of a topic no reply in it covers yet. */
 export function waitingIn(msgs: Message[], topic: string): Message[] {
   let answered = 0
   for (const m of msgs) if ((m.topic_id ?? '') === topic && answers(m)) answered = Math.max(answered, m.reply_to!)
-  return msgs.filter((m) => m.role === 'user' && (m.topic_id ?? '') === topic && m.seq > answered && m.seq !== Number.MAX_SAFE_INTEGER)
+  return msgs.filter((m) => m.role === 'user' && m.kind !== 'dm' && (m.topic_id ?? '') === topic && m.seq > answered && m.seq !== Number.MAX_SAFE_INTEGER)
 }
 
 /** The messages of a topic, with the reply streaming for it. */

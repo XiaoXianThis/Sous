@@ -86,6 +86,10 @@ const (
 // Message kind of a task report the engine posts in the task's thread.
 const KindReport = "report"
 
+// KindDM is what the user says to an agent directly, and the agent's answer
+// (decision 0028). It does not start a topic and is not addressed to the supervisor.
+const KindDM = "dm"
+
 // Run purposes: what a run does.
 const (
 	PurposeWork = "work" // an agent does the task
@@ -99,6 +103,8 @@ const (
 	PurposeGit = "git"
 	// PurposeConsult: a project's read-only consultant session.
 	PurposeConsult = "consult"
+	// PurposeChat: the user talks to a task's agent directly (decision 0028).
+	PurposeChat = "chat"
 )
 
 // TaskFields are the editable fields of a task. In task.updated only the

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
 	"os"
 	"strings"
@@ -59,6 +60,11 @@ func (e *Engine) Advance(ctx context.Context, eff store.Effect) error {
 	}
 	if final(t.Status) {
 		return nil
+	}
+	if r.Purpose == event.PurposeChat {
+		// Decision 0028: a direct chat has its own ending; it is not the
+		// task's work run and must not be compared with one.
+		return e.afterChat(ctx, r)
 	}
 	if last := e.lastRun(ctx, t.ID, event.PurposeWork, event.PurposeRebase, event.PurposeDeliver, event.PurposeReview); last.ID != r.ID {
 		return nil // an older run; a newer one decides the task's state
@@ -548,6 +554,7 @@ func diffFiles(diff string) []string {
 // askJSON calls a role's model with one message and decodes the JSON object
 // in its answer.
 func (e *Engine) askJSON(ctx context.Context, m Model, role string, t store.Task, system, user string, out any) error {
+	ctx = sysmap.WithRefs(ctx, sysmap.Refs{TaskID: t.ID})
 	resp, err := m.Provider.Stream(ctx, provider.Request{
 		Model: m.Name, System: system, Messages: []provider.Message{provider.Text(provider.RoleUser, user)},
 	}, nil)

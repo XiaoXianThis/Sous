@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -21,6 +22,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 // Rules.
@@ -73,16 +75,32 @@ func (o *Options) defaults() {
 }
 
 type Inspector struct {
-	Log      *eventlog.Log
-	Runs     Runs
-	Provider provider.Provider // nil: the rules decide alone
-	Model    string
-	opt      Options
+	mu        sync.Mutex
+	lastRun   time.Time
+	lastFound int
+	Log       *eventlog.Log
+	Runs      Runs
+	Provider  provider.Provider // nil: the rules decide alone
+	Model     string
+	opt       Options
 }
 
 func New(log *eventlog.Log, runs Runs, p provider.Provider, model string, opt Options) *Inspector {
 	opt.defaults()
-	return &Inspector{Log: log, Runs: runs, Provider: p, Model: model, opt: opt}
+	in := &Inspector{Log: log, Runs: runs, Provider: p, Model: model, opt: opt}
+	sysmap.RegisterProbe("inspector", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		in.mu.Lock()
+		defer in.mu.Unlock()
+		if in.lastRun.IsZero() {
+			return sysmap.Status{State: sysmap.Idle, Summary: "还没有巡检过"}
+		}
+		ago := sysmap.Ago(in.lastRun)
+		if in.lastFound > 0 {
+			return sysmap.Status{State: sysmap.Degraded, Summary: fmt.Sprintf("%s巡检，发现 %d 个问题", ago, in.lastFound)}
+		}
+		return sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("%s巡检，没有问题", ago)}
+	}))
+	return in
 }
 
 // Start inspects every period until ctx ends.
@@ -119,6 +137,10 @@ func (in *Inspector) Inspect(ctx context.Context) []event.FindingPayload {
 			out = append(out, f)
 		}
 	}
+	in.mu.Lock()
+	in.lastRun = in.opt.Now()
+	in.lastFound = len(out)
+	in.mu.Unlock()
 	return out
 }
 

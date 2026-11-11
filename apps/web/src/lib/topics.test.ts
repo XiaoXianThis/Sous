@@ -71,6 +71,16 @@ describe('topic helpers', () => {
     expect(topicOfEvent('assistant', 'step', 'm', 't')).toBe('t')
   })
 
+  it('does not wait for a direct message to an agent', () => {
+    const list: Message[] = [
+      ...msgs,
+      { id: 'dm', thread_id: 't1', role: 'user', kind: 'dm', content: '私聊', seq: 5, created_at: 6, topic_id: 'a' },
+      { id: 'dmr', thread_id: 't1', role: 'assistant', kind: 'dm', content: '答', seq: 6, created_at: 7, topic_id: 'a', reply_to: 5 },
+    ]
+    expect(waitingIn(list, 'a').map((m) => m.id)).toEqual(['c'])
+    expect(topicOfEvent('user', 'dm', 'dm', undefined)).toBeUndefined()
+  })
+
   it('groups cards: what needs you, open, closed', () => {
     const approvals = [{ id: 'ap', task_id: 'k2', review: 'user', status: 'pending' } as Approval]
     const cards = topicCards(

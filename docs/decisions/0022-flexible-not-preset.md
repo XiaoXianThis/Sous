@@ -1,6 +1,6 @@
 # 0022 灵活优先：去掉固定流程，交给主管判断
 
-- Status: Accepted
+- Status: Accepted（第 1 条“只和主管对话”被 0028 修改）
 - Date: 2026-11-06
 
 ## Context

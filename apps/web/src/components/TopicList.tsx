@@ -9,6 +9,7 @@ import { ago } from '../lib/time'
 import { lastLine, markSeen, messagesOf, readSeen, taskSummary, topicCards, unread, waitingIn, type TopicCardView, type TopicGroup } from '../lib/topics'
 import type { Message, Task, Topic } from '../lib/types'
 import Icon from './Icon'
+import NewMeetingDialog from './NewMeetingDialog'
 import MessageView, { firstLine, SystemNote } from './Message'
 import TalkLog from './TalkLog'
 
@@ -449,6 +450,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, spot, onToggl
   const t = card.topic
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(t.title)
+  const [meeting, setMeeting] = useState(false)
   const [error, setError] = useState('')
   useTopicMessages(threadId, t.id, open)
   const last = lastLine(t, msgs)
@@ -506,6 +508,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, spot, onToggl
         </button>
         {open && !renaming && (
           <span className="flex items-center gap-0.5 -mt-1 -mr-1.5 flex-none">
+            <button type="button" className="icon-btn" aria-label="就这个话题开会" data-tip="就这个话题开会" data-tip-pos="bottom" onClick={() => setMeeting(true)}><Icon name="meeting" size={15} /></button>
             <button type="button" className="icon-btn" aria-label="改标题" data-tip="改标题" data-tip-pos="bottom" onClick={() => { setTitle(t.title); setRenaming(true) }}><Icon name="edit" size={15} /></button>
             {t.status === 'open' ? (
               <button type="button" className="icon-btn" aria-label="结束话题" data-tip="结束话题" data-tip-pos="bottom" onClick={() => void patch({ status: 'closed' })}><Icon name="archive" size={15} /></button>
@@ -567,6 +570,7 @@ function TopicCard({ card, threadId, msgs, answering, open, flash, spot, onToggl
         </div>
         </div>
       )}
+      {meeting && <NewMeetingDialog parentThreadId={threadId} parentTopicId={t.id} onClose={() => setMeeting(false)} />}
     </article>
   )
 }

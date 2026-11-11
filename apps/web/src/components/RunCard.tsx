@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { showProject, ui } from '../lib/app'
 import { looks, runLook, runStatusText as statusText } from '../lib/status'
 import { gitOpText, isActive, type RunView } from '../lib/runs'
 import { duration } from '../lib/time'
@@ -12,7 +13,7 @@ import { Clamp, Thinking } from './Message'
 import { PlanList, ToolList } from './RunSteps'
 import TextViewer from './TextViewer'
 
-const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付', clone: 'clone', create: '新建项目' }
+const purposeText: Record<string, string> = { rebase: 'rebase', deliver: '交付', clone: 'clone', create: '新建项目', chat: '私聊' }
 
 /** The current time, ticking every second while on is true. */
 function useNow(on: boolean): number {
@@ -115,6 +116,21 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
             ) : null}
             {active && (
               <button className="icon-btn hover:!text-danger" aria-label="取消" data-tip="取消" data-tip-pos="bottom" disabled={!!busy} onClick={() => void act('cancel', () => api.cancelRun(run.id))}><Icon name="stop" size={15} /></button>
+            )}
+            {run.task_id && run.project_id && (
+              <button
+                className="icon-btn"
+                aria-label="私聊"
+                data-tip="私聊"
+                data-tip-pos="bottom"
+                onClick={() => {
+                  ui.state.dmTarget[run.project_id!] = `run:${run.id}`
+                  ui.state.projectChat = run.project_id!
+                  showProject(run.project_id!)
+                }}
+              >
+                <Icon name="chat" size={15} />
+              </button>
             )}
             {run.diffstat && run.purpose !== 'deliver' && (
               <button className="icon-btn" aria-label="查看改动" data-tip="改动" data-tip-pos="bottom" disabled={!!busy} onClick={() => void open('diff')}><Icon name="diff" size={16} /></button>

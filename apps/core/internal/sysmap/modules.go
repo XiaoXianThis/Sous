@@ -1,0 +1,55 @@
+package sysmap
+
+var Modules = []Module{
+	{ID: "ui", Name: "界面", Layer: LayerClient, Desc: "网页和桌面端：工作台、对话、设置", Code: "apps/web"},
+	{ID: "cli", Name: "命令行", Layer: LayerClient, Desc: "机器上的 sous chat，用设备令牌访问", Code: "apps/core/cmd/sous"},
+	{ID: "httpapi", Name: "接口", Layer: LayerHub, Desc: "REST 接口和 /ws 实时事件，登录和 CSRF 在这里检查", Code: "internal/httpapi"},
+	{ID: "eventlog", Name: "事件日志", Layer: LayerHub, Desc: "唯一的写入者：追加事件、更新视图、入队副作用，一个事务", Code: "internal/eventlog"},
+	{ID: "effects", Name: "副作用队列", Layer: LayerHub, Desc: "事件之后要做的事：推进任务、审批、推送，失败会重试", Code: "internal/effects"},
+	{ID: "notify", Name: "推送", Layer: LayerHub, Desc: "把要提醒的事件变成 Web Push 通知", Code: "internal/notify"},
+	{ID: "supervisor", Name: "主管", Layer: LayerHub, Desc: "每条对话一个串行 worker：读历史、调模型、调工具、回复", Code: "internal/supervisor"},
+	{ID: "task", Name: "任务引擎", Layer: LayerHub, Desc: "任务的状态、派发、验收、git 操作、项目顾问", Code: "internal/task"},
+	{ID: "trigger", Name: "定时与跟进", Layer: LayerHub, Desc: "定时任务到点、受阻任务的跟进、数据保留", Code: "internal/trigger"},
+	{ID: "inspector", Name: "巡检", Layer: LayerHub, Desc: "检查卡住、重复、过长的 Run，必要时暂停", Code: "internal/inspector"},
+	{ID: "models", Name: "模型路由", Layer: LayerHub, Desc: "按角色找到供应商和模型，记录每次调用", Code: "internal/models"},
+	{ID: "mcp", Name: "MCP 客户端", Layer: LayerHub, Desc: "连接用户配置的 MCP 服务，把它们的工具交给主管", Code: "internal/mcp"},
+	{ID: "web", Name: "联网", Layer: LayerHub, Desc: "web_search 和 web_fetch，带内网防护", Code: "internal/web"},
+	{ID: "nodehub", Name: "机器连接", Layer: LayerHub, Desc: "和每台机器的 websocket：下发 Run、收进展和审批", Code: "internal/nodehub"},
+	{ID: "search", Name: "搜索引擎", Layer: LayerExternal, Desc: "hub.yaml 里配置的搜索服务", Code: ""},
+	{ID: "push", Name: "Web Push", Layer: LayerExternal, Desc: "浏览器厂商的推送服务", Code: ""},
+}
+
+var StaticEdges = []Edge{
+	{ID: "ui>httpapi", From: "ui", To: "httpapi", Label: "请求", Carries: "页面调用的 REST 接口"},
+	{ID: "cli>httpapi", From: "cli", To: "httpapi", Label: "设备请求", Carries: "/api/v1/device/ 下的接口"},
+	{ID: "httpapi>ui", From: "httpapi", To: "ui", Label: "实时事件", Carries: "/ws 推给页面的事件"},
+	{ID: "httpapi>cli", From: "httpapi", To: "cli", Label: "实时事件", Carries: "/device/ws 推给命令行的事件"},
+	{ID: "httpapi>eventlog", From: "httpapi", To: "eventlog", Label: "写入", Carries: "用户在页面上的操作产生的事件"},
+	{ID: "supervisor>eventlog", From: "supervisor", To: "eventlog", Label: "写入", Carries: "回复、话题、记忆、整理"},
+	{ID: "task>eventlog", From: "task", To: "eventlog", Label: "写入", Carries: "任务、项目、Run 的创建和状态"},
+	{ID: "trigger>eventlog", From: "trigger", To: "eventlog", Label: "写入", Carries: "定时任务和跟进的触发"},
+	{ID: "inspector>eventlog", From: "inspector", To: "eventlog", Label: "写入", Carries: "巡检发现"},
+	{ID: "nodehub>eventlog", From: "nodehub", To: "eventlog", Label: "写入", Carries: "机器上报的 Run 进展、审批请求、上下线"},
+	{ID: "notify>eventlog", From: "notify", To: "eventlog", Label: "写入", Carries: "推送记录"},
+	{ID: "mcp>eventlog", From: "mcp", To: "eventlog", Label: "写入", Carries: "MCP 服务的配置变化"},
+	{ID: "models>eventlog", From: "models", To: "eventlog", Label: "写入", Carries: "模型配置的变化"},
+	{ID: "eventlog>supervisor", From: "eventlog", To: "supervisor", Label: "唤醒", Carries: "用户消息、触发、并入"},
+	{ID: "eventlog>task", From: "eventlog", To: "task", Label: "通知", Carries: "Run 结束、任务状态、审批、机器上线"},
+	{ID: "eventlog>trigger", From: "eventlog", To: "trigger", Label: "通知", Carries: "定时任务的改动"},
+	{ID: "eventlog>effects", From: "eventlog", To: "effects", Label: "入队", Carries: "需要后续处理的事件"},
+	{ID: "effects>task", From: "effects", To: "task", Label: "执行", Carries: "推进任务、审批、项目准备"},
+	{ID: "effects>notify", From: "effects", To: "notify", Label: "执行", Carries: "推送"},
+	{ID: "notify>push", From: "notify", To: "push", Label: "发送", Carries: "Web Push 请求"},
+	{ID: "supervisor>models", From: "supervisor", To: "models", Label: "调用", Carries: "主管和整理的模型调用"},
+	{ID: "task>models", From: "task", To: "models", Label: "调用", Carries: "验收和审批的模型调用"},
+	{ID: "inspector>models", From: "inspector", To: "models", Label: "调用", Carries: "巡检的模型调用"},
+	{ID: "supervisor>task", From: "supervisor", To: "task", Label: "工具", Carries: "任务、项目、git、顾问的工具调用"},
+	{ID: "supervisor>trigger", From: "supervisor", To: "trigger", Label: "工具", Carries: "定时任务的工具调用"},
+	{ID: "supervisor>web", From: "supervisor", To: "web", Label: "工具", Carries: "web_search、web_fetch"},
+	{ID: "web>search", From: "web", To: "search", Label: "联网", Carries: "搜索和抓取网页"},
+	{ID: "supervisor>mcp", From: "supervisor", To: "mcp", Label: "工具", Carries: "MCP 工具和管理"},
+	{ID: "supervisor>nodehub", From: "supervisor", To: "nodehub", Label: "工具", Carries: "machine_look"},
+}
+
+// EdgeID joins two module ids.
+func EdgeID(from, to string) string { return from + ">" + to }

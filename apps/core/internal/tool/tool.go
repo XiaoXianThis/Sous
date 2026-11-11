@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 )
@@ -59,7 +62,11 @@ func (r *Registry) Call(ctx context.Context, c provider.ToolCall) provider.ToolR
 	if !ok {
 		return provider.ToolResult{CallID: c.ID, Content: fmt.Sprintf("unknown tool %q", c.Name), IsError: true}
 	}
+	start := time.Now()
 	out, err := safeCall(ctx, t, c.Args)
+	for _, edge := range toolEdges(c.Name) {
+		sysmap.Call(edge, sysmap.RefsFrom(ctx), c.Name, time.Since(start), err)
+	}
 	if err != nil {
 		return provider.ToolResult{CallID: c.ID, Content: err.Error(), IsError: true}
 	}
@@ -95,4 +102,26 @@ func (r *Registry) Unregister(names ...string) {
 	for _, n := range names {
 		delete(r.tools, n)
 	}
+}
+
+func toolEdges(name string) []string {
+	switch {
+	case strings.HasPrefix(name, "task_"), strings.HasPrefix(name, "project_"), strings.HasPrefix(name, "git_"), name == "consult", name == "run_cancel", name == "run_message":
+		return []string{"supervisor>task"}
+	case strings.HasPrefix(name, "schedule_"):
+		return []string{"supervisor>trigger"}
+	case name == "web_search", name == "web_fetch":
+		return []string{"supervisor>web", "web>search"}
+	case name == "mcp_list", name == "mcp_propose", name == "mcp_withdraw":
+		return []string{"supervisor>mcp"}
+	case strings.HasPrefix(name, "mcp__"):
+		rest := strings.TrimPrefix(name, "mcp__")
+		slug, _, ok := strings.Cut(rest, "__")
+		if ok && slug != "" {
+			return []string{"supervisor>mcp", "mcp>mcpserver:" + slug}
+		}
+	case name == "machine_look":
+		return []string{"supervisor>nodehub"}
+	}
+	return nil
 }

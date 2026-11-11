@@ -138,8 +138,8 @@ func (r *run) end(status, stopReason, summary, diffstat string, err error) {
 	}
 	r.mu.Lock()
 	e.Refused = append([]string(nil), r.refusedAll...)
-	if r.canLoad && r.spec.Purpose == proto.PurposeWork {
-		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
+	if r.canLoad && (r.spec.Purpose == proto.PurposeWork || r.spec.Purpose == proto.PurposeChat) {
+		e.SessionID = r.sessionID // a later rework, retry or chat can go on in it
 	}
 	r.mu.Unlock()
 	r.flushStreams()
@@ -199,7 +199,7 @@ func (r *run) execute() {
 		r.end("failed", "", "", "", fmt.Errorf("准备工作目录失败：%w", err))
 		return
 	}
-	if r.resumed == nil && (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork) {
+	if r.resumed == nil && (r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork || r.spec.Purpose == proto.PurposeChat) {
 		r.workBaseline, err = workspace.Fingerprint(r.ctx, ws)
 		if err != nil {
 			slog.Warn("daemon: start fingerprint failed", "run", r.spec.RunID, "err", err)
@@ -241,6 +241,26 @@ func (r *run) execute() {
 		r.sendDiff(diff)
 	}
 	summary := r.summary()
+	if r.spec.Purpose == proto.PurposeChat {
+		// A direct chat reports one thing: whether it changed the work tree
+		// (decision 0028). There is no task result to judge here.
+		current, snapshotErr := workspace.Fingerprint(context.Background(), ws)
+		r.mu.Lock()
+		changed := snapshotErr == nil && r.workBaseline != "" && current != "" && current != r.workBaseline
+		r.mu.Unlock()
+		e := proto.RunEnded{Status: status, StopReason: stop, Summary: summary, DiffStat: stat}
+		if err != nil {
+			e.Error = err.Error()
+			if status == "failed" {
+				e.ErrorKind = errorKind(err, "")
+			}
+		}
+		if changed && status == "succeeded" {
+			e.Outcome = proto.OutcomeChanged
+		}
+		r.endWith(e)
+		return
+	}
 	if r.spec.Purpose == "" || r.spec.Purpose == proto.PurposeWork {
 		current, snapshotErr := workspace.Fingerprint(context.Background(), ws)
 		r.mu.Lock()
@@ -294,8 +314,8 @@ func (r *run) endWith(e proto.RunEnded) {
 	e.RunID = r.spec.RunID
 	r.mu.Lock()
 	e.Refused = append([]string(nil), r.refusedAll...)
-	if e.SessionID == "" && r.canLoad && r.spec.Purpose == proto.PurposeWork {
-		e.SessionID = r.sessionID // a later rework or retry can go on in it (0025)
+	if e.SessionID == "" && r.canLoad && (r.spec.Purpose == proto.PurposeWork || r.spec.Purpose == proto.PurposeChat) {
+		e.SessionID = r.sessionID // a later rework, retry or chat can go on in it
 	}
 	r.mu.Unlock()
 	r.flushStreams()
@@ -400,8 +420,8 @@ func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, ac
 	}
 	client.SetMCPServers(r.d.sousServers(r))
 	if want := r.spec.ResumeSession; r.resumed == nil && want != "" {
-		// A consultant that went idle, or a task that grew out of a
-		// discussion: go on in the agent's earlier session when it can.
+		// A consultant that went idle, a task that grew out of a
+		// discussion, or a direct chat: go on in the agent's earlier session.
 		if client.Init.LoadSession() {
 			r.mu.Lock()
 			r.loading = true
@@ -417,8 +437,17 @@ func (r *run) openOnce(spec agents.Spec, ws workspace.Prepared) (*acp.Client, ac
 				r.status("已接上 " + spec.Title + " 之前的会话")
 				return client, session, nil
 			}
+			if r.spec.Purpose == proto.PurposeChat {
+				// A direct chat without the session has no context at all (0028).
+				client.Close()
+				return nil, acp.Session{}, fmt.Errorf("接不上之前的会话：%w", err)
+			}
 			r.status("没能接上之前的会话（" + truncate(err.Error(), 120) + "），开一个新会话")
 		} else {
+			if r.spec.Purpose == proto.PurposeChat {
+				client.Close()
+				return nil, acp.Session{}, errors.New("接不上之前的会话：这个 agent 不支持恢复会话")
+			}
 			r.status(spec.Title + " 不支持恢复会话，开一个新会话")
 		}
 	}

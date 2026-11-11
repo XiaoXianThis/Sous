@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
 	"net"
 	"net/url"
@@ -57,7 +58,29 @@ type Manager struct {
 }
 
 func NewManager(log *eventlog.Log, reg *tool.Registry) *Manager {
-	return &Manager{Log: log, Registry: reg, servers: map[string]*server{}, ctx: context.Background()}
+	m := &Manager{Log: log, Registry: reg, servers: map[string]*server{}, ctx: context.Background()}
+	sysmap.RegisterInstances("mcpserver", m.mapInstances)
+	sysmap.RegisterProbe("mcp", sysmap.ProbeFunc(func(ctx context.Context) sysmap.Status {
+		instances := m.mapInstances(ctx)
+		ready, failed := 0, 0
+		for _, i := range instances {
+			if i.Status.State == sysmap.OK {
+				ready++
+			}
+			if i.Status.State == sysmap.Degraded {
+				failed++
+			}
+		}
+		state := sysmap.Idle
+		if ready > 0 {
+			state = sysmap.OK
+		}
+		if failed > 0 {
+			state = sysmap.Degraded
+		}
+		return sysmap.Status{State: state, Summary: fmt.Sprintf("%d 个已连接，%d 个出错", ready, failed)}
+	}))
+	return m
 }
 
 func (m *Manager) context() context.Context {
@@ -796,6 +819,28 @@ func formatResult(r CallResult) string {
 	}
 	if rs := []rune(out); len(rs) > maxResultChars {
 		out = string(rs[:maxResultChars]) + fmt.Sprintf("\n\n（内容太长，已截断到 %d 字。）", maxResultChars)
+	}
+	return out
+}
+
+func (m *Manager) mapInstances(ctx context.Context) []sysmap.Instance {
+	views, err := m.Views(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]sysmap.Instance, 0, len(views))
+	for _, v := range views {
+		status := sysmap.Status{State: sysmap.Idle, Summary: "未启用或等你批准"}
+		switch v.State {
+		case StateReady:
+			status = sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("已连接，%d 个工具", len(v.Tools))}
+		case StateConnecting:
+			status = sysmap.Status{State: sysmap.Busy, Summary: "正在连接"}
+		case StateError:
+			msg, _, _ := strings.Cut(v.Error, "\n")
+			status = sysmap.Status{State: sysmap.Degraded, Summary: msg}
+		}
+		out = append(out, sysmap.Instance{Module: sysmap.Module{ID: "mcpserver:" + v.Slug, Name: v.Name, Layer: sysmap.LayerExternal, Desc: "MCP 服务（" + v.Transport + "）"}, Status: status})
 	}
 	return out
 }

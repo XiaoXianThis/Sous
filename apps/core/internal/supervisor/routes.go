@@ -38,6 +38,7 @@ type ContextView struct {
 // Routes serves a thread's context: GET .../context, POST .../compact and
 // PUT .../summary (docs/api/core-hub-http.md).
 func (s *Supervisor) Routes(mux *http.ServeMux, protect func(string, http.HandlerFunc)) {
+	s.meetingRoutes(protect)
 	protect("GET /api/v1/threads/{id}/context", s.getContext)
 	protect("POST /api/v1/threads/{id}/compact", s.postCompact)
 	protect("PUT /api/v1/threads/{id}/summary", s.putSummary)

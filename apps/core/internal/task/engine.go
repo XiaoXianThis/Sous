@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,34 @@ type Engine struct {
 func New(log *eventlog.Log, nodes *nodehub.Hub) *Engine {
 	e := &Engine{Log: log, Nodes: nodes, kick: make(chan struct{}, 1), waiters: map[string]chan event.Event{}, asks: map[string]consultAsk{},
 		consultMu: map[string]*sync.Mutex{}}
+	var probeMu sync.Mutex
+	var at time.Time
+	var cached sysmap.Status
+	sysmap.RegisterProbe("task", sysmap.ProbeFunc(func(ctx context.Context) sysmap.Status {
+		probeMu.Lock()
+		defer probeMu.Unlock()
+		if time.Since(at) < 2*time.Second {
+			return cached
+		}
+		tasks, err := log.Store.Tasks(ctx, store.TaskFilter{Statuses: []string{"running", "queued", "waiting_approval", "blocked"}, Limit: 2147483647})
+		if err != nil {
+			return sysmap.Status{State: sysmap.Degraded, Summary: "状态读取超时"}
+		}
+		counts := map[string]int{}
+		for _, t := range tasks {
+			counts[t.Status]++
+		}
+		state := sysmap.Idle
+		if counts["running"] > 0 {
+			state = sysmap.Busy
+		}
+		if counts["blocked"] > 0 {
+			state = sysmap.Degraded
+		}
+		cached = sysmap.Status{State: state, Summary: fmt.Sprintf("执行中 %d · 排队 %d · 等审批 %d · 受阻 %d", counts["running"], counts["queued"], counts["waiting_approval"], counts["blocked"]), Gauges: []sysmap.Gauge{{Label: "执行中", Value: float64(counts["running"])}, {Label: "排队", Value: float64(counts["queued"])}}}
+		at = time.Now()
+		return cached
+	}))
 	log.Listen(e.onRunEvent)
 	return e
 }

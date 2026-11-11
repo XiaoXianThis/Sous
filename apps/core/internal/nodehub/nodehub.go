@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -83,7 +84,73 @@ func New(log *eventlog.Log, dataDir string) (*Hub, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Hub{log: log, runsDir: dir, conns: map[string]*nodeConn{}, codes: map[string]time.Time{}}, nil
+	h := &Hub{log: log, runsDir: dir, conns: map[string]*nodeConn{}, codes: map[string]time.Time{}}
+	var mu sync.Mutex
+	var at time.Time
+	var cached []sysmap.Instance
+	var status sysmap.Status
+	refresh := func(ctx context.Context) {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(at) < 2*time.Second {
+			return
+		}
+		nodes, err := log.Store.Nodes(ctx)
+		if err != nil {
+			return
+		}
+		cached = nil
+		online, total, busy, capacity := 0, 0, 0, 0
+		for _, n := range nodes {
+			if n.Revoked {
+				continue
+			}
+			total++
+			desc := "开发机"
+			if n.Role == "server" {
+				desc = "服务器"
+			}
+			st := sysmap.Status{State: sysmap.Down, Summary: "离线 · 最后在线 " + sysmap.Ago(time.UnixMilli(n.LastSeen))}
+			if n.Online {
+				online++
+				used := h.Busy(ctx, n.ID)
+				busy += used
+				capacity += n.Concurrency
+				runs, _ := log.Store.Runs(ctx, store.RunFilter{NodeID: n.ID, Statuses: []string{event.RunStatusRunning}})
+				st = sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("空闲 · 工位 0/%d", n.Concurrency)}
+				if len(runs) > 0 {
+					st.State = sysmap.Busy
+					st.Summary = fmt.Sprintf("在跑 %d 个 · 工位 %d/%d", len(runs), used, n.Concurrency)
+				}
+				for _, run := range runs {
+					detail := run.Title
+					if detail == "" {
+						detail = run.Purpose
+					}
+					link := ""
+					if run.TaskID != "" {
+						link = "#/task=" + run.TaskID
+					}
+					st.Items = append(st.Items, sysmap.Item{ID: run.ID, Label: run.Agent, Detail: detail, State: sysmap.Busy, Link: link})
+				}
+			}
+			cached = append(cached, sysmap.Instance{Module: sysmap.Module{ID: "machine:" + n.ID, Name: n.Name, Layer: sysmap.LayerNode, Desc: desc}, Status: st})
+		}
+		state := sysmap.Down
+		if online > 0 {
+			state = sysmap.OK
+		}
+		status = sysmap.Status{State: state, Summary: fmt.Sprintf("在线 %d/%d 台 · 工位 %d/%d", online, total, busy, capacity)}
+		at = time.Now()
+	}
+	sysmap.RegisterInstances("machine", func(ctx context.Context) []sysmap.Instance {
+		refresh(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]sysmap.Instance(nil), cached...)
+	})
+	sysmap.RegisterProbe("nodehub", sysmap.ProbeFunc(func(ctx context.Context) sysmap.Status { refresh(ctx); mu.Lock(); defer mu.Unlock(); return status }))
+	return h, nil
 }
 
 // NewPairingCode returns a six-digit code a daemon can trade for a device
@@ -206,6 +273,8 @@ type CreateRun struct {
 	ResumeSession string       // an agent session to load
 	// ContinuePrompt replaces Prompt when ResumeSession loads (0025).
 	ContinuePrompt string
+	// ChatFrom is the task status a direct chat interrupted (0028).
+	ChatFrom string
 }
 
 // Create queues a run and dispatches it if its machine is connected.
@@ -251,6 +320,7 @@ func (h *Hub) Create(ctx context.Context, r CreateRun) (store.Run, error) {
 		Purpose: r.Purpose, Branch: r.Branch, BaseBranch: r.BaseBranch, Title: r.Title, Force: r.Force, RecoveryNote: r.RecoveryNote,
 		Options: r.Options, Persona: r.Persona, Setup: r.Setup,
 		BaseFrom: r.BaseFrom, Git: r.Git, ProjectID: r.ProjectID, ResumeSession: r.ResumeSession, ContinuePrompt: r.ContinuePrompt,
+		ChatFrom: r.ChatFrom,
 	})
 	ev.RunID = r.RunID
 	if ev.RunID == "" {

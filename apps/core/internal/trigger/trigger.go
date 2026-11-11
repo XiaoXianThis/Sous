@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -71,6 +73,40 @@ type Scheduler struct {
 
 func New(log *eventlog.Log, opt Options) *Scheduler {
 	opt.defaults()
+	var mu sync.Mutex
+	var at time.Time
+	var cached sysmap.Status
+	sysmap.RegisterProbe("trigger", sysmap.ProbeFunc(func(ctx context.Context) sysmap.Status {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(at) < 2*time.Second {
+			return cached
+		}
+		all, err := log.Store.Schedules(ctx)
+		if err != nil {
+			return sysmap.Status{State: sysmap.Degraded, Summary: "状态读取超时"}
+		}
+		n := 0
+		var next time.Time
+		title := ""
+		for _, item := range all {
+			if !item.Enabled {
+				continue
+			}
+			n++
+			t := NextRun(item)
+			if next.IsZero() || (!t.IsZero() && t.Before(next)) {
+				next = t
+				title = item.Title
+			}
+		}
+		cached = sysmap.Status{State: sysmap.Idle, Summary: "没有启用的定时任务"}
+		if n > 0 {
+			cached = sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("%d 个定时任务 · 下一个 %s「%s」", n, next.Local().Format("01-02 15:04"), title)}
+		}
+		at = time.Now()
+		return cached
+	}))
 	return &Scheduler{Log: log, opt: opt, kick: make(chan struct{}, 1)}
 }
 

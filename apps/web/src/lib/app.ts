@@ -43,6 +43,8 @@ export class Store<T extends object> {
 export const chat = new Store<ChatState>(emptyState())
 
 interface UIState {
+  notesOpen: boolean
+  noteSend: string[]
   status: StreamStatus
   current: string
   loaded: Record<string, boolean>
@@ -65,13 +67,23 @@ interface UIState {
   projectThread: Record<string, string>
   /** A project whose dialog should open (a link to its chat); '' when none. */
   openProject: string
+  /** A project whose docked chat should open (a "private chat" link); '' when none. */
+  projectChat: string
+  /** Who each project chat talks to directly (decision 0028), by project id. */
+  dmTarget: Record<string, string>
   /** A topic to show expanded in the chat (a push link the user followed); '' when none. */
   openTopic: string
   /** A topic to bring into view, folded, with a short highlight (one a message just started); '' when none. */
   revealTopic: string
+  /** The meeting shown in the chat column, '' when none. */
+  meeting: string
+  /** The message a minutes citation asked to show; 0 when none. */
+  meetingSeq: number
 }
 
 export const ui = new Store<UIState>({
+  notesOpen: false,
+  noteSend: [],
   status: 'connecting',
   current: '',
   loaded: {},
@@ -85,8 +97,12 @@ export const ui = new Store<UIState>({
   newTask: '',
   projectThread: {},
   openProject: '',
+  projectChat: '',
+  dmTarget: {},
   openTopic: '',
   revealTopic: '',
+  meeting: '',
+  meetingSeq: 0,
 })
 
 interface WBState {
@@ -326,8 +342,9 @@ export async function newThread() {
 }
 
 /** Sends in the main chat column; returns the message's topic. */
-export async function send(content: string, attachments?: string[], mentions?: Mention[], topicId = ''): Promise<string> {
-  const r = await api.send(ui.state.current, content, withMentions(currentContext(), mentions), attachments, topicId)
+export async function send(content: string, attachments?: string[], mentions?: Mention[], topicId = '', noteIds?: string[]): Promise<string> {
+  const context = withMentions(currentContext(), mentions)
+  const r = await api.send(ui.state.current, content, noteIds?.length ? { ...context, note_ids: noteIds } : context, attachments, topicId)
   return r.topic_id
 }
 
@@ -394,10 +411,11 @@ export async function newProjectThread(projectId: string, title: string) {
 }
 
 /** Sends in a project's chat, creating it on the first message. */
-export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[], mentions?: Mention[], topicId = ''): Promise<string> {
+export async function sendToProject(projectId: string, title: string, content: string, context?: MessageContext, attachments?: string[], mentions?: Mention[], topicId = '', noteIds?: string[]): Promise<string> {
   let id = ui.state.projectThread[projectId]
   if (!id) id = (await newProjectThread(projectId, title)).id
-  const r = await api.send(id, content, withMentions(context, mentions), attachments, topicId)
+  const ctx = withMentions(context, mentions)
+  const r = await api.send(id, content, noteIds?.length ? { ...ctx, note_ids: noteIds } : ctx, attachments, topicId)
   return r.topic_id
 }
 
@@ -442,6 +460,7 @@ export async function followHash(hash: string) {
   }
   const wasSheet = ui.state.route.view === 'task' || ui.state.route.view === 'project'
   ui.state.route = { view: r.view, id: r.id }
+  if (r.view === 'system' && typeof matchMedia !== 'undefined' && matchMedia('(max-width: 760px)').matches) ui.state.settings = 'system'
   // The workbench is always the page; inbox is just its attention filter.
   ui.state.tab = 'work'
   ui.emit()

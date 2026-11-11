@@ -34,9 +34,11 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0019](0019-auto-approval-layers.md) | 自动审批分层：确定性规则、审批 agent、硬上限 | Accepted |
 | [0020](0020-long-thread-context.md) | 长对话的上下文：分段、结构化摘要、查回原文 | Accepted |
 | [0021](0021-mcp-servers.md) | 主管支持 MCP：页面上管理，agent 只能提议、用户批准 | Accepted |
-| [0022](0022-flexible-not-preset.md) | 灵活优先：去掉固定流程，交给主管判断 | Accepted |
+| [0022](0022-flexible-not-preset.md) | 灵活优先：去掉固定流程，交给主管判断 | Accepted（第 1 条“只和主管对话”被 0028 修改） |
 | [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted（“验收默认由 AI 判断”被 0024 取代） |
 | [0024](0024-presets-machine-agents-and-a-lighter-supervisor.md) | 预设、每台电脑的 agent，以及更顺手的主管 | Accepted |
 | [0025](0025-supervisor-loop.md) | 主管的闭环：任务进展叫醒主管、结构化结果、子 agent 能问能报、路由只是偏好 | Accepted |
 | [0026](0026-self-signed-darwin-releases.md) | 发布的 macOS 二进制用自签名证书签名 | Accepted |
 | [0027](0027-chat-topics.md) | 对话按话题整理：一份上下文，按话题分轮和显示 | Accepted |
+| [0028](0028-direct-agent-chat.md) | 用户可以在项目对话里直接和子 agent 对话 | Accepted |
+| [0029](0029-meetings.md) | 会议：在独立上下文里讨论，散会后把纪要交回对话 | Accepted |

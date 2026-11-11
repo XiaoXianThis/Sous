@@ -91,12 +91,13 @@ func (n *Notifier) test(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsView struct {
-	DefaultMode  string            `json:"default_mode"`
-	DefaultAgent string            `json:"default_agent"`
-	Notify       map[string]bool   `json:"notify"`
-	Quiet        Quiet             `json:"quiet"`
-	Roles        map[string]string `json:"roles"`
-	Devices      int               `json:"push_devices"`
+	MinutesAutoPost bool              `json:"minutes_auto_post"`
+	DefaultMode     string            `json:"default_mode"`
+	DefaultAgent    string            `json:"default_agent"`
+	Notify          map[string]bool   `json:"notify"`
+	Quiet           Quiet             `json:"quiet"`
+	Roles           map[string]string `json:"roles"`
+	Devices         int               `json:"push_devices"`
 }
 
 func (n *Notifier) view(r *http.Request, roles func(context.Context) map[string]string) settingsView {
@@ -108,7 +109,8 @@ func (n *Notifier) view(r *http.Request, roles func(context.Context) map[string]
 	}
 	agent, _ := st.Setting(ctx, task.SettingDefaultAgent)
 	subs, _ := st.PushSubscriptions(ctx)
-	return settingsView{DefaultMode: mode, DefaultAgent: agent, Notify: Kinds(ctx, st), Quiet: QuietHours(ctx, st), Roles: roles(ctx), Devices: len(subs)}
+	auto, _ := st.Setting(ctx, "meeting.minutes_auto_post")
+	return settingsView{MinutesAutoPost: auto == "true", DefaultMode: mode, DefaultAgent: agent, Notify: Kinds(ctx, st), Quiet: QuietHours(ctx, st), Roles: roles(ctx), Devices: len(subs)}
 }
 
 func (n *Notifier) getSettings(w http.ResponseWriter, r *http.Request, roles func(context.Context) map[string]string) {
@@ -119,10 +121,11 @@ func (n *Notifier) getSettings(w http.ResponseWriter, r *http.Request, roles fun
 // settings: they stay in the Hub's environment (requirements R9.2).
 func (n *Notifier) patchSettings(w http.ResponseWriter, r *http.Request, roles func(context.Context) map[string]string) {
 	var b struct {
-		DefaultMode  *string         `json:"default_mode"`
-		DefaultAgent *string         `json:"default_agent"`
-		Notify       map[string]bool `json:"notify"`
-		Quiet        *Quiet          `json:"quiet"`
+		MinutesAutoPost *bool           `json:"minutes_auto_post"`
+		DefaultMode     *string         `json:"default_mode"`
+		DefaultAgent    *string         `json:"default_agent"`
+		Notify          map[string]bool `json:"notify"`
+		Quiet           *Quiet          `json:"quiet"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -130,6 +133,16 @@ func (n *Notifier) patchSettings(w http.ResponseWriter, r *http.Request, roles f
 	}
 	ctx := r.Context()
 	st := n.Log.Store
+	if b.MinutesAutoPost != nil {
+		value := ""
+		if *b.MinutesAutoPost {
+			value = "true"
+		}
+		if err := st.SetSetting(ctx, "meeting.minutes_auto_post", value); err != nil {
+			internal(w, err)
+			return
+		}
+	}
 	if b.DefaultMode != nil {
 		if !slices.Contains(task.Modes, *b.DefaultMode) {
 			writeError(w, http.StatusBadRequest, "invalid", "权限模式只能是 default、auto 或 open")
