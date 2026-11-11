@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { resolved, setTheme, useTheme } from '../lib/theme'
+import { useTheme } from '../lib/theme'
 import { closeSheet, followHash, go, loadInbox, loadOverview, openThread, ui, useChat, useUi, useWb } from '../lib/app'
 import { useStoredWidth } from '../lib/resize'
 import { usePhone } from '../lib/phone'
@@ -8,42 +8,12 @@ import Icon from './Icon'
 import ProjectSheet from './ProjectSheet'
 import ResizeHandle from './ResizeHandle'
 import RunSheet from './RunSheet'
-const SystemMap = lazy(() => import('./SystemMap'))
 const SettingsModal = lazy(() => import('./SettingsModal'))
 const NotesDialog = lazy(() => import('./NotesDialog'))
 import TaskDetail from './TaskDetail'
 import Workbench from './Workbench'
 
-const badge = 'absolute min-w-[17px] h-[17px] rounded-full px-[4px] bg-warm text-white text-[10.5px] leading-[17px] text-center font-bold shadow-[0_0_0_2px_var(--rail)] tabular-nums'
-
-function RailButton({ tip, active = false, toggle = false, onClick, children, count = 0 }: {
-  tip: string
-  active?: boolean
-  /** A panel toggle: drawn tinted when on, not as the current page. */
-  toggle?: boolean
-  onClick: () => void
-  children: React.ReactNode
-  count?: number
-}) {
-  return (
-    <button
-      className={`relative w-10 h-10 rounded-[10px] border-0 grid place-items-center transition-colors ${
-        active
-          ? toggle
-            ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent'
-            : 'bg-hover text-ink'
-          : 'bg-transparent text-muted hover:bg-hover hover:text-ink'
-      }`}
-      data-tip={tip}
-      aria-label={tip}
-      aria-pressed={active}
-      onClick={onClick}
-    >
-      {children}
-      {count > 0 && <span className={`${badge} -top-0.5 -right-0.5`}>{count > 99 ? '99+' : count}</span>}
-    </button>
-  )
-}
+const badge = 'absolute min-w-[17px] h-[17px] rounded-full px-[4px] bg-warm text-white text-[10.5px] leading-[17px] text-center font-bold shadow-[0_0_0_2px_var(--chrome)] tabular-nums'
 
 export default function Shell({ onLogout }: { onLogout: () => void }) {
   const phone = usePhone()
@@ -82,12 +52,9 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
   }, [chat.tasksRev, chat.nodesRev, chat.inboxRev, chat.runsRev])
 
   const view = uiState.route.view
-  useEffect(() => { if (phone && view === 'system' && !ui.state.settings) { ui.state.settings = 'system'; ui.emit() } }, [phone, view])
   const [chatWidth, setChatWidth, resetChatWidth] = useStoredWidth('sous.chatWidth', 400)
   useTheme()
-  const theme = resolved()
   const pending = (wb.inbox?.approvals.filter((a) => a.review === 'user').length ?? 0) + (wb.inbox?.tasks.length ?? 0)
-  const nodes = wb.data?.nodes ?? []
   const openSettings = (tab = 'machines') => {
     ui.state.settings = tab
     ui.emit()
@@ -115,55 +82,8 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
         data-tab={uiState.tab}
         data-settings={uiState.settings ? '' : undefined}
         style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}>
-        <nav className="rail flex flex-col items-center gap-2 pt-[calc(14px+var(--safe-t))] pb-[calc(14px+var(--safe-b))]" aria-label="主导航">
-          <img src="/icon.svg" alt="sous" width={32} height={32} className="rounded-[10px] mb-3" />
-          <RailButton tip="工作台" active={view !== 'system'} count={pending} onClick={() => go({ view: 'overview', id: '' })}>
-            <Icon name="grid" size={20} />
-          </RailButton>
-          <RailButton
-            tip={uiState.chatOpen ? '收起对话' : '打开对话'}
-            active={uiState.chatOpen}
-            toggle
-            onClick={() => {
-              ui.state.chatOpen = !ui.state.chatOpen
-              ui.emit()
-            }}
-          >
-            <Icon name="chat" size={21} />
-          </RailButton>
-
-          <RailButton tip="系统" active={view === 'system'} onClick={() => go({ view: 'system', id: '' })}><Icon name="system" size={20} /></RailButton>
-          <RailButton tip="记事本" active={uiState.notesOpen} toggle onClick={() => { ui.state.notesOpen = !ui.state.notesOpen; ui.emit() }}><Icon name="note" size={20} /></RailButton>
-
-          <span className="flex-1"></span>
-
-          <div className="grid gap-1.5 justify-items-center mb-1" aria-label="机器">
-            {nodes.slice(0, 5).map((n) => {
-              const busy = wb.data?.runs.filter((r) => r.node_id === n.id && r.status === 'running').length ?? 0
-              return (
-                <button
-                  key={n.id}
-                  className="relative w-9 h-9 rounded-[12px] grid place-items-center border-0 bg-transparent text-muted hover:bg-hover hover:text-ink"
-                  data-tip={`${n.name} · ${n.online ? '在线' : '离线'}${busy ? ` · ${busy} 个在跑` : ''}`}
-                  aria-label={`${n.name}${n.online ? '' : '（离线）'}`}
-                  onClick={() => openSettings('machines')}
-                >
-                  <Icon name={n.role === 'server' ? 'server' : 'laptop'} size={19} />
-                  <span className={`absolute bottom-[5px] right-[5px] w-[9px] h-[9px] rounded-full shadow-[0_0_0_2px_var(--rail)] ${n.online ? (busy ? 'bg-info live-dot' : 'bg-[var(--online)]') : 'bg-faint'}`}></span>
-                </button>
-              )
-            })}
-          </div>
-          <RailButton tip={theme === 'dark' ? '切换到浅色' : '切换到深色'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={19} />
-          </RailButton>
-          <RailButton tip="设置" onClick={() => openSettings('machines')}>
-            <Icon name="settings" size={21} />
-          </RailButton>
-        </nav>
-
         <main className="work overflow-y-auto min-w-0 min-h-0 pt-[var(--safe-t)]" aria-label="工作台">
-          {view === 'system' ? (!phone && <Suspense fallback={null}><SystemMap trace={uiState.route.id} /></Suspense>) : <Workbench />}
+          <Workbench />
         </main>
 
         <aside className="side min-h-0 min-w-0">
@@ -171,7 +91,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
             label="调整对话栏宽度"
             width={chatWidth}
             min={300}
-            max={() => Math.min(900, window.innerWidth - 488)}
+            max={() => Math.min(900, window.innerWidth - 420)}
             onWidth={setChatWidth}
             onReset={resetChatWidth}
           />

@@ -349,12 +349,11 @@
 .toggle svg { transition: transform .15s; }
 .toggle[aria-expanded='false'] svg { transform: rotate(-90deg); }
 
-/* The app shell: icon rail, the workbench and the chat column. */
+/* The app shell: the workbench and the chat column (no side rail: its buttons are in the workbench's title row and status bar). */
 /* --chat-w is the dragged width; the workbench keeps at least 420px. */
-.shell { height: 100%; display: grid; grid-template-columns: 68px minmax(0, 1fr) clamp(300px, var(--chat-w, 400px), calc(100vw - 488px)); background: var(--rail); }
-.shell.chat-closed { grid-template-columns: 68px minmax(0, 1fr) 0; }
+.shell { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, var(--chat-w, 400px), calc(100vw - 420px)); background: var(--chrome); }
+.shell.chat-closed { grid-template-columns: minmax(0, 1fr) 0; }
 .shell.chat-closed .side { display: none; }
-.shell .rail { box-shadow: inset -1px 0 0 var(--line); }
 .shell .work { background: var(--bg); }
 .shell .side { position: relative; background: var(--chrome); box-shadow: -1px 0 0 var(--line); }
 @media (max-width: 760px) {
@@ -367,7 +366,6 @@
   /* The page never scrolls on a phone: the content areas scroll inside. */
   html, body { overflow: hidden; }
   .shell, .shell.chat-closed { overflow: hidden; }
-  .shell .rail { display: none; }
   .shell .work, .shell .side { grid-row: 1; grid-column: 1; border-radius: 0; box-shadow: none; }
   .shell .work { background: var(--chrome); padding-top: 0; padding-bottom: var(--tabbar-space); }
   .shell .side { display: block; background: var(--bg); }
@@ -648,6 +646,3 @@ body[data-resizing] iframe { pointer-events: none; }
 }
 .mention-tag:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
-/* The system page: a row that just arrived slides in from its lane. */
-@keyframes coord-in { from { opacity: 0; transform: translateY(-4px) } }
-.coord-in { animation: coord-in .3s ease-out both; }

@@ -1,9 +1,9 @@
-// The system page as a live sequence diagram: who asks whom for what, row by
-// row, from the Hub's flow records (work/specs/system-map). Pure functions; the
-// page only draws what these return.
+// The system page's steps: who hands what to whom, one hand-off at a time,
+// from the Hub's flow records (work/specs/system-map). Pure functions; the
+// settings' system status list (SystemList) shows what these return.
 import type { SysGraph, SysRecord, SysState } from './types'
 
-/** A column of the diagram: one participant, made of one or more modules. */
+/** A participant (a room of the office), made of one or more modules. */
 export interface Lane {
   id: string
   name: string
@@ -299,27 +299,6 @@ export function visibleLanes(detail: boolean): Lane[] {
   return LANES.filter((l) => detail || !l.detail)
 }
 
-const CORE = ['you', 'api', 'sup', 'model', 'task']
-
-/**
- * The lanes worth a column: the core ones, the machines when there are any,
- * and any other lane that has rows or is not idle.
- */
-export function usedLanes(detail: boolean, list: Step[], graph: SysGraph): Lane[] {
-  const busy = new Set<string>()
-  for (const s of list) {
-    busy.add(s.from)
-    busy.add(s.to)
-  }
-  const hasMachines = graph.modules.some((m) => m.id.startsWith('machine:'))
-  return visibleLanes(detail).filter((l) => {
-    if (CORE.includes(l.id) || busy.has(l.id)) return true
-    if ((l.id === 'hub' || l.id === 'machine') && hasMachines) return true
-    const state = laneState(l, graph)
-    return state === 'busy' || state === 'degraded'
-  })
-}
-
 /** The worst state of a lane's modules, for its header. */
 export function laneState(lane: Lane, graph: SysGraph): SysState {
   const order: SysState[] = ['down', 'degraded', 'busy', 'ok', 'idle']
@@ -363,10 +342,4 @@ export function activities(list: Step[]): string[] {
   const seen = new Map<string, number>()
   for (const s of list) if (s.activity) seen.set(s.activity, Math.max(seen.get(s.activity) ?? 0, s.until))
   return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
-}
-
-/** Horizontal position (percent of the lanes area) of a lane's center. */
-export function laneX(lanes: Lane[], id: string): number {
-  const i = lanes.findIndex((l) => l.id === id)
-  return i < 0 ? -1 : ((i + 0.5) / lanes.length) * 100
 }

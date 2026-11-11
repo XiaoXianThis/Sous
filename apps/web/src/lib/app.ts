@@ -225,6 +225,17 @@ export function currentContext(): MessageContext | undefined {
 
 let stream: EventStream | null = null
 
+/** Listeners for every live event (the dispatch page animates them). */
+const hubListeners = new Set<(ev: HubEvent) => void>()
+
+/** Calls fn with each live event from the Hub until the returned function is called. */
+export function onHubEvent(fn: (ev: HubEvent) => void): () => void {
+  hubListeners.add(fn)
+  return () => {
+    hubListeners.delete(fn)
+  }
+}
+
 export async function startSession(onLoggedOut: () => void) {
   const [{ threads }] = await Promise.all([api.threads()])
   chat.state.threads = sortThreads(threads)
@@ -240,6 +251,7 @@ export async function startSession(onLoggedOut: () => void) {
     () => chat.state.lastSeq,
     (ev) => {
       feed(ev)
+      for (const fn of hubListeners) fn(ev)
       if (applyEvent(chat.state, ev)) maybeNotify(ev)
       chat.emit()
       wb.emit()

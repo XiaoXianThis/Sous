@@ -61,7 +61,7 @@ export default function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         </>
       }
       actions={
-        <>{uiState.current && <button className="icon-btn" aria-label="在系统页里追踪" data-tip="在系统页里追踪" onClick={() => go({view:'system',id:'thread:'+uiState.current})}><Icon name="system" size={18} /></button>}<MeetingList parentThreadId={uiState.current} /><button className="icon-btn" aria-label="记事本" onClick={() => { ui.state.notesOpen = true; ui.emit() }}><Icon name="note" size={18} /></button>{onCollapse && (
+        <>{uiState.current && <button className="icon-btn" aria-label="在现场里追踪" data-tip="在现场里追踪" onClick={() => go({view:'system',id:'thread:'+uiState.current})}><Icon name="system" size={18} /></button>}<MeetingList parentThreadId={uiState.current} /><button className="icon-btn" aria-label="记事本" onClick={() => { ui.state.notesOpen = true; ui.emit() }}><Icon name="note" size={18} /></button>{onCollapse && (
           <button className="icon-btn collapse-chat" aria-label="收起对话" data-tip="收起" data-tip-pos="bottom" onClick={onCollapse}><Icon name="panel" size={18} /></button>
         )}</>
       }

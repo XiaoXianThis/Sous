@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activities, activityOf, laneOf, laneState, laneSummary, laneX, recordText, runTasks, steps, usedLanes, visibleLanes } from './coord'
+import { activities, activityOf, laneOf, laneState, laneSummary, recordText, runTasks, steps, visibleLanes } from './coord'
 import type { SysGraph, SysRecord } from './types'
 
 const rec = (ts: number, edge: string, summary: string, refs: SysRecord['refs'] = {}): SysRecord => ({ ts, edge, summary, refs })
@@ -100,11 +100,9 @@ describe('activities and helpers', () => {
     expect(activities(list)).toEqual(['task:B', 'thread:A'])
     expect(activityOf(rec(0, 'x>y', '', {}))).toBe('')
   })
-  it('places lanes evenly', () => {
-    const lanes = visibleLanes(false)
-    expect(lanes.some((l) => l.id === 'log')).toBe(false)
-    expect(laneX(lanes, lanes[0].id)).toBeCloseTo(50 / lanes.length)
-    expect(laneX(lanes, 'nope')).toBe(-1)
+  it('leaves the event log out of the plain view', () => {
+    expect(visibleLanes(false).some((l) => l.id === 'log')).toBe(false)
+    expect(visibleLanes(true).some((l) => l.id === 'log')).toBe(true)
   })
   it('summarizes lane state', () => {
     const g: SysGraph = {
@@ -121,19 +119,5 @@ describe('activities and helpers', () => {
     expect(laneState(machine, g)).toBe('busy')
     expect(laneSummary(machine, g)).toBe('1/2 台在线')
     expect(laneSummary(visibleLanes(false).find((l) => l.id === 'sup')!, g)).toBe('空闲')
-  })
-})
-
-describe('usedLanes', () => {
-  const g: SysGraph = { now: 0, edges: [], modules: [{ id: 'trigger', name: '定时', layer: 'hub', desc: '' }], status: { trigger: { state: 'idle', summary: '' } } }
-  it('keeps the core lanes and drops idle ones without rows', () => {
-    expect(usedLanes(false, [], g).map((l) => l.id)).toEqual(['you', 'api', 'sup', 'model', 'task'])
-  })
-  it('adds lanes with rows, machines when there are any, and busy lanes', () => {
-    const list = steps([rec(0, 'trigger>eventlog', 'trigger.fired')], { detail: false })
-    expect(usedLanes(false, list, g).map((l) => l.id)).toContain('auto')
-    const withMachine = { ...g, modules: [...g.modules, { id: 'machine:a', name: 'a', layer: 'node' as const, desc: '' }] }
-    expect(usedLanes(false, [], withMachine).map((l) => l.id)).toEqual(['you', 'api', 'sup', 'model', 'task', 'hub', 'machine'])
-    expect(usedLanes(false, [], { ...g, status: { trigger: { state: 'busy', summary: '' } } }).map((l) => l.id)).toContain('auto')
   })
 })
