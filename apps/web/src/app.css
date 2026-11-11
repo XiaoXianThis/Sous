@@ -349,18 +349,6 @@
 .toggle svg { transition: transform .15s; }
 .toggle[aria-expanded='false'] svg { transform: rotate(-90deg); }
 
-/* A hover tooltip from aria-label, for icon-only controls on pointer devices. */
-@media (hover: hover) {
-  [data-tip] { position: relative; }
-  [data-tip]:hover::after {
-    content: attr(data-tip); position: absolute; z-index: 50; pointer-events: none; white-space: nowrap;
-    left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
-    background: var(--text); color: var(--bg); font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 10px;
-    animation: fade-in .12s ease-out;
-  }
-  [data-tip-pos='bottom']:hover::after { left: 50%; top: calc(100% + 8px); transform: translateX(-50%); }
-}
-
 /* The app shell: icon rail, the workbench and the chat column. */
 /* --chat-w is the dragged width; the workbench keeps at least 420px. */
 .shell { height: 100%; display: grid; grid-template-columns: 68px minmax(0, 1fr) clamp(300px, var(--chat-w, 400px), calc(100vw - 488px)); background: var(--rail); }
