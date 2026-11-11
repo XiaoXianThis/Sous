@@ -156,6 +156,17 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
               <span className="text-muted text-[13px]">期间只推送审批</span>
             </div>
+            <div className="flex gap-2.5 items-center flex-wrap">
+              <label className="flex gap-1.5 items-center text-[14px]">
+                <input
+                  type="checkbox"
+                  checked={s.minutes_auto_post}
+                  onChange={(e) => void patch({ minutes_auto_post: e.currentTarget.checked })}
+                />
+                纪要直接发出
+              </label>
+              <span className="text-muted text-[13px]">散会后不再让你确认，纪要整理好就发回原来的对话</span>
+            </div>
             {info && <p className="text-muted text-[13px] m-0">{info}</p>}
           </section>
 

@@ -30,7 +30,7 @@ type pendingTopic struct {
 func answers(msgs []store.Message) map[string]int64 {
 	topicAt := map[int64]string{}
 	for _, m := range msgs {
-		if m.Role == "user" {
+		if m.Role == "user" && m.Kind != event.KindDM {
 			topicAt[m.Seq] = m.TopicID
 		}
 	}
@@ -57,7 +57,8 @@ func pendingTopics(msgs []store.Message) []pendingTopic {
 	idx := map[string]int{}
 	var out []pendingTopic
 	for _, m := range msgs {
-		if m.Role != "user" || m.Seq <= answered[m.TopicID] {
+		// A direct message to an agent is not a question for the supervisor.
+		if m.Role != "user" || m.Kind == event.KindDM || m.Seq <= answered[m.TopicID] {
 			continue
 		}
 		i, ok := idx[m.TopicID]
@@ -100,6 +101,10 @@ func forTopic(msgs []store.Message, topic string) []store.Message {
 	answered := answers(msgs)
 	out := make([]store.Message, 0, len(msgs))
 	for _, m := range msgs {
+		// Direct messages to an agent stay out of the supervisor's history.
+		if m.Kind == event.KindDM {
+			continue
+		}
 		if m.Role == "user" && m.TopicID != topic && m.Seq > answered[m.TopicID] {
 			continue
 		}

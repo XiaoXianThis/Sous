@@ -1,10 +1,10 @@
-import { go, wb } from '../lib/app'
+import { go, showProject, ui, wb } from '../lib/app'
 import { gitOpText, type RunView } from '../lib/runs'
 import { avatarOf, looks, runLook } from '../lib/status'
 import { Who } from './Avatar'
 import Icon from './Icon'
 
-const what: Record<string, string> = { deliver: '交付 PR', rebase: 'rebase', clone: 'clone 项目', create: '新建项目', review: '验收', consult: '顾问在看代码' }
+const what: Record<string, string> = { deliver: '交付 PR', rebase: 'rebase', clone: 'clone 项目', create: '新建项目', review: '验收', consult: '顾问在看代码', chat: '私聊' }
 
 export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (id: string) => string }) {
   const run = view.run
@@ -22,23 +22,44 @@ export default function RunChip({ view, nodeName }: { view: RunView; nodeName: (
     if (run.task_id) go({ view: 'task', id: run.task_id })
   }
 
+  function privateChat() {
+    if (!run.task_id || !run.project_id) return
+    ui.state.dmTarget[run.project_id] = `run:${run.id}`
+    ui.state.projectChat = run.project_id
+    showProject(run.project_id)
+  }
+
   return (
-    <button
-      className="flex items-center gap-2 max-w-full min-w-0 justify-self-start overflow-hidden border-0 bg-panel shadow-soft rounded-[16px] py-1.5 pr-2.5 pl-1.5 text-[12.5px] enabled:hover:shadow-card disabled:opacity-100 disabled:cursor-default transition-shadow"
-      onClick={open}
-      disabled={!run.task_id}
-      title={`${a.title} @ ${nodeName(run.node_id)} · ${info.text}${run.title ? ' · ' + run.title : ''}`}
-    >
-      <Who persona={system ? undefined : persona} agent={system ? 'sous' : run.agent} size={28} />
-      <span className="grid min-w-0 text-left leading-tight">
-        <span className="font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{run.purpose === 'git' ? gitOpText(run.git) : (what[run.purpose] ?? run.title ?? '')}</span>
-        <span className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted whitespace-nowrap">
-          <span className={`inline-flex items-center gap-0.5 flex-none font-semibold tone-${info.tone}`}><Icon name={info.icon} size={10} stroke={2.4} />{info.text}</span>
-          <span className="inline-flex items-center gap-0.5 min-w-0"><Icon name="laptop" size={10} className="flex-none" /><span className="overflow-hidden text-ellipsis">{nodeName(run.node_id)}</span></span>
-          {steps > 0 && <span className="inline-flex items-center gap-0.5 flex-none"><Icon name="list" size={10} />{steps}</span>}
+    <div className="relative justify-self-start max-w-full min-w-0 group/run">
+      <button
+        className="flex items-center gap-2 max-w-full min-w-0 overflow-hidden border-0 bg-panel shadow-soft rounded-[16px] py-1.5 pr-2.5 pl-1.5 text-[12.5px] enabled:hover:shadow-card disabled:opacity-100 disabled:cursor-default transition-shadow"
+        onClick={open}
+        disabled={!run.task_id}
+        title={`${a.title} @ ${nodeName(run.node_id)} · ${info.text}${run.title ? ' · ' + run.title : ''}`}
+      >
+        <Who persona={system ? undefined : persona} agent={system ? 'sous' : run.agent} size={28} />
+        <span className="grid min-w-0 text-left leading-tight">
+          <span className="font-semibold overflow-hidden text-ellipsis whitespace-nowrap">{run.purpose === 'git' ? gitOpText(run.git) : (what[run.purpose] ?? run.title ?? '')}</span>
+          <span className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted whitespace-nowrap">
+            <span className={`inline-flex items-center gap-0.5 flex-none font-semibold tone-${info.tone}`}><Icon name={info.icon} size={10} stroke={2.4} />{info.text}</span>
+            <span className="inline-flex items-center gap-0.5 min-w-0"><Icon name="laptop" size={10} className="flex-none" /><span className="overflow-hidden text-ellipsis">{nodeName(run.node_id)}</span></span>
+            {steps > 0 && <span className="inline-flex items-center gap-0.5 flex-none"><Icon name="list" size={10} />{steps}</span>}
+          </span>
         </span>
-      </span>
-      {run.task_id && <Icon name="forward" size={14} className="text-faint flex-none" />}
-    </button>
+        {run.task_id && <Icon name="forward" size={14} className="text-faint flex-none" />}
+      </button>
+      {run.task_id && run.project_id && (
+        <button
+          type="button"
+          className="absolute -right-2 -top-2 opacity-0 group-hover/run:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity grid place-items-center w-6 h-6 rounded-full border border-line bg-panel text-muted shadow-soft hover:text-ink"
+          aria-label="私聊"
+          data-tip="私聊"
+          data-tip-pos="bottom"
+          onClick={privateChat}
+        >
+          <Icon name="chat" size={12} />
+        </button>
+      )}
+    </div>
   )
 }

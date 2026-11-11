@@ -65,3 +65,10 @@ func (s *Store) FailingEffects(ctx context.Context, n int) ([]Effect, error) {
 	}
 	return out, rows.Err()
 }
+
+// PendingEffects counts queued effects.
+func (s *Store) PendingEffects(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM effects`).Scan(&n)
+	return n, err
+}

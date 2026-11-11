@@ -23,6 +23,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 // Roles are the roles a model can be chosen for, in the page's order.
@@ -49,7 +50,10 @@ type cached struct {
 }
 
 func New(log *eventlog.Log) *Registry {
-	return &Registry{log: log, cache: map[string]cached{}}
+	r := &Registry{log: log, cache: map[string]cached{}}
+	sysmap.RegisterInstances("provider", r.mapProviders)
+	sysmap.RegisterProbe("models", sysmap.ProbeFunc(r.mapStatus))
+	return r
 }
 
 func (r *Registry) store() *store.Store { return r.log.Store }
@@ -235,7 +239,24 @@ func (p *roleProvider) Stream(ctx context.Context, req provider.Request, onDelta
 	if req.Effort == "" {
 		req.Effort = res.Effort
 	}
+	start := time.Now()
 	resp, err := res.Provider.Stream(ctx, req, onDelta)
+	duration := time.Since(start)
+	refs := sysmap.RefsFrom(ctx)
+	summary := p.role + " · " + res.Model
+	source := ""
+	switch p.role {
+	case "supervisor", "compactor":
+		source = "supervisor"
+	case "reviewer", "approver":
+		source = "task"
+	case "inspector":
+		source = "inspector"
+	}
+	if source != "" {
+		sysmap.Call(sysmap.EdgeID(source, "models"), refs, summary, duration, err)
+	}
+	sysmap.Call("models>provider:"+res.Name, refs, summary, duration, err)
 	if resp.Model == "" {
 		resp.Model = res.Model
 	}
@@ -274,3 +295,84 @@ func contains(xs []string, x string) bool {
 }
 
 var lookupEnv = os.LookupEnv
+
+func providerStatus(name string) sysmap.Status {
+	s := sysmap.Stats("models>provider:" + name)
+	if s.Calls == 0 {
+		return sysmap.Status{State: sysmap.Idle, Summary: "最近没有调用"}
+	}
+	if s.Errors >= 3 {
+		return sysmap.Status{State: sysmap.Degraded, Summary: fmt.Sprintf("最近 %d 次里失败 %d 次：%s", s.Calls, s.Errors, s.LastError)}
+	}
+	return sysmap.Status{State: sysmap.OK, Summary: fmt.Sprintf("平均 %.1f 秒 · 最近 %d 次", s.AvgMS/1000, s.Calls)}
+}
+func (r *Registry) mapProviders(ctx context.Context) []sysmap.Instance {
+	providers, err := r.store().ModelProviders(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]sysmap.Instance, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, sysmap.Instance{Module: sysmap.Module{ID: "provider:" + p.Name, Name: p.Name, Layer: sysmap.LayerExternal, Desc: "模型供应商（" + p.Kind + "）"}, Status: providerStatus(p.Name)})
+	}
+	return out
+}
+func (r *Registry) mapStatus(ctx context.Context) sysmap.Status {
+	instances := r.mapProviders(ctx)
+	calls, errors, recent := 0, 0, 0
+	state := sysmap.Idle
+	var items []sysmap.Item
+	for _, p := range instances {
+		s := sysmap.Stats("models>" + p.Module.ID)
+		calls += s.Calls
+		errors += s.Errors
+		recent += sysmap.Sum("models>"+p.Module.ID, 60)
+		if p.Status.State == sysmap.Degraded {
+			state = sysmap.Degraded
+		}
+		items = append(items, sysmap.Item{ID: p.Module.ID, Label: p.Module.Name, Detail: p.Status.Summary, State: p.Status.State})
+	}
+	if state != sysmap.Degraded && recent > 0 {
+		state = sysmap.Busy
+	}
+	return sysmap.Status{State: state, Summary: fmt.Sprintf("最近 %d 次调用，失败 %d 次", calls, errors), Items: items}
+}
+
+// Fixed chooses one model independently of the current supervisor role.
+func (r *Registry) Fixed(providerID, model, effort string) provider.Provider {
+	return &fixedProvider{r: r, id: providerID, model: model, effort: effort}
+}
+
+type fixedProvider struct {
+	r                 *Registry
+	id, model, effort string
+	mu                sync.Mutex
+	name              string
+}
+
+func (p *fixedProvider) Name() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.name != "" {
+		return p.name
+	}
+	return p.id
+}
+func (p *fixedProvider) Stream(ctx context.Context, req provider.Request, delta func(provider.Delta)) (provider.Response, error) {
+	impl, name, err := p.r.instance(ctx, p.id)
+	if err != nil {
+		return provider.Response{}, err
+	}
+	p.mu.Lock()
+	p.name = name
+	p.mu.Unlock()
+	req.Model = p.model
+	if req.Effort == "" {
+		req.Effort = p.effort
+	}
+	resp, err := impl.Stream(ctx, req, delta)
+	if resp.Model == "" {
+		resp.Model = p.model
+	}
+	return resp, err
+}

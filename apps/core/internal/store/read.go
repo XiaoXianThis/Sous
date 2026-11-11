@@ -41,24 +41,30 @@ func (s *Store) LastSeq(ctx context.Context) (int64, error) {
 }
 
 type Thread struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Kind      string `json:"kind"`
-	ProjectID string `json:"project_id,omitempty"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
-	Archived  bool   `json:"archived"`
+	ParentThreadID string             `json:"parent_thread_id,omitempty"`
+	ParentTopicID  string             `json:"parent_topic_id,omitempty"`
+	MeetingTopic   string             `json:"meeting_topic,omitempty"`
+	Brief          string             `json:"-"`
+	Host           *event.MeetingHost `json:"host,omitempty"`
+	MeetingStatus  string             `json:"meeting_status,omitempty"`
+	ID             string             `json:"id"`
+	Title          string             `json:"title"`
+	Kind           string             `json:"kind"`
+	ProjectID      string             `json:"project_id,omitempty"`
+	CreatedAt      int64              `json:"created_at"`
+	UpdatedAt      int64              `json:"updated_at"`
+	Archived       bool               `json:"archived"`
 }
 
 // Threads lists the general threads (not project chats), the main thread
 // first, then most recently updated.
 func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
-	return s.threads(ctx, `WHERE archived = 0 AND project_id = '' ORDER BY kind = 'main' DESC, updated_at DESC`)
+	return s.threads(ctx, `WHERE archived = 0 AND project_id = '' AND kind != 'meeting' ORDER BY kind = 'main' DESC, updated_at DESC`)
 }
 
 // ProjectThreads lists a project's chats, most recently updated first.
 func (s *Store) ProjectThreads(ctx context.Context, projectID string) ([]Thread, error) {
-	return s.threads(ctx, `WHERE archived = 0 AND project_id = ? ORDER BY updated_at DESC`, projectID)
+	return s.threads(ctx, `WHERE archived = 0 AND project_id = ? AND kind != 'meeting' ORDER BY updated_at DESC`, projectID)
 }
 
 // AllThreads lists every open thread, project chats included.
@@ -66,7 +72,7 @@ func (s *Store) AllThreads(ctx context.Context) ([]Thread, error) {
 	return s.threads(ctx, `WHERE archived = 0 ORDER BY updated_at DESC`)
 }
 
-const threadCols = `id, title, kind, project_id, created_at, updated_at, archived`
+const threadCols = `id, title, kind, project_id, created_at, updated_at, archived, parent_thread_id, parent_topic_id, meeting_topic, brief, host, meeting_status`
 
 func (s *Store) threads(ctx context.Context, where string, args ...any) ([]Thread, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+threadCols+` FROM threads `+where, args...)
@@ -76,8 +82,8 @@ func (s *Store) threads(ctx context.Context, where string, args ...any) ([]Threa
 	defer rows.Close()
 	out := []Thread{}
 	for rows.Next() {
-		var t Thread
-		if err := rows.Scan(&t.ID, &t.Title, &t.Kind, &t.ProjectID, &t.CreatedAt, &t.UpdatedAt, &t.Archived); err != nil {
+		t, err := scanThread(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -85,15 +91,26 @@ func (s *Store) threads(ctx context.Context, where string, args ...any) ([]Threa
 	return out, rows.Err()
 }
 
-func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
+func scanThread(row interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
-	err := s.db.QueryRowContext(ctx,
-		`SELECT `+threadCols+` FROM threads WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Kind, &t.ProjectID, &t.CreatedAt, &t.UpdatedAt, &t.Archived)
+	var host string
+	err := row.Scan(&t.ID, &t.Title, &t.Kind, &t.ProjectID, &t.CreatedAt, &t.UpdatedAt, &t.Archived, &t.ParentThreadID, &t.ParentTopicID, &t.MeetingTopic, &t.Brief, &host, &t.MeetingStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
-	return t, err
+	if err != nil {
+		return t, err
+	}
+	if host != "" {
+		t.Host = &event.MeetingHost{}
+		if err := json.Unmarshal([]byte(host), t.Host); err != nil {
+			return t, err
+		}
+	}
+	return t, nil
+}
+func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
+	return scanThread(s.db.QueryRowContext(ctx, `SELECT `+threadCols+` FROM threads WHERE id = ?`, id))
 }
 
 // MainThreadID returns the main thread's id, or ErrNotFound.

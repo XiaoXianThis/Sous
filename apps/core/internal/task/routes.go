@@ -24,6 +24,7 @@ func (e *Engine) Routes(mux *http.ServeMux, protect func(string, http.HandlerFun
 	protect("POST /api/v1/tasks/{id}/verdict", e.verdictTask)
 	protect("POST /api/v1/tasks/{id}/review", e.reviewTask)
 	protect("GET /api/v1/tasks/{id}/talk", e.taskTalk)
+	protect("POST /api/v1/threads/{id}/dm", e.dmThread)
 
 	protect("GET /api/v1/projects", e.listProjects)
 	protect("POST /api/v1/projects", e.putProject)
@@ -359,6 +360,34 @@ func taskError(w http.ResponseWriter, err error) {
 	default:
 		internal(w, err)
 	}
+}
+
+// dmThread delivers a direct message to one agent in a project chat.
+func (e *Engine) dmThread(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Content string   `json:"content"`
+		TopicID string   `json:"topic_id"`
+		To      DMTarget `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	id, err := e.DM(r.Context(), DMInput{ThreadID: r.PathValue("id"), TopicID: b.TopicID, Content: b.Content, To: b.To})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalid):
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, "conflict", err.Error())
+		case errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "不存在")
+		default:
+			internal(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"message_id": id})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

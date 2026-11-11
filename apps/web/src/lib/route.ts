@@ -1,7 +1,7 @@
 // Workbench routes in the URL hash. Push notification links (#approvals,
 // #task=<id>, #thread=<id>) are older forms of the same routes.
 
-export type View = 'overview' | 'projects' | 'project' | 'task' | 'inbox'
+export type View = 'overview' | 'projects' | 'project' | 'task' | 'inbox' | 'system'
 
 export interface Route {
   view: View
@@ -15,6 +15,7 @@ export function parseRoute(hash: string): Route & { thread?: string; topic?: str
   const h = hash.replace(/^#\/?/, '')
   if (h === '' ) return home
   if (h === 'inbox' || h === 'approvals') return { view: 'inbox', id: '' }
+  if (h === 'system' || h.startsWith('system?')) return { view: 'system', id: new URLSearchParams(h.split('?')[1] ?? '').get('trace') ?? '' }
   if (h === 'projects') return { view: 'projects', id: '' }
   const [k, ...rest] = h.split('=')
   const v = decodeURIComponent(rest.join('='))
@@ -29,6 +30,8 @@ export function routeHash(r: Route): string {
   switch (r.view) {
     case 'overview':
       return '#/'
+    case 'system':
+      return r.id ? `#/system?trace=${encodeURIComponent(r.id)}` : '#/system'
     case 'projects':
     case 'inbox':
       return `#/${r.view}`

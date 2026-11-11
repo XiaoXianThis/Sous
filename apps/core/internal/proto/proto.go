@@ -203,6 +203,8 @@ const (
 	PurposeReview  = "review"  // a reviewing agent checks a task's work: read only plus tests
 	PurposeGit     = "git"     // one git operation, fixed commands, no agent
 	PurposeConsult = "consult" // a project's read-only consultant, idle between questions
+	// Decision 0028: the user talks to a task's agent directly.
+	PurposeChat = "chat"
 )
 
 // RunAsk is a question a run's agent asks the supervisor (decision 0025,
@@ -346,6 +348,8 @@ const (
 	OutcomeNoAction          = "no_action"
 	OutcomeWorkProduced      = "work_produced"
 	OutcomeNeedsConfirmation = "needs_confirmation"
+	// OutcomeChanged is a direct chat that touched the work tree (decision 0028).
+	OutcomeChanged = "changed"
 
 	ErrAgentQuota       = "agent_quota"
 	ErrAgentRateLimit   = "agent_rate_limit"

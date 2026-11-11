@@ -13,6 +13,10 @@ func project(w *Writer, ev event.Event) error {
 		return err
 	}
 	switch ev.Type {
+	case event.MeetingClosed, event.MeetingReopened, event.MeetingHostSet, event.MinutesDrafted, event.MinutesPosted:
+		return projectMeeting(w, ev)
+	case event.NotePut, event.NoteDeleted, event.NoteSent:
+		return projectNote(w, ev)
 	case event.ApprovalChecked:
 		return projectApprovalCheck(w, ev)
 	case event.ThreadCreated:
@@ -20,9 +24,21 @@ func project(w *Writer, ev event.Event) error {
 		if err := ev.Decode(&p); err != nil {
 			return err
 		}
+		host := ""
+		if p.Host != nil {
+			raw, err := json.Marshal(p.Host)
+			if err != nil {
+				return err
+			}
+			host = string(raw)
+		}
+		status := ""
+		if p.Kind == event.KindMeeting {
+			status = event.MeetingOpen
+		}
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO threads(id, title, kind, project_id, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
-			ev.ThreadID, p.Title, p.Kind, p.ProjectID, ev.TS, ev.TS)
+			`INSERT INTO threads(id, title, kind, project_id, created_at, updated_at, parent_thread_id, parent_topic_id, meeting_topic, brief, host, meeting_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ev.ThreadID, p.Title, p.Kind, p.ProjectID, ev.TS, ev.TS, p.ParentThreadID, p.ParentTopicID, p.MeetingTopic, p.Brief, host, status)
 		return err
 
 	case event.MessageUser, event.MessageAssistant:

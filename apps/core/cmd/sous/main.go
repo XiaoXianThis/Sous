@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -53,6 +54,7 @@ func usage() {
   sous status
   sous agents
   sous chat [--thread ID]
+  sous note <文字>    记一条笔记到记事本
   sous update [--check] [--version vX.Y.Z]
   sous service install|uninstall|start|stop|restart|status
   sous unpair
@@ -129,6 +131,32 @@ func run(args []string) error {
 		return daemon(root, logs)
 	case "chat":
 		return chat(root, *thread)
+	case "note":
+		text := strings.Join(fs.Args(), " ")
+		if fs.NArg() == 0 {
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			text = string(raw)
+		}
+		c, err := ipc.Dial(ipc.Path(root))
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		var result struct {
+			NoteID string `json:"note_id"`
+		}
+		if err := c.Call(context.Background(), "note.add", map[string]string{"text": text}, &result); err != nil {
+			return err
+		}
+		id := result.NoteID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		fmt.Printf("已记下（%s）\n", id)
+		return nil
 	case "update":
 		return updateCommand(root, *check, *ver)
 	case "status":

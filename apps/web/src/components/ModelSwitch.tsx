@@ -17,7 +17,13 @@ const effortText: Record<string, string> = { low: '低', medium: '中', high: '�
  * panel with its thinking effort. Placement, collisions and scroll locking
  * come from Radix. The change is kept on the Hub and applies to the next reply.
  */
-export default function ModelSwitch({ placement = 'composer' }: { placement?: 'composer' | 'header' }) {
+export default function ModelSwitch({ placement = 'composer', value, onChange }: {
+  placement?: 'composer' | 'header'
+  /** Controlled use (a meeting's host): shown instead of the supervisor's role. */
+  value?: { provider_id?: string; model?: string; effort?: string } | null
+  /** Saves a controlled choice; without it the supervisor role is saved. */
+  onChange?: (v: { provider_id: string; model: string; effort: string }) => Promise<void>
+}) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<ModelsView | null>(null)
   const [error, setError] = useState('')
@@ -26,12 +32,20 @@ export default function ModelSwitch({ placement = 'composer' }: { placement?: 'c
   useEffect(() => { void load() }, [])
   useEffect(() => { if (open) void load() }, [open])
 
-  const sup = view?.roles.supervisor
+  const sup = value ?? view?.roles.supervisor
   const name = sup?.model || '未选模型'
   const efforts = ['', ...(view?.efforts ?? [])]
 
   async function save(provider_id: string, model: string, effort: string) {
     setError('')
+    if (onChange) {
+      try {
+        await onChange({ provider_id, model, effort })
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      return
+    }
     try {
       setView(await api.putRoles({ supervisor: { provider_id, model, effort } }))
     } catch (e) {
@@ -45,7 +59,7 @@ export default function ModelSwitch({ placement = 'composer' }: { placement?: 'c
         <button
           type="button"
           className={`${placement === 'header' ? 'glass-pill glass max-w-[44vw] min-w-0' : 'flex items-center gap-1 h-8 px-2 rounded-[9px] border-0 bg-transparent text-[12px] hover:bg-hover max-w-[200px] max-[760px]:max-w-[150px] min-w-0'} ${sup?.model ? 'text-muted' : 'text-warm'}`}
-          aria-label={`主管的模型：${name}`}
+          aria-label={`${value !== undefined ? '会议的模型' : '主管的模型'}：${name}`}
           data-tip={placement === 'header' ? undefined : '主管用的模型'}
         >
           <Icon name="cpu" size={14} />

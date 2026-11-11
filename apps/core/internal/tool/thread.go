@@ -35,23 +35,32 @@ func (ThreadSearch) Spec() provider.ToolSpec {
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"关键词，几个词用空格隔开"},
 			"limit":{"type":"integer","description":"最多返回几条，默认 10"},
-			"scope":{"type":"string","enum":["thread","all"]}
+			"scope":{"type":"string","enum":["thread","all"]},
+            "thread":{"type":"string","description":"会议的 id（会议纪要里写着）；不填就是当前对话"}
 		},"required":["query"]}`),
 	}
 }
 
 func (t ThreadSearch) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
-		Query string
-		Limit int
-		Scope string
+		Query  string
+		Limit  int
+		Scope  string
+		Thread string
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
 	}
 	turn := TurnFrom(ctx)
 	thread := turn.ThreadID
-	if a.Scope == "all" {
+	if a.Thread != "" {
+		var err error
+		thread, err = meetingThread(ctx, t.Log.Store, turn.ThreadID, a.Thread)
+		if err != nil {
+			return "", err
+		}
+	}
+	if a.Scope == "all" && a.Thread == "" {
 		if turn.ThreadID != turn.MainThreadID {
 			return "", errors.New("scope=all 只能在主线里用")
 		}
@@ -88,13 +97,15 @@ func (ThreadRead) Spec() provider.ToolSpec {
 		Schema: json.RawMessage(`{"type":"object","properties":{
 			"seq":{"type":"integer","description":"消息编号"},
 			"before":{"type":"integer","description":"再读它前面几条，默认 3"},
-			"after":{"type":"integer","description":"再读它后面几条，默认 3"}
+			"after":{"type":"integer","description":"再读它后面几条，默认 3"},
+            "thread":{"type":"string","description":"会议的 id（会议纪要里写着）；不填就是当前对话"}
 		},"required":["seq"]}`),
 	}
 }
 
 func (t ThreadRead) Call(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
+		Thread string
 		Seq    int64
 		Before *int
 		After  *int
@@ -117,8 +128,12 @@ func (t ThreadRead) Call(ctx context.Context, raw json.RawMessage) (string, erro
 		}
 	}
 	turn := TurnFrom(ctx)
-	msgs, err := t.Log.Store.MessagesAround(ctx, turn.ThreadID, a.Seq, before, after)
-	if errors.Is(err, store.ErrNotFound) && turn.ThreadID == turn.MainThreadID {
+	thread, err := meetingThread(ctx, t.Log.Store, turn.ThreadID, a.Thread)
+	if err != nil {
+		return "", err
+	}
+	msgs, err := t.Log.Store.MessagesAround(ctx, thread, a.Seq, before, after)
+	if errors.Is(err, store.ErrNotFound) && a.Thread == "" && turn.ThreadID == turn.MainThreadID {
 		// From thread_search with scope=all: read it in its own thread.
 		if m, err2 := t.Log.Store.MessageBySeq(ctx, a.Seq); err2 == nil {
 			msgs, err = t.Log.Store.MessagesAround(ctx, m.ThreadID, a.Seq, before, after)
@@ -189,4 +204,18 @@ func snippet(s, query string) string {
 		out += "…"
 	}
 	return out
+}
+
+func meetingThread(ctx context.Context, st *store.Store, current, requested string) (string, error) {
+	if requested == "" || requested == current {
+		return current, nil
+	}
+	ok, err := st.LinkedMeeting(ctx, current, requested)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", errors.New("只能读这个对话里纪要提到的会议")
+	}
+	return requested, nil
 }

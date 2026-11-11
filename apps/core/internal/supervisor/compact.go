@@ -140,6 +140,24 @@ func (s *Supervisor) maybeCompact(threadID string) {
 // and starts a new segment. Before summarizing, a silent turn saves what is
 // worth keeping as memories.
 func (s *Supervisor) compact(ctx context.Context, threadID, reason string) (err error) {
+	s.mu.Lock()
+	a := s.active[threadID]
+	created := a == nil
+	if created {
+		a = &activity{Since: time.Now()}
+		s.active[threadID] = a
+	}
+	a.Compacting = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if created {
+			delete(s.active, threadID)
+		} else if current := s.active[threadID]; current == a {
+			current.Compacting = false
+		}
+		s.mu.Unlock()
+	}()
 	defer func() { s.noteCompaction(threadID, err) }()
 	if s.opt.Compactor == nil {
 		return errors.New("no model for compaction")
@@ -165,8 +183,17 @@ func (s *Supervisor) compact(ctx context.Context, threadID, reason string) (err 
 	}
 	slog.Info("supervisor: compacting", "thread", threadID, "reason", reason, "messages", len(fold), "up_to", cut)
 	summary := seg.Summary
+	thread, err := st.Thread(ctx, threadID)
+	if err != nil {
+		return err
+	}
 	for _, chunk := range s.chunks(ctx, shown) {
-		if err := s.flush(ctx, threadID, chunk); err != nil {
+		if err := func() error {
+			if isMeeting(thread) {
+				return nil
+			}
+			return s.flush(ctx, threadID, chunk)
+		}(); err != nil {
 			slog.Warn("supervisor: memory flush before compaction", "thread", threadID, "err", err)
 		}
 		next, err := s.summarize(ctx, threadID, summary, chunk)

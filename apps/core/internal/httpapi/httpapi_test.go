@@ -24,6 +24,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/supervisor"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 )
 
@@ -58,7 +59,10 @@ func newEnv(t *testing.T, dev bool) *env {
 	sup.Start(ctx)
 	main, _ := log.EnsureMainThread(ctx)
 
-	srv := httptest.NewServer(httpapi.New(cfg, log, a))
+	extra := func(mux *http.ServeMux, protect func(string, http.HandlerFunc)) {
+		sysmap.Routes(mux, protect, nil, sysmap.TraceDeps{})
+	}
+	srv := httptest.NewServer(httpapi.New(cfg, log, a, extra))
 	jar, _ := cookiejar.New(nil)
 	t.Cleanup(func() { srv.Close(); cancel(); sup.Wait(); st.Close() })
 	return &env{srv: srv, client: &http.Client{Jar: jar}, log: log, auth: a, main: main}
@@ -106,6 +110,9 @@ func (e *env) login(t *testing.T) {
 
 func TestUnauthenticatedRequestsAreRejected(t *testing.T) {
 	e := newEnv(t, true)
+	if code := e.do(t, "GET", "/api/v1/system/graph", nil, nil); code != 401 {
+		t.Fatalf("system graph without login: %d", code)
+	}
 	if code := e.do(t, "GET", "/api/v1/threads", nil, nil); code != 401 {
 		t.Fatalf("threads without login: %d", code)
 	}

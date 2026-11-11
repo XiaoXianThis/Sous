@@ -491,6 +491,24 @@ CREATE INDEX messages_topic ON messages(thread_id, topic_id, event_seq);
 ALTER TABLE tasks ADD COLUMN topic_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX events_task ON events(task_id, seq);
 `,
+	`CREATE TABLE notes (id TEXT PRIMARY KEY, text TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', attachments TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX notes_status ON notes(status, updated_at);
+CREATE TABLE note_sends (note_id TEXT NOT NULL, thread_id TEXT NOT NULL, topic_id TEXT NOT NULL, message_id TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX note_sends_note ON note_sends(note_id);
+`,
+	`ALTER TABLE threads ADD COLUMN parent_thread_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN parent_topic_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN meeting_topic TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN brief TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN host TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN meeting_status TEXT NOT NULL DEFAULT '';
+CREATE INDEX threads_parent ON threads(parent_thread_id);
+CREATE TABLE minutes (meeting_id TEXT NOT NULL, version INTEGER NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, message_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, posted_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(meeting_id,version));
+`,
+	// Decision 0028: a direct chat records the task status it interrupted,
+	// so a chat without changes puts the task back where it was.
+	`ALTER TABLE runs ADD COLUMN chat_from TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

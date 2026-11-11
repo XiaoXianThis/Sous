@@ -80,6 +80,7 @@ func (d *Daemon) ipcCall(ctx context.Context, method string, params json.RawMess
 		return d.sousCall(ctx, method, params)
 	}
 	var p struct {
+		Text     string `json:"text"`
 		ThreadID string `json:"thread_id"`
 		Title    string `json:"title"`
 		Content  string `json:"content"`
@@ -117,6 +118,14 @@ func (d *Daemon) ipcCall(ctx context.Context, method string, params json.RawMess
 		}
 		var out json.RawMessage
 		return out, d.hub(ctx, "GET", "/threads/"+url.PathEscape(p.ThreadID)+"/messages?"+q.Encode(), nil, &out)
+	case "note.add":
+		var out struct {
+			NoteID string `json:"note_id"`
+		}
+		if err := d.hub(ctx, "POST", "/notes", map[string]string{"text": p.Text}, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
 	case "chat.send":
 		thread := p.ThreadID
 		if thread == "" {

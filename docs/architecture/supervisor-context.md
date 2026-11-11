@@ -53,6 +53,27 @@ flowchart LR
 - `topic_attach`、`topic_update`、`topic_close` 由回合自己处理（和 `stay_silent` 一样），排在工具列表末尾、顺序固定。`topic_attach` 只接受本轮提供过的消息。
 - 回合开始和插入时发临时事件 `message.seen`，界面据此显示“已看到”和正在处理的话题。
 
+## 会议
+
+会议是 `kind: meeting` 的独立线程（决策 [0029](../decisions/0029-meetings.md)，代码在 `supervisor/meeting.go`、`prompts/meeting.go`），有自己的段和摘要，聊多长都不挤占主线或项目对话。
+
+- 开会时从父对话和父话题带一份**简报**（`threads.brief`）：来自哪里、话题的当前结论、相关任务、父线程摘要里和这个话题有关的行、笔记正文。简报定下来就不再变化，放进系统提示（`prompts.Meeting`），能命中缓存，也不显示成一条用户消息。
+- 一个会议只有一个话题（`meeting_topic`）：会议里不带 `topic_id` 的消息都归到它，话题机制不会把会议拆散。
+- 工具只开放 `project_read`、`consult`、`web_search`、`web_fetch`、`memory_search`、`thread_search`、`thread_read`、`current_time`；调用别的工具直接回错误（会议只讨论，不动手），提示模型写成行动项。没有 `meeting_propose`（会议里不需要再提议开会）。
+- 主持人的模型：线程的 `host` 设了模型时用 `models.Registry.Fixed`（只用一个供应商的一个模型，用量记在主管名下），否则用主管的角色模型。
+- 整理会议时跳过写记忆的静默回合（M10）：会议中间的想法不进长期记忆，纪要发回父对话后才按父对话的流程处理。
+- 散会时 `compactor` 用 `prompts.Minutes` 写五个固定栏目，每条带会议原文的 `[#seq]`；“结论和决定”和“行动项”的每条必须有出处，程序校验（栏目齐全、顺序对、编号存在），不合格把问题附上重写一次，仍不合格就接受并在末尾注明有几条缺出处。输入太长时先手动整理一次会议。纪要先存成草稿（`minutes.drafted`），用户确认（或设置里打开“纪要直接发出”）后 `minutes.posted`：父话题里多一条 `kind: minutes` 的消息，同时发一个 `trigger.fired`（kind `meeting`）叫醒主管。
+- 续会后再散会生成新版本，作为新消息发回父话题，界面把旧版本折叠。
+- `thread_read` / `thread_search` 的 `thread` 参数只接受当前对话，或者当前对话里有纪要消息指向的会议（`store.LinkedMeeting`）。
+
+## 私聊
+
+用户可以直接和项目里的一个 agent 说话，绕过主管（决策 [0028](../decisions/0028-direct-agent-chat.md)，代码在 `task/dm.go`）。这对上下文的影响：
+
+- `kind: dm` 的用户消息和 agent 回复不算主管的待回复（`pendingTopics` 跳过），不重新打开话题（都不开话题），也不进主管的历史（`withoutDMs`）——只有纪要、汇报这类正常的消息才会进去。
+- 主管的本轮环境（Tail）末尾加一节“用户的私聊”，按 agent 和任务汇总当前段里的私聊：多少条、最近一次的时间、最近一条的编号，最多 8 行。主管需要原文时用 `thread_read` 按编号读。
+- 私聊里有改动时，任务照常结束并发一份汇报，汇报会叫醒主管；没有改动就回到被打断前的状态，不打扰主管。
+
 ## 分段和整理
 
 ```mermaid

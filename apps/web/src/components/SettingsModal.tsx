@@ -13,6 +13,7 @@ import Settings from './Settings'
 import { SheetPageContext } from './Sheet'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import Usage from './Usage'
+import SystemList from './SystemList'
 import Versions from './Versions'
 
 // group is for the phone's grouped list, after iOS Settings.
@@ -24,6 +25,7 @@ const tabs = [
   { key: 'schedules', text: '定时任务', icon: 'calendar', group: 1 },
   { key: 'memories', text: '记忆', icon: 'brain', group: 1 },
   { key: 'usage', text: '用量', icon: 'chart', group: 1 },
+  { key: 'system', text: '系统状态', icon: 'system', group: 1 },
   { key: 'settings', text: '通知与默认', icon: 'bell', group: 2 },
   { key: 'appearance', text: '外观', icon: 'moon', group: 2 },
   { key: 'account', text: '账号', icon: 'key', group: 3 },
@@ -112,6 +114,8 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
       <Memories onClose={close} />
     ) : key === 'usage' ? (
       <Usage onClose={close} />
+    ) : key === 'system' ? (
+      <SystemList />
     ) : key === 'settings' ? (
       <Settings onClose={close} />
     ) : key === 'appearance' ? (

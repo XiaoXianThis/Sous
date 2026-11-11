@@ -14,3 +14,9 @@ describe('routes', () => {
     expect(parseRoute('#nonsense')).toEqual({ view: 'overview', id: '' })
   })
 })
+
+it('routes system traces', () => {
+  expect(parseRoute('#/system')).toEqual({view:'system',id:''})
+  expect(parseRoute('#/system?trace=task%3Aabc')).toEqual({view:'system',id:'task:abc'})
+  expect(routeHash({view:'system',id:'run:abc'})).toBe('#/system?trace=run%3Aabc')
+})

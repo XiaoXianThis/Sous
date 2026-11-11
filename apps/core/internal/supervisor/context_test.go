@@ -158,7 +158,7 @@ func TestCompactionFoldsOldMessages(t *testing.T) {
 	// The window leaves room for the fixed part (system prompt and tools,
 	// about 5k tokens with the topic tools) next to the kept messages.
 	log, main := setupWith(t, Options{Provider: sup, Compactor: comp, CompactorModel: "c",
-		ContextWindow: func(context.Context) int { return 14000 }})
+		ContextWindow: func(context.Context) int { return 16000 }})
 	for i := 0; i < 18; i++ {
 		converse(t, log, main, long(string(rune('A'+i)), 300))
 	}
@@ -183,7 +183,7 @@ func TestCompactionFoldsOldMessages(t *testing.T) {
 			t.Fatal("a folded message is still sent")
 		}
 	}
-	if n := estimateRequest(last); n > int(SoftRatio*14000) {
+	if n := estimateRequest(last); n > int(SoftRatio*16000) {
 		t.Fatalf("after compaction the request is still %d tokens", n)
 	}
 }

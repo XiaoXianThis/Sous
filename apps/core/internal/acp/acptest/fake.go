@@ -39,6 +39,8 @@
 //
 // FAKE_ACP_LOAD=1 advertises loadSession and accepts session/load; a prompt
 // in a loaded session writes hello.txt and ends the turn at once.
+// FAKE_ACP_LOAD_FAIL=1 keeps advertising it but fails every session/load,
+// for a direct chat that cannot reach its earlier session (decision 0028).
 // FAKE_ACP_PROMPTS=<file> appends every prompt the agent receives to file.
 // FAKE_ACP_OPTIONS=1 reports configOptions (model: fast / smart in two
 // groups, effort: low / medium / high) and accepts
@@ -454,7 +456,7 @@ func runFake(mode string) {
 			}
 			result(m.ID, map[string]any{"configOptions": opts})
 		case "session/load":
-			if !canLoad {
+			if !canLoad || os.Getenv("FAKE_ACP_LOAD_FAIL") == "1" {
 				send(msg{ID: m.ID, Error: &acp.Error{Code: acp.CodeMethodNotFound, Message: "session/load not supported"}})
 				continue
 			}

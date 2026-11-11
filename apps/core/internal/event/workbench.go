@@ -56,6 +56,7 @@ type MessageContext struct {
 	TaskID    string `json:"task_id,omitempty"`
 	// Mentions are the projects the user referenced with @ in the text.
 	Mentions []Mention `json:"mentions,omitempty"`
+	NoteIDs  []string  `json:"note_ids,omitempty"`
 }
 
 // Mention is a project referenced with @; Name is what the text shows
@@ -67,7 +68,7 @@ type Mention struct {
 
 // Empty reports whether the context carries nothing.
 func (c *MessageContext) Empty() bool {
-	return c == nil || (c.ProjectID == "" && c.TaskID == "" && len(c.Mentions) == 0)
+	return c == nil || (c.ProjectID == "" && c.TaskID == "" && len(c.Mentions) == 0 && len(c.NoteIDs) == 0)
 }
 
 // ProjectRepoOp records a sync or WIP save of a project's checkout that

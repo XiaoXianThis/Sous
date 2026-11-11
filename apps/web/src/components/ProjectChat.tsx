@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import { ago } from '../lib/time'
-import { loadProjectThreads, newProjectThread, pickProjectThread, sendToProject, useChat, useUi } from '../lib/app'
+import { api } from '../lib/api'
+import { loadProjectThreads, newProjectThread, pickProjectThread, sendToProject, ui, useChat, useUi, useWb } from '../lib/app'
+import { dmTargets, dmTo } from '../lib/dm'
 import type { Project, Task } from '../lib/types'
 import ChatView from './ChatView'
 import Icon from './Icon'
+import MeetingList from './MeetingList'
+import MeetingView from './MeetingView'
 import { BackButton } from './PhoneHeader'
 import { usePhone } from '../lib/phone'
 
@@ -15,6 +19,7 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
   const chatState = useChat()
   const phone = usePhone()
   const uiState = useUi()
+  const wbState = useWb()
   const [dropTask, setDropTask] = useState(false)
   const threads = chatState.threads.filter((t) => t.project_id === project.id)
   const threadId = uiState.projectThread[project.id] ?? ''
@@ -27,6 +32,17 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
 
   const title = `${project.name} 的对话`
   const withTask = task && !dropTask
+  // A meeting opened from one of this project's topics takes over the panel.
+  if (uiState.meeting) return <MeetingView />
+  // Who the user may talk to directly: running runs, idle tasks, the consultant.
+  const runs = [...(wbState.data?.runs ?? []), ...Object.values(chatState.runs).map((r) => r.run)]
+  const targets = dmTargets(project, wbState.data?.tasks ?? [], runs)
+
+  async function sendDm(target: (typeof targets)[number], text: string) {
+    let id = threadId
+    if (!id) id = (await newProjectThread(project.id, title)).id
+    await api.dm(id, text, dmTo(target), uiState.openTopic || undefined)
+  }
 
   return (
     <ChatView
@@ -43,6 +59,10 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
       onSendIn={(topic, text) => sendToProject(project.id, title, text, withTask ? { task_id: task.id } : undefined, [], [], topic)}
       context={withTask ? { icon: 'target', text: task.title } : { icon: 'folder', text: project.name }}
       onDropContext={withTask ? () => setDropTask(true) : undefined}
+      targets={targets}
+      dmTarget={uiState.dmTarget[project.id] ?? ''}
+      onDmTarget={(key) => { ui.state.dmTarget[project.id] = key; ui.emit() }}
+      onDm={(target, text) => sendDm(target, text)}
       placeholder={`问问 ${project.name} 的事，或者让 sous 派个任务…`}
       empty={
         <>
@@ -53,9 +73,12 @@ export default function ProjectChat({ project, task, onClose }: { project: Proje
       // On a phone the chat covers the project page, so it leads with a back button.
       leading={phone && onClose ? <BackButton label="返回项目" onClick={onClose} /> : undefined}
       actions={
-        onClose && !phone && (
-          <button className="icon-btn" data-back aria-label="收起项目对话" data-tip="收起对话" data-tip-pos="bottom" onClick={onClose}><Icon name="panel" size={18} /></button>
-        )
+        <>
+          {threadId && <MeetingList parentThreadId={threadId} />}
+          {onClose && !phone && (
+            <button className="icon-btn" data-back aria-label="收起项目对话" data-tip="收起对话" data-tip-pos="bottom" onClick={onClose}><Icon name="panel" size={18} /></button>
+          )}
+        </>
       }
     />
   )

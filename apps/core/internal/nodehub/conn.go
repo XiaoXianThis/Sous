@@ -18,6 +18,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/redact"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 const (
@@ -178,6 +179,7 @@ func (c *nodeConn) writer() {
 }
 
 func (c *nodeConn) send(f proto.Frame) {
+	c.mapFrame("nodehub>machine:"+c.nodeID, f)
 	select {
 	case c.out <- f:
 	case <-c.ctx.Done():
@@ -273,6 +275,7 @@ func (c *nodeConn) store(ctx context.Context, f proto.Frame, ev event.Event) err
 }
 
 func (c *nodeConn) handle(ctx context.Context, f proto.Frame) error {
+	c.mapFrame("machine:"+c.nodeID+">nodehub", f)
 	switch f.T {
 	case proto.TInventory:
 		var inv proto.Inventory
@@ -574,4 +577,31 @@ func indent(s string) string {
 		lines[i] = "    " + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (c *nodeConn) mapFrame(edge string, f proto.Frame) {
+	var data struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(f.Body, &data)
+	refs := sysmap.Refs{RunID: data.RunID}
+	if data.RunID != "" {
+		// The run's task and thread, so the system page puts the frame with
+		// the rest of its task: from the cache, else the store (and cached).
+		c.mu.Lock()
+		ref, ok := c.refs[data.RunID]
+		c.mu.Unlock()
+		if !ok {
+			if r, err := c.hub.log.Store.Run(context.Background(), data.RunID); err == nil {
+				ref, ok = runRef{r.ThreadID, r.TaskID}, true
+				c.mu.Lock()
+				c.refs[data.RunID] = ref
+				c.mu.Unlock()
+			}
+		}
+		if ok {
+			refs.ThreadID, refs.TaskID = ref.thread, ref.task
+		}
+	}
+	sysmap.Count(edge, refs, f.T)
 }

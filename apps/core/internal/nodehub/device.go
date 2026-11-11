@@ -2,6 +2,11 @@ package nodehub
 
 import (
 	"context"
+	"encoding/json"
+	"unicode/utf8"
+
+	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"net/http"
 	"strings"
 )
@@ -37,6 +42,32 @@ func DeviceOf(ctx context.Context) string {
 
 // DeviceRoutes registers the approval endpoints for paired machines.
 func (h *Hub) DeviceRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/device/notes", h.DeviceAuth(h.deviceNote))
 	mux.HandleFunc("GET /api/v1/device/approvals", h.DeviceAuth(h.listApprovals))
 	mux.HandleFunc("POST /api/v1/device/approvals/{id}/decide", h.DeviceAuth(h.decide))
+}
+
+func (h *Hub) deviceNote(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeError(w, 400, "bad_json", err.Error())
+		return
+	}
+	b.Text = strings.TrimSpace(b.Text)
+	if b.Text == "" {
+		writeError(w, 400, "empty", "笔记不能为空")
+		return
+	}
+	if utf8.RuneCountInString(b.Text) > 20000 {
+		writeError(w, 400, "too_long", "笔记太长")
+		return
+	}
+	id := ids.New()
+	if _, err := h.log.Append(r.Context(), event.New(event.NotePut, event.ActorUser, "", event.NotePayload{NoteID: id, Text: &b.Text})); err != nil {
+		writeError(w, 500, "internal", err.Error())
+		return
+	}
+	writeJSON(w, 201, map[string]string{"note_id": id})
 }

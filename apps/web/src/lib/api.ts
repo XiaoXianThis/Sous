@@ -1,7 +1,8 @@
 // REST client for docs/api/core-hub-http.md.
 import type {
-  AgentInfo, Attachment, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
+  SysGraph, SysHistory, SysTrace, AgentInfo, Attachment, Note, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
   Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, McpView, Settings, ThreadContext, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext, Topic, Talk,
+  MeetingDetail, MeetingHost, MinutesRow,
 } from './types'
 
 export interface McpInput {
@@ -88,6 +89,10 @@ export const api = {
       'GET',
       `/api/v1/threads/${threadId}/messages?limit=50${before ? `&before=${before}` : ''}`,
     ),
+  notes: (params: { status?: string; project_id?: string; q?: string } = {}) => request<{ notes: Note[] }>('GET', `/api/v1/notes?${new URLSearchParams(params)}`),
+  createNote: (text: string, projectId = '', attachments: string[] = []) => request<Note>('POST', '/api/v1/notes', { text, project_id: projectId, attachments }),
+  updateNote: (id: string, patch: Partial<Pick<Note, 'text' | 'project_id' | 'status'>>) => request<Note>('PATCH', `/api/v1/notes/${id}`, patch),
+  deleteNote: (id: string) => request<void>('DELETE', `/api/v1/notes/${id}`),
   memories: (q = '', kind = '') =>
     request<{ memories: Memory[]; kinds: MemoryKind[] }>(
       'GET',
@@ -202,6 +207,19 @@ export const api = {
     }),
   topics: (threadId: string) =>
     request<{ topics: Topic[]; earlier: { count: number; last?: Message } }>('GET', `/api/v1/threads/${threadId}/topics`),
+  /** Meetings: an independent thread that ends with minutes back in its parent. */
+  createMeeting: (input: { parent_thread_id: string; parent_topic_id?: string; question: string; note_ids?: string[]; project_id?: string; host?: MeetingHost }) =>
+    request<{ meeting: Thread }>('POST', '/api/v1/meetings', input),
+  meetings: (parentThreadId = '') =>
+    request<{ meetings: Thread[] }>('GET', `/api/v1/meetings${parentThreadId ? `?parent_thread_id=${encodeURIComponent(parentThreadId)}` : ''}`),
+  meeting: (id: string) => request<MeetingDetail>('GET', `/api/v1/meetings/${id}`),
+  closeMeeting: (id: string) => request<{ queued: boolean }>('POST', `/api/v1/meetings/${id}/close`, {}),
+  reopenMeeting: (id: string) => request<{ ok: boolean }>('POST', `/api/v1/meetings/${id}/reopen`, {}),
+  postMinutes: (id: string, content = '') => request<{ message_id: string }>('POST', `/api/v1/meetings/${id}/minutes`, content ? { content } : {}),
+  setMeetingHost: (id: string, host: MeetingHost | null) => request<Thread>('PATCH', `/api/v1/meetings/${id}`, { host }),
+  /** Talks to one agent directly inside a project chat (decision 0028). */
+  dm: (threadId: string, content: string, to: { run_id?: string; task_id?: string; consult?: boolean }, topicId = '') =>
+    request<{ message_id: string }>('POST', `/api/v1/threads/${threadId}/dm`, { content, to, ...(topicId && { topic_id: topicId }) }),
   topic: (id: string) => request<Topic>('GET', `/api/v1/topics/${encodeURIComponent(id)}`),
   /** A topic's messages; '' is the thread's messages from before topics. */
   topicMessages: (threadId: string, topicId: string, before = 0) =>
@@ -216,6 +234,10 @@ export const api = {
   taskTalk: (id: string) => request<{ talk: Talk[] }>('GET', `/api/v1/tasks/${encodeURIComponent(id)}/talk`),
   /** Stores a file for a message to refer to; the Hub decides its type from the bytes. */
   upload: (file: Blob, name: string) => upload(file, name),
+
+  systemGraph: () => request<SysGraph>('GET', '/api/v1/system/graph'),
+  systemHistory: (since?: number) => request<SysHistory>('GET', `/api/v1/system/history${since === undefined ? '' : `?since=${since}`}`),
+  systemTrace: (kind: 'task' | 'run' | 'thread', id: string) => request<SysTrace>('GET', `/api/v1/system/trace?${kind}_id=${encodeURIComponent(id)}`),
 
   // M5 workbench
   overview: () => request<Overview>('GET', '/api/v1/overview'),

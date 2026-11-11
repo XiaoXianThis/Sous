@@ -35,11 +35,16 @@ const TopicTitleRunes = 30
 // report, a notice, an inspector's note). The supervisor's own replies do
 // not.
 func startsTopic(role, kind string) bool {
+	// A direct message to an agent is not addressed to the supervisor and
+	// stays where the user is looking; it starts no topic (decision 0028).
+	if kind == event.KindDM {
+		return false
+	}
 	if role == "user" {
 		return true
 	}
 	switch kind {
-	case event.KindReport, event.KindNotice, event.KindInspector:
+	case event.KindReport, event.KindNotice, event.KindInspector, event.KindMinutes:
 		return true
 	}
 	return false
@@ -76,6 +81,15 @@ func TopicTitle(title, content string) string {
 // reopening it as the message asks.
 func topicOfMessage(w *Writer, ev event.Event, msgID, role, kind, topicID, title, content string) (string, error) {
 	ctx, tx := w.ctx, w.tx
+	if topicID == "" {
+		var kind, meetingTopic string
+		if err := tx.QueryRowContext(ctx, `SELECT kind, meeting_topic FROM threads WHERE id=?`, ev.ThreadID).Scan(&kind, &meetingTopic); err != nil {
+			return "", err
+		}
+		if kind == event.KindMeeting && msgID != meetingTopic {
+			topicID = meetingTopic
+		}
+	}
 	if topicID == "" {
 		if !startsTopic(role, kind) {
 			return "", nil

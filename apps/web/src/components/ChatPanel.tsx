@@ -1,14 +1,18 @@
-import { newThread, openThread, send, ui, useChat, useUi, useWb } from '../lib/app'
+import { go, newThread, openThread, send, ui, useChat, useUi, useWb } from '../lib/app'
 import ChatView from './ChatView'
 import Icon from './Icon'
+import MeetingList from './MeetingList'
+import MeetingView from './MeetingView'
 
 /** The main chat column: sous with every project in view. */
 export default function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   const chatState = useChat()
   const uiState = useUi()
   const wbState = useWb()
-  const threads = chatState.threads.filter((t) => !t.project_id)
+  const threads = chatState.threads.filter((t) => !t.project_id && t.kind !== 'meeting')
   const thread = threads.find((t) => t.id === uiState.current)
+  // A meeting takes over the column until its back button is pressed.
+  if (uiState.meeting) return <MeetingView />
 
   // What the next message is about: the project or task on the workbench.
   const context = (() => {
@@ -57,9 +61,9 @@ export default function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         </>
       }
       actions={
-        onCollapse && (
+        <>{uiState.current && <button className="icon-btn" aria-label="在系统页里追踪" data-tip="在系统页里追踪" onClick={() => go({view:'system',id:'thread:'+uiState.current})}><Icon name="system" size={18} /></button>}<MeetingList parentThreadId={uiState.current} /><button className="icon-btn" aria-label="记事本" onClick={() => { ui.state.notesOpen = true; ui.emit() }}><Icon name="note" size={18} /></button>{onCollapse && (
           <button className="icon-btn collapse-chat" aria-label="收起对话" data-tip="收起" data-tip-pos="bottom" onClick={onCollapse}><Icon name="panel" size={18} /></button>
-        )
+        )}</>
       }
     />
   )

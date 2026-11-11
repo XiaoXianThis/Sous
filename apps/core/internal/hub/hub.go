@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/mcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -63,6 +65,21 @@ func DBPath(cfg *config.Hub) string { return filepath.Join(cfg.DataDir, "hub.db"
 
 // Open builds every part from the config. Call Run to start serving.
 func Open(cfg *config.Hub) (*Hub, error) {
+	sysmap.Reset()
+	notify.RegisterSystemProbes()
+	sysmap.RegisterProbe("web", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		if cfg.Web.Search.Provider != "" {
+			return sysmap.Status{State: sysmap.OK, Summary: "搜索：" + cfg.Web.Search.Provider}
+		}
+		return sysmap.Status{State: sysmap.Idle, Summary: "没有配置搜索引擎，只能抓取网页"}
+	}))
+	sysmap.RegisterProbe("search", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		state := sysmap.Idle
+		if sysmap.Sum("web>search", 60) > 0 {
+			state = sysmap.Busy
+		}
+		return sysmap.Status{State: state, Summary: fmt.Sprintf("最近 15 分钟 %d 次", sysmap.Sum("web>search", 900))}
+	}))
 	st, err := store.Open(DBPath(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
@@ -140,6 +157,7 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	h.Supervisor = supervisor.New(supervisor.Options{
 		Log:      h.Log,
 		Provider: sup.Provider,
+		Fixed:    h.Models.Fixed,
 		Model:    sup.Name,
 		Tools:    tools,
 		Environment: func(ctx context.Context, threadID string) []string {
@@ -168,7 +186,36 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	h.Effects.Handle(store.EffectApprove, h.Tasks.Approve)
 	h.Effects.Handle(store.EffectSetup, h.Tasks.Setup)
 	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(h.Models.RoleRefs), h.Models.Routes(h.Auth.RequireFresh),
+	origins := []string{}
+	if u, err := url.Parse(cfg.PublicURL); err == nil {
+		origins = append(origins, u.Host)
+	}
+	if cfg.Dev {
+		origins = append(origins, "localhost:*", "127.0.0.1:*")
+	}
+	sysroutes := func(mux *http.ServeMux, protect func(string, http.HandlerFunc)) {
+		sysmap.Routes(mux, protect, origins, sysmap.TraceDeps{RunsOf: func(ctx context.Context, id string) []string {
+			runs, _ := st.Runs(ctx, store.RunFilter{TaskID: id, Limit: 2147483647})
+			out := make([]string, 0, len(runs))
+			for _, run := range runs {
+				out = append(out, run.ID)
+			}
+			return out
+		}, PendingOf: func(ctx context.Context, kind, id string) bool {
+			switch kind {
+			case "task":
+				t, err := st.Task(ctx, id)
+				return err == nil && (t.Status == "running" || t.Status == "queued" || t.Status == "waiting_approval")
+			case "run":
+				r, err := st.Run(ctx, id)
+				return err == nil && r.Status == "running"
+			case "thread":
+				return h.Supervisor.Active(id)
+			}
+			return false
+		}})
+	}
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, sysroutes, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(h.Models.RoleRefs), h.Models.Routes(h.Auth.RequireFresh),
 		h.mcpRoutes(), h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes), h.Supervisor.Routes)
 	h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
 	h.Nodes.DeviceRoutes(h.HTTP.Mux())

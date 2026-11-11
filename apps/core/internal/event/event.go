@@ -108,8 +108,13 @@ func (e Event) Decode(v any) error {
 // Payloads.
 
 type ThreadCreatedPayload struct {
-	Title string `json:"title"`
-	Kind  string `json:"kind"` // main / chat / project
+	ParentThreadID string       `json:"parent_thread_id,omitempty"`
+	ParentTopicID  string       `json:"parent_topic_id,omitempty"`
+	MeetingTopic   string       `json:"meeting_topic,omitempty"`
+	Brief          string       `json:"brief,omitempty"`
+	Host           *MeetingHost `json:"host,omitempty"`
+	Title          string       `json:"title"`
+	Kind           string       `json:"kind"` // main / chat / project
 	// ProjectID scopes a project chat (kind project) to one project.
 	ProjectID string `json:"project_id,omitempty"`
 }
@@ -171,6 +176,9 @@ type MessageToolsPayload struct {
 
 // MessageSource is the agent behind a consult message.
 type MessageSource struct {
+	MeetingID string `json:"meeting_id,omitempty"`
+	Version   int    `json:"version,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
 	RunID     string `json:"run_id"`
 	Agent     string `json:"agent"`
 	ProjectID string `json:"project_id"`

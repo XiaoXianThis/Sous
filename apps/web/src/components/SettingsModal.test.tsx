@@ -48,7 +48,7 @@ describe('SettingsModal on a phone', () => {
     await set('home')
     await render()
     const rows = [...el.querySelectorAll('.ios-row')].map((r) => r.textContent)
-    expect(rows).toEqual(['机器', '模型', '预设', 'MCP', '定时任务', '记忆', '用量', '通知与默认', '外观', '账号'])
+    expect(rows).toEqual(['机器', '模型', '预设', 'MCP', '定时任务', '记忆', '用量', '系统状态', '通知与默认', '外观', '账号'])
     expect(el.querySelectorAll('.ios-group').length).toBe(5)
     expect(el.querySelector('[data-back]')).toBeNull()
 

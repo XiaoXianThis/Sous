@@ -384,3 +384,10 @@ func TestMachineLookIsLimitedPerTurn(t *testing.T) {
 		t.Fatalf("a new turn starts over: %v", err)
 	}
 }
+
+func TestDescribeContextIgnoresNoteIDs(t *testing.T) {
+	e, _ := engine(t)
+	if got := e.DescribeContext(context.Background(), event.MessageContext{NoteIDs: []string{"secret-note-id"}}); got != "" {
+		t.Fatalf("note context leaked: %q", got)
+	}
+}

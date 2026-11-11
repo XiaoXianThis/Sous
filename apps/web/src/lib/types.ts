@@ -3,12 +3,40 @@
 export interface Thread {
   id: string
   title: string
-  kind: 'main' | 'chat' | 'project'
+  kind: 'main' | 'chat' | 'project' | 'meeting'
   /** Set on a project chat: the project it is scoped to. */
   project_id?: string
+  /** A meeting's parent: the thread it borrowed context from and posts minutes to. */
+  parent_thread_id?: string
+  parent_topic_id?: string
+  /** The one topic a meeting's messages collect in. */
+  meeting_topic?: string
+  host?: MeetingHost
+  meeting_status?: 'open' | 'closed'
   created_at: number
   updated_at: number
   archived: boolean
+}
+
+export interface MeetingHost {
+  provider_id?: string
+  model?: string
+  effort?: string
+}
+
+export interface MinutesRow {
+  meeting_id: string
+  version: number
+  content: string
+  status: 'draft' | 'posted'
+  message_id?: string
+  created_at: number
+  posted_at: number
+}
+
+export interface MeetingDetail {
+  meeting: Thread
+  minutes: MinutesRow[]
 }
 
 /** A file sent along with a user message. */
@@ -17,6 +45,12 @@ export interface Attachment {
   name: string
   mime: string
   size: number
+}
+
+export interface NoteSend { thread_id: string; topic_id: string; message_id: string; at: number }
+export interface Note {
+  id: string; text: string; project_id?: string; status: 'open' | 'sent' | 'archived'
+  attachments?: Attachment[]; sends?: NoteSend[]; created_at: number; updated_at: number
 }
 
 export interface Message {
@@ -33,7 +67,7 @@ export interface Message {
    * the inspector's note about a finding; "consult": a project consultant's
    * answer, shown as it is (decision 0022).
    */
-  kind?: 'notice' | 'silent' | 'report' | 'trigger' | 'inspector' | 'step' | 'consult'
+  kind?: 'notice' | 'silent' | 'report' | 'trigger' | 'inspector' | 'step' | 'consult' | 'minutes' | 'meeting_proposal' | 'dm'
   seq: number
   created_at: number
   /** Set while the reply is still streaming; never sent by the server. */
@@ -54,6 +88,8 @@ export interface Message {
   task_id?: string
   /** The supervisor has started on it (message.seen); never sent by the server. */
   seen?: boolean
+  /** A direct message that went into a running Run was delivered (decision 0028). */
+  delivered?: boolean
 }
 
 /** A topic of a thread, as the topic cards show it. */
@@ -99,6 +135,18 @@ export interface MessageSource {
   project_id: string
   project?: string
   node_id?: string
+  meeting_id?: string
+  version?: number
+  task_id?: string
+}
+
+/** Who a project chat's message goes to instead of sous (decision 0028). */
+export interface DmTarget {
+  key: string
+  kind: 'run' | 'task' | 'consult'
+  label: string
+  agent?: string
+  id?: string
 }
 
 export interface HubEvent {
@@ -237,7 +285,7 @@ export interface Node {
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
-export type RunPurpose = 'work' | 'rebase' | 'deliver' | 'clone' | 'create' | 'review' | 'git' | 'consult'
+export type RunPurpose = 'work' | 'rebase' | 'deliver' | 'clone' | 'create' | 'review' | 'git' | 'consult' | 'chat'
 
 export interface Run {
   id: string
@@ -280,8 +328,10 @@ export interface Run {
   project_id?: string
   session?: string
   resume_session?: string
+  /** Decision 0028: a direct chat records the task status it interrupted. */
+  chat_from?: string
   /** How the run ended beyond its status (end-to-end review 4.1, 4.2, 4.14). */
-  outcome?: 'no_action' | 'work_produced' | 'needs_confirmation'
+  outcome?: 'no_action' | 'work_produced' | 'needs_confirmation' | 'changed'
   error_kind?: 'agent_quota' | 'agent_rate_limit' | 'agent_not_logged_in' | 'agent_unavailable'
   refused?: string[]
 }
@@ -576,6 +626,7 @@ export interface Overview {
 }
 
 export interface MessageContext {
+  note_ids?: string[]
   project_id?: string
   task_id?: string
   /** Projects the user referenced with @ in the message. */
@@ -602,6 +653,7 @@ export interface Settings {
   quiet: Quiet
   roles: Record<string, string>
   push_devices: number
+  minutes_auto_post: boolean
 }
 
 export interface Inbox {
@@ -669,3 +721,16 @@ export interface Updates {
   repo: string
   nodes: NodeVersion[]
 }
+
+export type SysLayer = 'client' | 'hub' | 'external' | 'node'
+export type SysState = 'ok' | 'busy' | 'idle' | 'degraded' | 'down'
+export interface SysModule { id: string; name: string; layer: SysLayer; desc: string; code?: string }
+export interface SysEdge { id: string; from: string; to: string; label: string; carries: string }
+export interface SysGauge { label: string; value: number; unit?: string }
+export interface SysItem { id: string; label: string; detail?: string; state: SysState; link?: string }
+export interface SysStatus { state: SysState; summary: string; gauges?: SysGauge[]; items?: SysItem[] }
+export interface SysGraph { modules: SysModule[]; edges: SysEdge[]; status: Record<string, SysStatus>; now: number }
+export interface SysRecord { ts: number; edge: string; refs: { thread_id?: string; task_id?: string; run_id?: string }; summary: string }
+export interface SysTick { t: number; edges: Record<string, number>; modules?: Record<string, SysStatus>; flows?: SysRecord[] }
+export interface SysHistory { counts: Record<string, number[]>; records: SysRecord[]; now: number }
+export interface SysTrace { steps: { ts: number; edge: string; summary: string }[]; pending: string }

@@ -119,6 +119,7 @@ export default function TaskView({ id }: { id: string }) {
             <div className="flex items-start gap-3 min-w-0">
               <h1 className="m-0 flex-1 min-w-0 text-[20px] font-bold tracking-tight leading-[1.3] [overflow-wrap:anywhere]">{task.title}</h1>
               <div className="flex items-center gap-0.5 flex-none -mr-1.5" role="toolbar" aria-label="任务操作">
+                <button className="icon-btn" aria-label="在系统页里追踪" data-tip="在系统页里追踪" onClick={() => go({view:'system',id:'task:'+task.id})}><Icon name="system" size={16} /></button>
                 {canDispatch && (
                   <button className="btn small mr-1" onClick={() => void act(() => api.dispatchTask(task.id))}>
                     <Icon name={stuck ? 'refresh' : 'send'} size={14} stroke={2.2} />{dispatchText}

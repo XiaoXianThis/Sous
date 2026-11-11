@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ func (e *Engine) askApproval(ctx context.Context, t store.Task, a store.Approval
 		if callsSoFar < 5 && a.Facts != nil && a.Facts.Version == 1 {
 			req.Tools = approvalTools
 		}
+		ctx = sysmap.WithRefs(ctx, sysmap.Refs{TaskID: a.TaskID, RunID: a.RunID})
 		resp, err := e.Approver.Provider.Stream(ctx, req, nil)
 		if err != nil {
 			return err

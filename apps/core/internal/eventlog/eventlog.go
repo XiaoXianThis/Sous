@@ -4,10 +4,13 @@ package eventlog
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 )
 
 // Listener is called after commit for every stored event. It must not block.
@@ -22,7 +25,23 @@ type Log struct {
 	effectsCh chan struct{}
 }
 
+var lastSeq atomic.Int64
+
 func New(s *store.Store, b *event.Bus) *Log {
+	lastSeq.Store(0)
+	sysmap.RegisterProbe("eventlog", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
+		n := 0
+		for _, edge := range sysmap.StaticEdges {
+			if edge.To == "eventlog" {
+				n += sysmap.Sum(edge.ID, 60)
+			}
+		}
+		state := sysmap.OK
+		if n == 0 {
+			state = sysmap.Idle
+		}
+		return sysmap.Status{State: state, Summary: fmt.Sprintf("最新 #%d · 每分钟 %d 条", lastSeq.Load(), n), Gauges: []sysmap.Gauge{{Label: "事件/分钟", Value: float64(n)}}}
+	}))
 	return &Log{Store: s, Bus: b, effectsCh: make(chan struct{}, 1)}
 }
 
@@ -41,6 +60,24 @@ func (l *Log) Write(ctx context.Context, fn func(w *store.Writer) error) ([]even
 	evs, effects, err := l.Store.Write(ctx, fn)
 	if err != nil {
 		return nil, err
+	}
+	w, caller := sysmap.Callers()
+	for _, ev := range evs {
+		if caller != "" {
+			// "call <type>": the caller asked the writer for this event.
+			sysmap.Count(sysmap.EdgeID(caller, w), refsOf(ev), "call "+string(ev.Type))
+		}
+		if w != "" {
+			sysmap.Count(sysmap.EdgeID(w, "eventlog"), refsOf(ev), string(ev.Type))
+		}
+		for _, edge := range sysmap.ReadEdges[string(ev.Type)] {
+			sysmap.Count(edge, refsOf(ev), string(ev.Type))
+		}
+		for old := lastSeq.Load(); ev.Seq > old && !lastSeq.CompareAndSwap(old, ev.Seq); old = lastSeq.Load() {
+		}
+	}
+	if effects {
+		sysmap.Count("eventlog>effects", sysmap.Refs{}, "入队")
 	}
 	l.mu.RLock()
 	listeners := l.listeners
@@ -75,6 +112,9 @@ func (l *Log) Append(ctx context.Context, evs ...event.Event) ([]event.Event, er
 // Emit publishes an ephemeral event without storing it.
 func (l *Log) Emit(ev event.Event) {
 	ev.Seq = 0
+	if w := sysmap.Writer(); w != "" {
+		sysmap.Count(sysmap.EdgeID(w, "eventlog"), refsOf(ev), string(ev.Type))
+	}
 	l.Bus.Publish(ev)
 }
 
@@ -93,4 +133,8 @@ func (l *Log) EnsureMainThread(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return ev.ThreadID, nil
+}
+
+func refsOf(ev event.Event) sysmap.Refs {
+	return sysmap.Refs{ThreadID: ev.ThreadID, TaskID: ev.TaskID, RunID: ev.RunID}
 }

@@ -516,6 +516,9 @@
 @keyframes topic-flash { 0%, 35% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
 .card[data-flash] { outline: 2px solid transparent; outline-offset: 0; animation: topic-flash 1.2s ease-out; }
 @media (prefers-reduced-motion: reduce) { .card[data-flash] { animation: none; outline-color: var(--accent); } }
+/* A minutes reference ([#12]) scrolls its message into view and flashes it the same way. */
+.chat-scroll [data-seq][data-flash] { outline: 2px solid transparent; outline-offset: 2px; border-radius: 8px; animation: topic-flash 1.2s ease-out; }
+@media (prefers-reduced-motion: reduce) { .chat-scroll [data-seq][data-flash] { animation: none; outline-color: var(--accent); } }
 
 .push-in { animation: push-in .42s cubic-bezier(.2, .9, .25, 1); }
 [data-page].push-in { box-shadow: -10px 0 30px -6px rgb(0 0 0 / .12); }
@@ -644,3 +647,7 @@ body[data-resizing] iframe { pointer-events: none; }
   color: var(--accent); font-weight: 500;
 }
 .mention-tag:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+/* The system page: a row that just arrived slides in from its lane. */
+@keyframes coord-in { from { opacity: 0; transform: translateY(-4px) } }
+.coord-in { animation: coord-in .3s ease-out both; }
