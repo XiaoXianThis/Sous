@@ -42,9 +42,17 @@ type shellAnalyzer struct {
 }
 type flow struct{ after, success []string }
 
+// ShellAnalysis reports whether commands are parsed as POSIX shell here.
+// On Windows an agent's command may run in PowerShell or cmd, so it is not
+// parsed: every command takes the strict fallback (exec-other, opaque), and
+// approval goes to the user unless a rule allows it.
+func ShellAnalysis() bool { return posixShell }
+
+var posixShell = runtime.GOOS != "windows"
+
 func AnalyzeCommand(cmd string, ctx CommandContext) CommandAnalysis {
 	a := &shellAnalyzer{root: ctx.Workdir, result: CommandAnalysis{Status: "ok", Category: Read, ReadOnly: true}}
-	if runtime.GOOS == "windows" || (ctx.Shell != "" && ctx.Shell != "sh" && ctx.Shell != "bash" && ctx.Shell != "/bin/sh" && ctx.Shell != "/bin/bash") {
+	if !ShellAnalysis() || (ctx.Shell != "" && ctx.Shell != "sh" && ctx.Shell != "bash" && ctx.Shell != "/bin/sh" && ctx.Shell != "/bin/bash") {
 		a.failed = "unsupported shell"
 	} else {
 		a.parse(cmd, []string{first(ctx.CWD, ctx.Workdir)})

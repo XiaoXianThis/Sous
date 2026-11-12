@@ -138,6 +138,11 @@ func (p *Policy) assessLegacy(r Request, cat Category) Assessment {
 		cmd = r.Title
 	}
 	text := cmd
+	if in.floorText != "" {
+		// An argv array is quoted into cmd word by word; match rules against
+		// the plain words too, or "a b" misses 'a' 'b' (as the parsed path does).
+		text += "\n" + in.floorText
+	}
 	for _, path := range append(append([]string{}, r.Paths...), in.paths...) {
 		text += "\n" + path
 	}

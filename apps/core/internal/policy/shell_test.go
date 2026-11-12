@@ -6,6 +6,7 @@ import (
 )
 
 func TestShellBudgetsUnsupportedAndRawRules(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{ExtraHard: []string{`dangerous value`}})
 	for _, cmd := range []string{strings.Repeat("true;", 2000), strings.Repeat("x", (256<<10)+1), `zsh -c 'echo safe'`, `ksh -c 'echo safe'`, strings.Repeat("nohup ", 5000) + "true"} {
 		r := exec(cmd)

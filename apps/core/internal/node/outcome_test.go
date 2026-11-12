@@ -80,6 +80,7 @@ func TestToolOutputMasksSecrets(t *testing.T) {
 // working directory (end-to-end review 4.7) or the temporary directory,
 // also when an interpreter runs it (decision 0024).
 func TestScriptPreview(t *testing.T) {
+	needShell(t)
 	dir := t.TempDir()
 	tmp := t.TempDir()
 	defer func(f func() string) { scriptTempDir = f }(scriptTempDir)

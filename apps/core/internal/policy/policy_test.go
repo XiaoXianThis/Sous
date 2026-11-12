@@ -35,6 +35,7 @@ func TestClassifyCommands(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the cases use Unix paths")
 	}
+	needShell(t)
 	p, err := New(Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +85,7 @@ func TestClassifyFilesAndArgv(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the cases use Unix paths")
 	}
+	needShell(t)
 	p, _ := New(Config{})
 	wd := "/w/tree"
 	edit := func(kind, path string) Category {
@@ -139,6 +141,7 @@ func TestFloorConfig(t *testing.T) {
 }
 
 func TestServerRole(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	cases := []struct {
 		cmd  string
@@ -179,6 +182,7 @@ func TestServerRole(t *testing.T) {
 // read-only modes cannot be passed with a write labelled as a read
 // (end-to-end review M2).
 func TestReadKindIsJudgedByItsCommand(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	for _, cmd := range []string{"rm -rf src", "sed -i s/a/b/ main.go", "git reset --hard HEAD~1"} {
 		raw, _ := json.Marshal(map[string]string{"command": cmd})
@@ -219,6 +223,7 @@ func containsAll(s string, parts ...string) bool {
 
 // Decision 0024: looking at the machine is reading.
 func TestLookingIsReading(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	for _, cmd := range []string{"node --version", "python3 -V", "uptime", "free -m", "lsof -i :8080", "netstat -an | grep LISTEN", "sw_vers"} {
 		if c, _ := p.Classify(Request{ToolKind: "execute", Title: cmd, Workdir: "/w"}); c != Read {

@@ -26,6 +26,7 @@ func putFixture(t *testing.T, root, path, body string) string {
 	return p
 }
 func TestApprovalEvidenceSample08And09(t *testing.T) {
+	needShell(t)
 	root := t.TempDir()
 	p := putFixture(t, root, "work/tmp/signing/e2e.sh", "#!/bin/sh\nprintf 'temporary fixture only'\n")
 	putFixture(t, root, "apps/core/scripts/export-signing-cert.sh", "#!/bin/sh\nif [ -z \"${SOUS_SIGN_CERT_P12_PASSWORD:-}\" ]; then exit 1; fi\nsecurity export -k login\n")
@@ -49,6 +50,7 @@ func TestApprovalEvidenceSample08And09(t *testing.T) {
 	_ = p
 }
 func TestApprovalEvidenceBoundsAndSecrets(t *testing.T) {
+	needShell(t)
 	root := t.TempDir()
 	putFixture(t, root, "big.sh", strings.Repeat("# text\n", 4000))
 	putFixture(t, root, "binary.sh", "\x00token")
@@ -85,7 +87,7 @@ func TestApprovalEvidenceBoundsAndSecrets(t *testing.T) {
 }
 func TestApprovalScriptEffectsReachServerGuard(t *testing.T) {
 	root := t.TempDir()
-	d := NewDaemon(t.TempDir(), Config{Role: "server"}, nil)
+	d := testDaemon(t, t.TempDir(), Config{Role: "server"})
 	r := &run{d: d, spec: proto.RunStart{PermissionMode: "auto"}}
 	for _, body := range []string{"rm task-file\n", "systemctl restart app\n", "security export -k login\n", "sudo true\n"} {
 		putFixture(t, root, "script.sh", body)
@@ -100,7 +102,7 @@ func TestApprovalScriptEffectsReachServerGuard(t *testing.T) {
 	}
 }
 func TestBuiltinSousPermissionSample12(t *testing.T) {
-	d := NewDaemon(t.TempDir(), Config{}, nil)
+	d := testDaemon(t, t.TempDir(), Config{})
 	r := &run{d: d, spec: proto.RunStart{RunID: "r", Purpose: proto.PurposeWork, Agent: "claude"}, ctx: context.Background()}
 	d.sousServers(r)
 	for title, raw := range map[string]string{"mcp__sous__report_progress": `{"text":"progress"}`, "mcp__sous__report_result": `{"done":"done","verified":"tests"}`, "mcp__sous__ask_supervisor": `{"question":"which port"}`} {
@@ -137,6 +139,7 @@ func TestBuiltinSousPermissionSample12(t *testing.T) {
 	}
 }
 func TestApprovalInspectionScopeAndProjection(t *testing.T) {
+	needShell(t)
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -144,7 +147,7 @@ func TestApprovalInspectionScopeAndProjection(t *testing.T) {
 	putFixture(t, home, ".ssh/config", "Host staging\n HostName internal.example\n User deploy\n Port 2222\n ProxyCommand sh -c 'API_TOKEN=fixture-secret-value'\n IdentityFile ~/.ssh/id_ed25519\n")
 	putFixture(t, root, "script.sh", "echo safe\n")
 	putFixture(t, home, "Library/Keychains/fixture.keychain-db", "never read keychain contents")
-	d := NewDaemon(t.TempDir(), Config{HubURL: "https://user:password@hub.example/path?token=secret"}, nil)
+	d := testDaemon(t, t.TempDir(), Config{HubURL: "https://user:password@hub.example/path?token=secret"})
 	r := &run{d: d, ctx: context.Background(), workdir: root, approvals: map[string]chan string{"a": make(chan string)}, approvalScopes: map[string]approvalScope{"a": {root: root}}}
 	d.runs["r"] = r
 	for _, p := range []string{"script.sh", filepath.Join(home, ".zshrc"), filepath.Join(home, ".ssh/config"), filepath.Join(d.root, "node.json")} {
@@ -193,7 +196,7 @@ func TestLocalApprovalRollbackFlagsCannotBeChangedRemotely(t *testing.T) {
 	if err := SaveConfig(root, cfg); err != nil {
 		t.Fatal(err)
 	}
-	d := NewDaemon(root, cfg, nil)
+	d := testDaemon(t, root, cfg)
 	next, err := d.admin.mergeNodeConfig([]byte(`{"approval_inspect_disabled":false,"policy":{"legacy_shell":false,"hard_read_disabled":false}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +245,7 @@ func TestRedactionAcrossChunks(t *testing.T) {
 }
 
 func TestApprovalIdentityBindsScriptsAndExecutionParameters(t *testing.T) {
+	needShell(t)
 	root := t.TempDir()
 	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git fixture: %v %s", err, out)
@@ -250,7 +254,7 @@ func TestApprovalIdentityBindsScriptsAndExecutionParameters(t *testing.T) {
 		t.Fatal(err)
 	}
 	rroot, _ := filepath.EvalSymlinks(root)
-	d := NewDaemon(t.TempDir(), Config{NodeID: "node"}, nil)
+	d := testDaemon(t, t.TempDir(), Config{NodeID: "node"})
 	r := &run{d: d, spec: proto.RunStart{TaskID: "task", Agent: "claude", Branch: "task-branch", PermissionMode: "auto"}}
 	r.approvalLaunch = []string{"fixture-agent"}
 	r.approvalEnv = os.Environ()
@@ -288,7 +292,7 @@ func TestApprovalIdentityBindsScriptsAndExecutionParameters(t *testing.T) {
 	}
 }
 func TestBuiltinSousIsAllowedOnceAndAudited(t *testing.T) {
-	d := NewDaemon(t.TempDir(), Config{}, nil)
+	d := testDaemon(t, t.TempDir(), Config{})
 	r := &run{d: d, ctx: context.Background(), spec: proto.RunStart{RunID: "r", Agent: "claude", Purpose: proto.PurposeWork, PermissionMode: "auto"}}
 	d.sousServers(r)
 	req := acp.PermissionRequest{Options: []acp.PermissionOption{{OptionID: "once", Kind: "allow_once"}, {OptionID: "always", Kind: "allow_always"}}}
@@ -316,8 +320,9 @@ func TestBuiltinSousIsAllowedOnceAndAudited(t *testing.T) {
 }
 
 func TestSample09RequiresProofBeforePrivateKeyExport(t *testing.T) {
+	needShell(t)
 	root := t.TempDir()
-	d := NewDaemon(t.TempDir(), Config{}, nil)
+	d := testDaemon(t, t.TempDir(), Config{})
 	r := &run{d: d, spec: proto.RunStart{PermissionMode: "auto"}}
 	for _, tc := range []struct {
 		body   string

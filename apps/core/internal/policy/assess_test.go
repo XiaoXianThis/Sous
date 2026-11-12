@@ -24,6 +24,7 @@ func TestHardSignals(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the cases use Unix paths")
 	}
+	needShell(t)
 	p, _ := New(Config{})
 	hard := []string{
 		"cat ~/.ssh/id_rsa",
@@ -103,6 +104,7 @@ func TestRoutine(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the cases use Unix paths")
 	}
+	needShell(t)
 	p, _ := New(Config{})
 	yes := []string{
 		"git push -u origin sous/add-hello-1a2b",
@@ -179,6 +181,7 @@ func TestClassifyBypasses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the cases use Unix paths")
 	}
+	needShell(t)
 	p, _ := New(Config{})
 	cases := map[string]Category{
 		"env rm -rf build":                      Delete,

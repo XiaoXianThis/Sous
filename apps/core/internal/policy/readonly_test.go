@@ -3,6 +3,7 @@ package policy
 import "testing"
 
 func TestReadOnlyCompleteArguments(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	groups := []struct{ name, good, bad, mixed string }{
 		{"hostname", "hostname -f", "hostname new-name", "hostname -f --file names"},

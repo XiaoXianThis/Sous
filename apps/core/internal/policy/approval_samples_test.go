@@ -21,6 +21,7 @@ func TestApprovalFloorIsNeverDelegated(t *testing.T) {
 // Controlled reproductions of the report's excerpts, not claimed historical
 // full-command replays. Evidence/MCP cases also have node/task integration tests.
 func TestApprovalSamples(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	cases := []struct {
 		id, command string
@@ -85,6 +86,7 @@ func TestApprovalDataExemptionsCannotHideExecution(t *testing.T) {
 }
 
 func TestApprovalReadWritePartitions(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	for _, cmd := range []string{`cat ~/.zshrc`, `grep '^Host ' ~/.ssh/config`, `ls ~/Library/Keychains`} {
 		r := exec(cmd)
@@ -123,6 +125,7 @@ func TestApprovalReadWritePartitions(t *testing.T) {
 }
 
 func TestShellFallbackAndCWD(t *testing.T) {
+	needShell(t)
 	p, _ := New(Config{})
 	for _, cmd := range []string{`echo 'unclosed`, `for x in a; do echo x; done`, `echo $(unclosed`, `cd $X && touch file`, `cd - && touch file`} {
 		r := exec(cmd)

@@ -15,6 +15,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 )
 
@@ -131,6 +132,9 @@ func TestMachineAgentsAndTaskOptions(t *testing.T) {
 // machine.look runs read-only commands and refuses the rest, environment
 // dumps and .env files included (decision 0024).
 func TestMachineLook(t *testing.T) {
+	if !policy.ShellAnalysis() {
+		t.Skip("commands are not parsed as POSIX shell here (Windows)")
+	}
 	e := newEnv(t)
 	ctx := context.Background()
 	stop := e.startDaemon("write")
