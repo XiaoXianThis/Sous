@@ -58,3 +58,9 @@ D1–D10 已拍板（见 `design.md` §0）。按里程碑顺序执行，每个�
 - [x] 页面上的“许可并重试”按钮（`RunCard` 的 `PermitRetry`）：范围外被拒的 Run（错误以 `超出自主范围：` 开头）一键发 `run` 许可后重试
 - [ ] 硬件密钥（Secure Enclave / TPM）
 - [ ] 二维码配对；离线缓存；按项目划分数据域
+
+## 安全验收发现（[security-review.md](security-review.md)）
+
+- [ ] 机器的设备接口按机器授权：默认不能读全部对话、不能审批别的机器的审批（S5）
+- [ ] 关键操作许可绑定请求内容（`config.write`、`set_env`、`set_role`、`set_workspaces`）
+- [ ] 自主范围补上仓库白名单；`VerifyAssertion` 的时效、名册 `prev` 链核对
