@@ -1,6 +1,6 @@
 # 0016 模型在页面上配置，存在 Hub 的数据库里
 
-- Status: Accepted
+- Status: Accepted（存放位置被 0030 修改：模型 Key 改为在主域加密存放，由大脑使用）
 - Date: 2026-11-04
 
 ## Context

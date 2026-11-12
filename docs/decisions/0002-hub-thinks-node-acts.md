@@ -1,6 +1,6 @@
 # 0002 Hub 只动脑，Node 才动手
 
-- Status: Accepted
+- Status: Superseded by 0030
 - Date: 2026-11-03
 
 ## Context

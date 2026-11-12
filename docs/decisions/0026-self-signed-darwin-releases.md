@@ -1,6 +1,6 @@
 # 0026 发布的 macOS 二进制用自签名证书签名
 
-- Status: Accepted
+- Status: Accepted（发布的信任根被 0030 修改：Node 只认离线发布密钥的签名，Apple 证书只用于 TCC）
 - Date: 2026-11-09
 
 ## Context

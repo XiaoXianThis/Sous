@@ -14,7 +14,7 @@ Architecture decision records: what was decided, why, and which options were rej
 | record | title | status |
 |---|---|---|
 | [0001](0001-super-agent-architecture.md) | 参考 Super-agent 的常驻架构，用 Go 自研 | Accepted |
-| [0002](0002-hub-thinks-node-acts.md) | Hub 只动脑，Node 才动手 | Accepted |
+| [0002](0002-hub-thinks-node-acts.md) | Hub 只动脑，Node 才动手 | Superseded by 0030 |
 | [0003](0003-apps-split.md) | 拆成 core、web、desktop 三个 app | Accepted |
 | [0004](0004-acp-for-sub-agents.md) | 子 agent 统一走 ACP | Accepted |
 | [0005](0005-permission-modes.md) | 三档权限模式，加一条底线 | Accepted |
@@ -28,7 +28,7 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0013](0013-personas.md) | 人员就是岗位档案，不是有记忆的拟人员工 | Superseded by 0024（岗位改成预设） |
 | [0014](0014-server-role-and-ops-tasks.md) | 服务器作为机器接入，部署和维护走运维任务 | Accepted（部署触发被 0022 取代） |
 | [0015](0015-project-shells-and-hardening.md) | 页面上的项目终端，以及配套的安全收紧 | Accepted |
-| [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted |
+| [0016](0016-models-configured-on-the-page.md) | 模型在页面上配置，存在 Hub 的数据库里 | Accepted（存放位置被 0030 修改） |
 | [0017](0017-web-search-and-fetch.md) | 主管可以联网：web_search 和 web_fetch | Accepted |
 | [0018](0018-phone-liquid-glass.md) | 手机端按原生 App 做：WebView 行为 + Liquid Glass 外观 | Accepted |
 | [0019](0019-auto-approval-layers.md) | 自动审批分层：确定性规则、审批 agent、硬上限 | Accepted |
@@ -38,7 +38,9 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0023](0023-ai-decides-most.md) | AI 代理用户决定大多数事项 | Accepted（“验收默认由 AI 判断”被 0024 取代） |
 | [0024](0024-presets-machine-agents-and-a-lighter-supervisor.md) | 预设、每台电脑的 agent，以及更顺手的主管 | Accepted |
 | [0025](0025-supervisor-loop.md) | 主管的闭环：任务进展叫醒主管、结构化结果、子 agent 能问能报、路由只是偏好 | Accepted |
-| [0026](0026-self-signed-darwin-releases.md) | 发布的 macOS 二进制用自签名证书签名 | Accepted |
+| [0026](0026-self-signed-darwin-releases.md) | 发布的 macOS 二进制用自签名证书签名 | Accepted（发布的信任根被 0030 修改） |
 | [0027](0027-chat-topics.md) | 对话按话题整理：一份上下文，按话题分轮和显示 | Accepted |
 | [0028](0028-direct-agent-chat.md) | 用户可以在项目对话里直接和子 agent 对话 | Accepted |
 | [0029](0029-meetings.md) | 会议：在独立上下文里讨论，散会后把纪要交回对话 | Accepted |
+| [0030](0030-zero-trust-relay.md) | 零信任：服务器只当盲中继，Node 只认用户的签名 | Accepted |
+| [0031](0031-decentralized-brain.md) | 去中心化的大脑：用户指定机器、租约选主、不做第二道防线 | Accepted |
