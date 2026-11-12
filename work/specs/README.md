@@ -30,3 +30,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [notes-meetings-agent-chat](notes-meetings-agent-chat/) | core, web | 设计和执行说明完成，待实现（顺序：记事本 → 会议 → 直接对话） |
 | [system-map](system-map/) | core, web | 已实现；工作台的“现场”视图（人、任务、机器的流转，Canvas2D 2.5D），模块状态在设置的“系统状态” |
 | [zero-trust](zero-trust/) | core, web | 已实现并通过 Go/浏览器端到端测试；文档、Vercel 实际部署、真机验收待做 |
+| [alpha2-speed-and-unlock](alpha2-speed-and-unlock/) | core, web, desktop | 已实现并通过自动测试，发布与真机验收进行中 |

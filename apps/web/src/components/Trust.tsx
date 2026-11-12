@@ -8,7 +8,7 @@ import type { Project } from '../lib/types'
 import { nodeAddr, type RosterNode, type Scope, type Scopes } from '../trust/docs'
 import { sha256, utf8, b64 } from '../trust/bytes'
 import {
-  addPasskey, ask, identityFingerprint, isUnlocked, kick, lock, lockAfter, lockChoices, net, paused, permit, roster,
+  addPasskey, ask, forgetThisDevice, identityFingerprint, localDevice, verifyName, isUnlocked, kick, lock, lockAfter, lockChoices, net, paused, permit, roster,
   saveScopes, scopes, setBrain, setConsole, setFrozen, setLockAfter, setPaused, startPairing, useVault, type PairRequest,
 } from '../trust/vault'
 import { Cancelled } from '../trust/webauthn'
@@ -271,7 +271,7 @@ export function Security() {
     <div className="grid gap-5 max-w-[640px]">
       <section className="grid gap-2">
         <h3 className="m-0 text-[15px]">解锁</h3>
-        <p className="m-0 text-muted text-[13px]">打开 sous 时刷一次 Face ID、指纹或 Windows PIN，之后直到退出或自动锁定都不用再验证。只有添加或踢出机器、修改授权、打开终端、更新这类关键操作才需要再刷一次。</p>
+        <p className="m-0 text-muted text-[13px]">打开 sous 时验证一次（iPhone 用 Face ID，Android 用指纹，Mac 用触控 ID 或开机密码，Windows 用 PIN），之后直到退出或自动锁定都不用再验证。只有添加或踢出机器、修改授权、打开终端、更新这类关键操作才需要再刷一次。</p>
         <label className="flex items-center gap-2 text-[13px]">
           无操作后自动锁定
           <select className="border border-line bg-page rounded-[10px] px-2 py-1.5" value={after}
@@ -290,7 +290,7 @@ export function Security() {
             <li key={p.cred_id} className="flex gap-2"><Icon name="key" size={14} />{p.label || 'Passkey'}<span className="text-faint">{p.added ? new Date(p.added * 1000).toLocaleDateString('zh-CN') : ''}</span></li>
           ))}
         </ul>
-        <button className="btn small ghost justify-self-start" onClick={() => void run(addPasskey)}>为这台设备添加 Passkey</button>
+        <ThisDevice run={run} />
       </section>
 
       <ScopeEditor />
@@ -397,5 +397,28 @@ export function BrainOffline({ message }: { message: string }) {
         <button className="btn small ghost justify-self-start" onClick={lock}><Icon name="lock" size={15} />锁定</button>
       </div>
     </main>
+  )
+}
+
+/** This device's own passkey: unlock with Face ID / Touch ID / fingerprint / PIN, no phone. */
+function ThisDevice({ run }: { run: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const [, redraw] = useState(0)
+  const d = localDevice()
+  const r = roster()
+  const known = d && r?.user.passkeys.some((p) => p.cred_id === d.cred_id)
+  return (
+    <div className="grid gap-1.5 text-[13px]">
+      {known ? (
+        <>
+          <p className="m-0">这台设备直接用{verifyName()}解锁{d!.mode === 'device' ? '（设备密钥：这台设备的 Passkey 不支持 PRF，身份由只存在这个浏览器里的密钥加密，中继核对你的验证后才交出密文）' : ''}。</p>
+          <button className="btn small ghost justify-self-start" onClick={() => void run(async () => { await forgetThisDevice(); redraw((n) => n + 1) })}>不再让这台设备直接解锁</button>
+        </>
+      ) : (
+        <>
+          <p className="m-0 text-muted">这台设备还没有自己的 Passkey，解锁时可能要用手机扫码。添加后就用{verifyName()}解锁（需要再用已有的 Passkey 验证一次）。</p>
+          <button className="btn small ghost justify-self-start" onClick={() => void run(async () => { await addPasskey(); redraw((n) => n + 1) })}>让这台设备直接解锁</button>
+        </>
+      )}
+    </div>
   )
 }

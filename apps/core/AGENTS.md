@@ -19,6 +19,7 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 | build | go build -trimpath -o "$WOK_OUT/" ./cmd/... && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-relay" | go build -trimpath -o "$WOK_OUT/" ./cmd/... |
 | release-snapshot | goreleaser release --snapshot --clean | |
 | setup-signing | sh scripts/setup-macos-signing.sh | echo setup-signing is for macOS only |
+| build-windows | GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/windows-amd64/" ./cmd/sous | set GOOS=windows&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/windows-amd64/" ./cmd/sous |
 | build-relay-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay |
 
 ## Conventions
@@ -54,6 +55,10 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 - 模型提供方实现 `provider.Provider` 并在 `init()` 里 `provider.Register`。新增 kind 时补上用 `httptest` 模拟 SSE 的测试。
 - Hub 的配置（`internal/config`）：大脑用 `config.ForBrain`，读取机器上可选的 `~/.sous/brain.yaml`；`configs/hub.dev.yaml` 只剩 Hub 的包测试和历史参考在用。原来的说明：`configs/hub.dev.yaml` 默认用 OpenCode Go 订阅的 `deepseek-v4.1-flash`（`OPENCODE_API_KEY`），密钥从 `apps/core/.env` 读取（从 `.env.example` 复制，已被 git 忽略，绝不提交）。没有密钥时，把 `roles.supervisor` 改成 `mock/echo` 即可离线使用。`dev: true` 时开放仅限本机回环地址的 `POST /api/v1/auth/dev-login`，生产配置不要开启。
 - 数据目录 `.data/` 和 `bin/` 已被忽略，不要提交。
+- 快照（`internal/brain/snapshot.go`、`cdc.go`）：plain tar → 内容定义切块（gear 哈希，16 KB–256 KB，平均 64 KB）→ 每块 gzip 后用数据密钥封装，块名 `snapshot/c/<HMAC>`；清单 `v: 2` 带 `names`。只上传中继上还没有的块（`Brain.onRelay` 记着最新清单的块），上传后 `blob.keep` 只留最新两份清单的块。仍能恢复 alpha1 的双槽 tar.gz 快照。快照在独立 goroutine 里跑，不挡租约续期。
+- 设备密钥包（决策 0033，`internal/relay/devwrap.go`、`internal/tunnel/devwrap.go`）：中继只对名册里那把 Passkey 的新鲜断言交出 `devwrap`；挑战一次性，存在内存里。
+- 租约变化用“关闭再换新通道”广播（`nodeTrust.leaseMoved` / `leaseChanged`），不要再用单槽通道塞回去：alpha1 那样写，`linkConn.watch` 会反复读到自己塞回的信号，空转占满一个 CPU 核。
+- IPC `status` 带 `relay_url`、`page_url`（名册第一个页面地址）和 `brain`（`leading` / `standby`，`Daemon.SetBrainRole`），给桌面版的托盘用。
 - 运维命令：`sous trust status|reset`、`sous brain import <0.2 的 hub.db>`、`sous release keygen|sign`。
 - 本地试客户端：用 `--home` 指定一个临时目录，避免碰到 `~/.sous`。例如 `go run ./cmd/sous pair http://localhost:8787 <配对码> --home /tmp/sous-node`，然后 `go run ./cmd/sous daemon --home /tmp/sous-node`。在 `node.json` 的 `agents` 字段里可以覆盖某个 agent 的启动命令。
 - opencode 的权限靠 `internal/agents` 里的 `OPENCODE_CONFIG_CONTENT` 设成 `ask`，否则它不经 sous 的策略直接执行。在 `node.json` 里覆盖 opencode 的启动命令时，不要再设 `OPENCODE_CONFIG_CONTENT`（会把这些规则覆盖掉）；选模型用 `["env", "OPENCODE_CONFIG=<含 model 的 json 文件>", "opencode", "acp"]`。

@@ -66,12 +66,15 @@ func saveKeys(root string, s *trust.SignKey, k *trust.KEMKey) error {
 var ErrNeedsPairing = errors.New("这台机器还没有按 0.3 的方式配对：在页面上点“添加机器”，把配对串粘贴到 `sous pair <中继地址> <配对串>`")
 
 type nodeTrust struct {
-	d      *Daemon
-	c      *tunnel.Client
-	r      *tunnel.Router
-	rpc    *tunnel.RPCClient
-	audit  *auditLog
-	leases chan struct{}
+	d     *Daemon
+	c     *tunnel.Client
+	r     *tunnel.Router
+	rpc   *tunnel.RPCClient
+	audit *auditLog
+	// leaseCh is closed (and replaced) when the lease or roster changes,
+	// waking every waiter at once.
+	leaseMu sync.Mutex
+	leaseCh chan struct{}
 
 	mu         sync.Mutex
 	permits    map[string]trust.Permit // id -> unused permit
@@ -121,7 +124,7 @@ func (d *Daemon) openTrust() (Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	nt := &nodeTrust{d: d, leases: make(chan struct{}, 1), permits: map[string]trust.Permit{}, jobOwners: map[string]string{}, reqOwners: map[string]string{}}
+	nt := &nodeTrust{d: d, leaseCh: make(chan struct{}), permits: map[string]trust.Permit{}, jobOwners: map[string]string{}, reqOwners: map[string]string{}}
 	nt.audit, err = openAudit(filepath.Join(trustDir(d.root), "audit.log"))
 	if err != nil {
 		return nil, err
@@ -135,10 +138,7 @@ func (d *Daemon) openTrust() (Transport, error) {
 	tcfg := tunnel.Config{URL: cfg.RelayURL, Addr: trust.NodeAddr(cfg.NodeID), Sign: sign, KEM: kem, Identity: id, StateDir: trustDir(d.root),
 		OnDoc: func(name string) {
 			if name == "lease" || name == "roster" {
-				select {
-				case nt.leases <- struct{}{}:
-				default:
-				}
+				nt.leaseMoved()
 			}
 			if name == "roster" {
 				nt.rosterChanged()
@@ -213,6 +213,22 @@ func (nt *nodeTrust) rosterChanged() {
 	}
 }
 
+func (nt *nodeTrust) leaseChanged() <-chan struct{} {
+	nt.leaseMu.Lock()
+	defer nt.leaseMu.Unlock()
+	return nt.leaseCh
+}
+
+// leaseMoved wakes everyone waiting on leaseChanged. (It used to be a
+// one-slot channel that watch put back after reading, which then read its
+// own token again in a loop and kept a CPU core busy.)
+func (nt *nodeTrust) leaseMoved() {
+	nt.leaseMu.Lock()
+	close(nt.leaseCh)
+	nt.leaseCh = make(chan struct{})
+	nt.leaseMu.Unlock()
+}
+
 // brain waits for a live lease and returns its holder.
 func (nt *nodeTrust) brain(ctx context.Context) (string, int64, error) {
 	select {
@@ -221,13 +237,14 @@ func (nt *nodeTrust) brain(ctx context.Context) (string, int64, error) {
 		return "", 0, ctx.Err()
 	}
 	for {
+		changed := nt.leaseChanged()
 		if holder, term, ok := nt.c.Brain(); ok {
 			return holder, term, nil
 		}
 		select {
 		case <-ctx.Done():
 			return "", 0, ctx.Err()
-		case <-nt.leases:
+		case <-changed:
 		case <-time.After(3 * time.Second):
 		}
 	}
@@ -268,17 +285,14 @@ func (lc *linkConn) watch() {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
+		changed := lc.nt.leaseChanged()
 		select {
 		case <-lc.stop:
 			return
 		case <-lc.l.Done():
 			return
 		case <-t.C:
-		case <-lc.nt.leases:
-			select {
-			case lc.nt.leases <- struct{}{}: // let a waiting Dial see it too
-			default:
-			}
+		case <-changed:
 		}
 		holder, term, ok := lc.nt.c.Brain()
 		if !ok || holder != lc.holder || term != lc.term {

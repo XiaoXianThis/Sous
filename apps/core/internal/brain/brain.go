@@ -49,9 +49,13 @@ type Brain struct {
 	streams map[string]context.CancelFunc
 	snapSeq int64
 	lastEv  int64
-	kick    chan struct{}
-	runDone chan struct{}
-	noLease time.Time
+	// onRelay holds the snapshot chunk names known to be on the relay (the
+	// newest manifest's), so an upload sends only the chunks that changed.
+	onRelay   map[string]bool
+	snapNames []string
+	kick      chan struct{}
+	runDone   chan struct{}
+	noLease   time.Time
 }
 
 func (b *Brain) clearWait() {
@@ -106,6 +110,9 @@ func (b *Brain) Run(ctx context.Context) error {
 	snap := time.NewTicker(b.SnapshotEvery)
 	defer snap.Stop()
 	forced := time.Now()
+	// The snapshot uploads on its own goroutine: on a slow uplink it takes
+	// minutes, and the lease must keep renewing meanwhile.
+	snapping := make(chan struct{}, 1)
 	for {
 		b.step(ctx)
 		select {
@@ -115,15 +122,29 @@ func (b *Brain) Run(ctx context.Context) error {
 		case <-t.C:
 		case <-b.kick:
 		case <-snap.C:
-			if b.Leading() {
+			if b.Leading() && tryAcquire(snapping) {
 				force := time.Since(forced) > 10*time.Minute
-				if err := b.snapshot(ctx, force); err != nil {
-					slog.Warn("brain: snapshot failed", "err", err)
-				} else if force {
+				if force {
 					forced = time.Now()
 				}
+				go func() {
+					defer func() { <-snapping }()
+					if err := b.snapshot(ctx, force); err != nil {
+						slog.Warn("brain: snapshot failed", "err", err)
+					}
+				}()
 			}
 		}
+	}
+}
+
+// tryAcquire takes the one slot of sem, or reports that it is taken.
+func tryAcquire(sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -142,6 +163,20 @@ func (b *Brain) Kick() {
 }
 
 // Leading reports whether this machine holds the lease and runs the Hub.
+// Role is "leading" while this machine holds the lease, "standby" when the
+// roster names it a brain machine, and empty otherwise.
+func (b *Brain) Role() string {
+	if b.Leading() {
+		return "leading"
+	}
+	if r := b.C.Roster(); r != nil {
+		if n, ok := r.Node(b.NodeID); ok && n.Brain != nil && !n.Frozen {
+			return "standby"
+		}
+	}
+	return ""
+}
+
 func (b *Brain) Leading() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -16,6 +16,7 @@ func Attach(ctx context.Context, d *node.Daemon, root, nodeID string, opts ...fu
 	}
 	b := &Brain{Root: root, NodeID: nodeID, C: c, R: r}
 	d.SetBrainHooks(b.SessionMessage, b.MachineMessage)
+	d.SetBrainRole(b.Role)
 	d.OnTrustDoc(func(name string) {
 		switch name {
 		case "roster":

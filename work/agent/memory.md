@@ -20,3 +20,4 @@ Lessons learned by agents: pitfalls and proven approaches. Skim this before a la
 - 2026-11-04 Symptom: after rebuilding `build/web`, the workbench says "no such endpoint". Cause: a `sous-hub` started before the change is still running and serving the new web build. Fix: restart the Hub after changing core (`lsof -iTCP:8787 -sTCP:LISTEN` shows when it started).
 
 - 2026-11-04 Symptom: a test Hub on a "spare" port answers, but without your latest changes (and pairing into it writes into someone else's data). Cause: other agent sessions run their own scratch `sous-hub` on ports such as 8797 from their scratchpad. Fix: before using a port, `lsof -iTCP:<port> -sTCP:LISTEN` and check the process start time and `lsof -a -p <pid> -d cwd`; pick a free port for your own Hub.
+- 2026-11-13 Symptom: `sous daemon` 持续占满一个 CPU 核，页面变慢。Cause: 0.3.0-alpha1 的 `linkConn.watch` 读到租约信号后又塞回同一个单槽通道，下一轮又读到自己的信号。Fix: 用关闭再换新的通道广播（`nodeTrust.leaseMoved`）；排查 Go 进程空转先用 `sample <pid> 3` 看热点函数。

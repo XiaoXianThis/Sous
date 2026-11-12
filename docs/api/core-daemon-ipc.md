@@ -1,7 +1,7 @@
 # core-daemon-ipc：daemon ↔ 本机客户端
 
 - Provider: core（`sous daemon`，`internal/node/ipcserver.go`；协议在 `internal/ipc`）
-- Consumers: core（`sous chat`、`sous status`、`sous update`）、desktop（第二期）
+- Consumers: core（`sous chat`、`sous status`、`sous update`）、desktop（托盘状态、更新）
 - Status: 已实现（M4）。
 
 ## 传输
@@ -15,7 +15,7 @@
 
 | 方法 | 参数 | 返回 |
 |---|---|---|
-| `status` | — | `{version, node_id, name, hub_url, hub_connected, pending_frames, runs: [{run_id, task_id?, agent, purpose?, workdir?, paused?}], started_at}` |
+| `status` | — | `{version, node_id, name, hub_url, hub_connected, relay_url?, page_url?, brain?, pending_frames, runs: [{run_id, task_id?, agent, purpose?, workdir?, paused?}], started_at}`；`hub_connected` 在 0.3 表示和当前大脑的帧流是否连通，`page_url` 是名册里的第一个页面地址，`brain` 是 `leading`（本机持有租约，正在当大脑）、`standby`（名册里是大脑机器，没有持有租约）或不出现 |
 | `threads.list` | — | 同 Hub 的 `GET /threads` |
 | `threads.create` | `{title}` | 新线程 |
 | `messages.list` | `{thread_id, before?, limit?}` | 同 Hub 的 `GET /threads/{id}/messages`（含 `last_seq`） |

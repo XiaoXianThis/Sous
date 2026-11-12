@@ -50,6 +50,7 @@ type Server struct {
 	identity []byte
 	roster   *trust.Roster
 	usedAsrt map[string]time.Time
+	devNonce map[string]time.Time // devwrap challenges handed out, single use
 
 	// Tap sees every message the relay forwards. With Inject and InjectDoc
 	// it lets tests play a relay that lies (design §12); the sous-relay
@@ -89,13 +90,14 @@ func Open(dir string) (*Server, error) {
 		`CREATE TABLE IF NOT EXISTS mailbox (id INTEGER PRIMARY KEY AUTOINCREMENT, to_addr TEXT NOT NULL, from_addr TEXT NOT NULL, data BLOB NOT NULL, created INTEGER NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS mailbox_to ON mailbox(to_addr, id)`,
 		`CREATE TABLE IF NOT EXISTS blobs (name TEXT PRIMARY KEY, data BLOB NOT NULL, updated INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS devwraps (cred TEXT PRIMARY KEY, body BLOB NOT NULL, updated INTEGER NOT NULL)`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			db.Close()
 			return nil, err
 		}
 	}
-	s := &Server{db: db, Now: time.Now, conns: map[string][]*conn{}, rooms: map[string]*room{}, usedAsrt: map[string]time.Time{}}
+	s := &Server{db: db, Now: time.Now, conns: map[string][]*conn{}, rooms: map[string]*room{}, usedAsrt: map[string]time.Time{}, devNonce: map[string]time.Time{}}
 	var id []byte
 	if err := db.QueryRow(`SELECT v FROM meta WHERE k = 'identity'`).Scan(&id); err == nil {
 		s.identity = id
@@ -385,6 +387,10 @@ func (s *Server) handle(c *conn, f frame) error {
 			if f.Name != "identity" {
 				return errors.New("未认证的连接只能读取身份包")
 			}
+		case "devwrap.challenge":
+			return s.devwrapChallenge(c, f)
+		case "devwrap.get":
+			return s.devwrapGet(c, f)
 		case "room.join", "room.send":
 		default:
 			return errors.New("请先认证")
@@ -415,6 +421,10 @@ func (s *Server) handle(c *conn, f frame) error {
 		c.send(frame{T: "ok", RID: f.RID})
 	case "blob.put":
 		return s.blobPut(c, f)
+	case "devwrap.put":
+		return s.devwrapPut(c, f)
+	case "blob.keep":
+		return s.blobKeep(c, f)
 	case "blob.get":
 		var data []byte
 		err := s.db.QueryRow(`SELECT data FROM blobs WHERE name = ?`, f.Name).Scan(&data)
@@ -572,6 +582,44 @@ func (s *Server) blobPut(c *conn, f frame) error {
 	}
 	if _, err := s.db.Exec(`INSERT INTO blobs(name, data, updated) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET data = excluded.data, updated = excluded.updated`,
 		f.Name, data, s.Now().Unix()); err != nil {
+		return err
+	}
+	c.send(frame{T: "ok", RID: f.RID})
+	return nil
+}
+
+// blobKeep drops the snapshot chunks no manifest still needs.
+func (s *Server) blobKeep(c *conn, f frame) error {
+	if f.Name != "snapshot/" {
+		return errors.New("只能清理快照块")
+	}
+	if !s.isHolder(c.addr) {
+		return errors.New("只有持有租约的大脑能清理快照")
+	}
+	var keep []string
+	if err := json.Unmarshal(f.Body, &keep); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS keep_blobs (name TEXT PRIMARY KEY)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM keep_blobs`); err != nil {
+		return err
+	}
+	for _, n := range keep {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO keep_blobs(name) VALUES (?)`, n); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM blobs WHERE name LIKE 'snapshot/%' AND name NOT IN (SELECT name FROM keep_blobs)`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	c.send(frame{T: "ok", RID: f.RID})

@@ -20,6 +20,7 @@
 ## 规则
 
 - **只转发安全的请求头**：`Content-Type`、`Accept`、`If-Match`、`If-None-Match`、`Last-Event-ID`。不使用 Cookie，也不做 CSRF 校验。
+- **大回复压缩**：调用方在 RPC `header` 中声明 `X-Sous-Accept-Encoding: gzip` 时，大脑可压缩 8 KB 以上且压缩后更小的回复。回复 `header` 带 `X-Sous-Content-Encoding: gzip`，`body` 为 gzip 字节的 base64url；调用方先解码再解压。未声明的客户端仍收原格式。这两个头只用于隧道，不转入 Hub。
 - **已经去掉的路由**，访问时返回 410：配对码、`DELETE /nodes/{id}`、`/node/pair`、`/auth/*`。机器的加入和移除改走名册。
 - **机器只能调用设备接口** `/api/v1/device/*`，访问其他路径返回 403。设备身份就是那台机器本身。
 - **机器的终端对话默认按名册限制**：名册里 `console` 为假（大脑机器除外）时，机器只能 `POST /notes`、`GET /approvals`（只返回本机 Run 的审批）、`POST /approvals/{id}/decide`（只限本机 Run 的审批）；对话、消息和事件流返回 403 `console_closed`。打开 `console` 是关键操作。
