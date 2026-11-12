@@ -2,12 +2,10 @@ package node
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/coder/websocket"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/policy"
@@ -32,7 +28,7 @@ const (
 )
 
 // ErrRevoked means the Hub no longer accepts this machine's token.
-var ErrRevoked = errors.New("the Hub rejected this machine's token; pair it again")
+var ErrRevoked = errors.New("这台机器已被踢出（或不再被接受），要再用请重新配对")
 
 type Daemon struct {
 	root string
@@ -58,6 +54,9 @@ type Daemon struct {
 
 	// connected is signalled when a session is established (tests use it).
 	connected chan struct{}
+
+	tr    Transport  // how the brain is reached (transport.go)
+	trust *nodeTrust // the zero-trust side: tunnel, guard, audit (trustnode.go)
 
 	// OnUpdated is called after a new version replaced the executable; it
 	// should restart the daemon (see cmd/sous). Nil: just log it.
@@ -171,6 +170,14 @@ func (d *Daemon) pol() *policy.Policy {
 
 // Run keeps a connection to the Hub until ctx ends, reconnecting with backoff.
 func (d *Daemon) Run(ctx context.Context) error {
+	defer func() {
+		d.mu.Lock()
+		nt := d.trust
+		d.mu.Unlock()
+		if nt != nil && nt.cancel != nil {
+			nt.cancel() // leave the relay too
+		}
+	}()
 	backoff := time.Second
 	for {
 		start := time.Now()
@@ -188,7 +195,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if time.Since(start) > time.Minute {
 			backoff = time.Second
 		}
-		slog.Warn("daemon: disconnected from Hub", "err", err, "retry_in", backoff)
+		slog.Warn("daemon: disconnected from the brain", "err", err, "retry_in", backoff)
 		select {
 		case <-ctx.Done():
 			d.stopAll(true)
@@ -201,30 +208,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 func (d *Daemon) session(ctx context.Context) error {
-	hdr := http.Header{}
 	cfg := d.conf()
-	hdr.Set("Authorization", "Bearer "+cfg.Token)
-	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	ws, resp, err := websocket.Dial(dialCtx, wsURL(cfg.HubURL), &websocket.DialOptions{HTTPHeader: hdr})
-	cancel()
+	t, err := d.transport()
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return ErrRevoked
-		}
 		return err
 	}
-	defer ws.CloseNow()
-	ws.SetReadLimit(maxFrameBytes)
+	ws, err := t.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer ws.Close()
 
 	host, _ := os.Hostname()
-	if err := writeFrame(ctx, ws, proto.New(proto.THello, proto.Hello{
+	if err := ws.Write(ctx, proto.New(proto.THello, proto.Hello{
 		Version: version.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Hostname: host,
 		Caps: []string{proto.CapAdmin}, Admin: cfg.AdminEnabled(), Addrs: ownAddrs(),
 	})); err != nil {
 		return err
 	}
 	wctx, done := context.WithTimeout(ctx, welcomeTimeout)
-	f, err := readFrame(wctx, ws)
+	f, err := ws.Read(wctx)
 	done()
 	if err != nil {
 		return fmt.Errorf("waiting for welcome: %w", err)
@@ -245,16 +248,19 @@ func (d *Daemon) session(ctx context.Context) error {
 	go d.inventoryLoop(sctx)
 	go d.reposLoop(sctx)
 	go d.fetchLoop(sctx)
-	slog.Info("daemon: connected to Hub", "hub", cfg.HubURL, "node", welcome.NodeID, "pending", d.ob.pendingCount())
+	slog.Info("daemon: connected to the brain", "via", t.Name(), "node", welcome.NodeID, "pending", d.ob.pendingCount())
 	select {
 	case d.connected <- struct{}{}:
 	default:
 	}
 
 	for {
-		f, err := readFrame(sctx, ws)
+		f, err := ws.Read(sctx)
 		if err != nil {
 			return err
+		}
+		if !d.allow(sctx, f) {
+			continue
 		}
 		d.handle(sctx, f)
 	}
@@ -262,36 +268,20 @@ func (d *Daemon) session(ctx context.Context) error {
 
 const maxFrameBytes = 4 << 20
 
-func (d *Daemon) writer(ctx context.Context, ws *websocket.Conn, epoch int, fail func()) {
+func (d *Daemon) writer(ctx context.Context, ws FrameConn, epoch int, fail func()) {
 	for {
 		f, ok := d.ob.next(ctx, epoch)
 		if !ok {
 			return
 		}
-		if err := writeFrame(ctx, ws, f); err != nil {
+		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := ws.Write(wctx, f)
+		cancel()
+		if err != nil {
 			fail()
 			return
 		}
 	}
-}
-
-func writeFrame(ctx context.Context, ws *websocket.Conn, f proto.Frame) error {
-	raw, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	return ws.Write(ctx, websocket.MessageText, raw)
-}
-
-func readFrame(ctx context.Context, ws *websocket.Conn) (proto.Frame, error) {
-	var f proto.Frame
-	_, raw, err := ws.Read(ctx)
-	if err != nil {
-		return f, err
-	}
-	return f, json.Unmarshal(raw, &f)
 }
 
 func (d *Daemon) inventoryLoop(ctx context.Context) {

@@ -189,13 +189,15 @@ func (c Client) Install(ctx context.Context, tag, exe string) (string, error) {
 		return "", err
 	}
 	name := AssetName("sous", rel.Tag, runtime.GOOS, runtime.GOARCH)
-	var archive, sums Asset
+	var archive, sums, sig Asset
 	for _, a := range rel.Assets {
 		switch a.Name {
 		case name:
 			archive = a
 		case "checksums.txt":
 			sums = a
+		case SigAsset:
+			sig = a
 		}
 	}
 	if archive.URL == "" {
@@ -210,6 +212,18 @@ func (c Client) Install(ctx context.Context, tag, exe string) (string, error) {
 	}
 	sumsData, err := c.download(ctx, sums.URL)
 	if err != nil {
+		return "", err
+	}
+	// The release signature first: checksums.txt is only worth something
+	// when the author's offline key signed it.
+	if sig.URL == "" {
+		return "", fmt.Errorf("版本 %s 没有发布签名（%s），不安装", rel.Tag, SigAsset)
+	}
+	sigData, err := c.download(ctx, sig.URL)
+	if err != nil {
+		return "", err
+	}
+	if err := VerifyRelease(rel.Tag, sumsData, sigData); err != nil {
 		return "", err
 	}
 	if err := verify(data, name, string(sumsData)); err != nil {

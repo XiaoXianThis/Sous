@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
 	"log/slog"
 	"net/http"
 	"os"
@@ -62,15 +63,26 @@ func (r runRef) stamp(ev event.Event, runID string) event.Event {
 // ServeNode handles GET /node: a daemon's connection, authenticated by its
 // device token in the Authorization header.
 func (h *Hub) ServeNode(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
-		http.Error(w, "missing device token", http.StatusUnauthorized)
-		return
-	}
-	node, err := h.log.Store.NodeByToken(r.Context(), hashToken(token))
-	if err != nil {
-		http.Error(w, "unknown or revoked device token", http.StatusUnauthorized)
-		return
+	var node store.Node
+	var err error
+	if t, ok := auth.TunnelOf(r.Context()); ok && t.Device != "" {
+		// The brain's link from a machine it verified through the relay.
+		node, err = h.log.Store.Node(r.Context(), t.Device)
+		if err != nil || node.Revoked {
+			http.Error(w, "unknown machine", http.StatusUnauthorized)
+			return
+		}
+	} else {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			http.Error(w, "missing device token", http.StatusUnauthorized)
+			return
+		}
+		node, err = h.log.Store.NodeByToken(r.Context(), hashToken(token))
+		if err != nil {
+			http.Error(w, "unknown or revoked device token", http.StatusUnauthorized)
+			return
+		}
 	}
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {

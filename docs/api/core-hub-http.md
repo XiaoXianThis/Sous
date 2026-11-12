@@ -1,6 +1,8 @@
 # core-hub-http：Hub ↔ 客户端（PWA、desktop）
 
-- Provider: core（`sous-hub`）
+> 0.3（决策 0030）：这些接口由大脑机器上的大脑提供，只能经由加密通道访问（`core-brain-rpc.md`），不再有 Cookie、CSRF、Passkey 登录和配对码。下面“认证”“近期登录”两条已被 `core-brain-rpc.md` 的规则取代，其余语义不变。
+
+- Provider: core（大脑，`internal/hub` 运行在 `internal/brain` 里）
 - Consumers: web、desktop
 - Status: 已实现（M2 起，M3–M5 陆续增补），以代码为准；没有单独的 OpenAPI 描述。
 

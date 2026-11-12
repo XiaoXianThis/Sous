@@ -1,3 +1,4 @@
+import { BrainSocket } from '../trust/rpc'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import type { SysGraph, SysRecord, SysTick } from './types'
@@ -26,7 +27,7 @@ export function useSystemData() {
 
   useEffect(() => {
     let stopped = false
-    let ws: WebSocket | undefined
+    let ws: BrainSocket | undefined
     let retry: ReturnType<typeof setTimeout> | undefined
     const history = async () => {
       try {
@@ -38,7 +39,7 @@ export function useSystemData() {
     }
     const connect = () => {
       if (stopped) return
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/system/stream`)
+      ws = new BrainSocket('/api/v1/system/stream')
       ws.onopen = () => {
         setConnected(true)
         void history()

@@ -31,50 +31,62 @@ export interface ProviderInput {
   models?: string[]
 }
 
+import { fromUtf8, utf8 } from '../trust/bytes'
+import { nodeAddr } from '../trust/docs'
+import { rpc, rpcJSON } from '../trust/rpc'
+import { ask, intentHeaders, permit } from '../trust/vault'
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message)
   }
 }
 
-function csrf(): string {
-  const m = document.cookie.match(/(?:^|;\s*)sous_csrf=([^;]+)/)
-  return m ? decodeURIComponent(m[1]) : ''
-}
-
+// Every request goes to the brain through the relay, end-to-end encrypted
+// (decision 0030): there is no cookie and no HTTP API on any server.
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {}
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
-  if (method !== 'GET') headers['X-CSRF-Token'] = csrf()
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: 'same-origin',
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new ApiError(res.status, data?.error?.code ?? 'http', data?.error?.message ?? `HTTP ${res.status}`)
+  let res = await rpcJSON<{ error?: { code?: string; message?: string } }>(method, path, body)
+  if (res.status === 401 && res.json?.error?.code === 'reauth') {
+    // A critical request to the brain itself: the user approves exactly this
+    // request with Face ID, and the brain checks that approval.
+    const raw = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body))
+    const headers = await intentHeaders(method, path, raw)
+    res = await rpcJSON(method, path, body, headers)
   }
-  return data as T
+  if (res.status >= 300) {
+    const e = res.json?.error
+    throw new ApiError(res.status, e?.code ?? 'http', e?.message ?? `HTTP ${res.status}`)
+  }
+  return res.json as T
 }
 
 async function upload(file: Blob, name: string): Promise<Attachment> {
-  const res = await fetch(`/api/v1/attachments?name=${encodeURIComponent(name)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream', 'X-CSRF-Token': csrf() },
-    body: file,
-    credentials: 'same-origin',
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new ApiError(res.status, data?.error?.code ?? 'http', data?.error?.message ?? `HTTP ${res.status}`)
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const res = await rpc('POST', `/api/v1/attachments?name=${encodeURIComponent(name)}`, bytes, { 'Content-Type': 'application/octet-stream' })
+  const data = JSON.parse(fromUtf8(res.body) || '{}')
+  if (res.status >= 300) throw new ApiError(res.status, data?.error?.code ?? 'http', data?.error?.message ?? `HTTP ${res.status}`)
   return data as Attachment
+}
+
+/**
+ * Machine-level critical operations (design §5.3): first a permit with the
+ * user's Face ID goes straight to the machine, then the brain may ask it.
+ * The machine checks the permit; the brain cannot forge one.
+ */
+async function withPermit<T>(nodeId: string, match: Record<string, string>, call: () => Promise<T>): Promise<T> {
+  await permit(nodeId, match.op ? 'admin' : 'update', match, true)
+  return call()
+}
+
+/** Typing into a terminal goes from this session straight to the machine. */
+async function jobDirect(nodeId: string, k: 'job.input' | 'job.resize', args: Record<string, unknown>) {
+  const res = await ask(nodeAddr(nodeId), { k, ...args }, k + '.res')
+  if (res.ok !== true) throw new ApiError(400, 'job', (res.error as string) || '机器拒绝了输入')
+  return { ok: true }
 }
 
 export const api = {
   me: () => request<Me>('GET', '/api/v1/me'),
-  devLogin: () => request<{ ok: boolean }>('POST', '/api/v1/auth/dev-login'),
-  logout: () => request<{ ok: boolean }>('POST', '/api/v1/auth/logout'),
   threads: (projectId = '') =>
     request<{ threads: Thread[] }>('GET', `/api/v1/threads${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),
   thread: (id: string) => request<Thread>('GET', `/api/v1/threads/${id}`),
@@ -103,15 +115,13 @@ export const api = {
     request<Memory>('PUT', `/api/v1/memories/${id}`, { kind, content }),
   deleteMemory: (id: string) => request<{ ok: boolean }>('DELETE', `/api/v1/memories/${id}`),
   nodes: () => request<{ nodes: Node[] }>('GET', '/api/v1/nodes'),
-  pairingCode: () => request<{ code: string; expires_at: number }>('POST', '/api/v1/nodes/pairing-code'),
   renameNode: (id: string, name: string) => request<Node>('PATCH', `/api/v1/nodes/${id}`, { name }),
-  removeNode: (id: string) => request<{ ok: boolean }>('DELETE', `/api/v1/nodes/${id}`),
   runs: (threadId: string) => request<{ runs: Run[] }>('GET', `/api/v1/runs?thread_id=${encodeURIComponent(threadId)}`),
   run: (id: string) => request<{ run: Run; events: HubEvent[]; approvals: Approval[] }>('GET', `/api/v1/runs/${id}`),
   runText: async (id: string, what: 'log' | 'diff') => {
-    const res = await fetch(`/api/v1/runs/${id}/${what}`, { credentials: 'same-origin' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.text()
+    const res = await rpc('GET', `/api/v1/runs/${id}/${what}`)
+    if (res.status >= 300) throw new Error(`HTTP ${res.status}`)
+    return fromUtf8(res.body)
   },
   cancelRun: (id: string) => request<{ ok: boolean }>('POST', `/api/v1/runs/${id}/cancel`),
   messageRun: (id: string, text: string) => request<{ ok: boolean }>('POST', `/api/v1/runs/${id}/message`, { text }),
@@ -153,22 +163,27 @@ export const api = {
   usage: (days: number, tz: string) =>
     request<Usage>('GET', `/api/v1/usage?${new URLSearchParams({ days: String(days), tz })}`),
   updates: (refresh = false) => request<Updates>('GET', `/api/v1/updates${refresh ? '?refresh=1' : ''}`),
-  updateNode: (id: string, version = '') => request<{ version: string }>('POST', `/api/v1/nodes/${id}/update`, { version }),
+  /** Installing an update is critical: the machine wants Face ID for that exact version. */
+  updateNode: async (id: string, version: string) => {
+    await permit(id, 'update', { version }, true)
+    return request<{ version: string }>('POST', `/api/v1/nodes/${id}/update`, { version })
+  },
   detectAgents: (id: string) => request<{ agents: AgentInfo[] }>('POST', `/api/v1/nodes/${id}/agents/detect`),
   probeAgent: (id: string, agent: string) =>
     request<{ options: ConfigOption[] | null; at: number }>('POST', `/api/v1/nodes/${id}/agents/${agent}/probe`),
   agentJob: (id: string, agent: string, what: 'install' | 'login' | 'logout', size: { cols: number; rows: number }, upgrade = false) =>
-    request<JobStarted>('POST', `/api/v1/nodes/${id}/agents/${agent}/${what}`, { ...size, upgrade }),
+    withPermit(id, { op: `agents.${what}`, agent }, () =>
+      request<JobStarted>('POST', `/api/v1/nodes/${id}/agents/${agent}/${what}`, { ...size, upgrade })),
   setAgentDisabled: (id: string, agent: string, disabled: boolean) =>
     request<AgentInfo>('POST', `/api/v1/nodes/${id}/agents/${agent}/disabled`, { disabled }),
   setAgentDefaults: (id: string, agent: string, options: Record<string, string>) =>
     request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/defaults`, { options }),
   setAgentEnv: (id: string, agent: string, name: string, value: string) =>
-    request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/env`, { name, value }),
+    withPermit(id, { op: 'agents.set_env', agent, name }, () =>
+      request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/env`, { name, value })),
   jobTail: (id: string, job: string) => request<JobTail>('GET', `/api/v1/nodes/${id}/jobs/${job}`),
-  jobInput: (id: string, job: string, data: string) => request<{ ok: boolean }>('POST', `/api/v1/nodes/${id}/jobs/${job}/input`, { data }),
-  jobResize: (id: string, job: string, cols: number, rows: number) =>
-    request<{ ok: boolean }>('POST', `/api/v1/nodes/${id}/jobs/${job}/resize`, { cols, rows }),
+  jobInput: (id: string, job: string, data: string) => jobDirect(id, 'job.input', { job_id: job, data }),
+  jobResize: (id: string, job: string, cols: number, rows: number) => jobDirect(id, 'job.resize', { job_id: job, cols, rows }),
   jobCancel: (id: string, job: string) => request<{ ok: boolean }>('POST', `/api/v1/nodes/${id}/jobs/${job}/cancel`),
   /** Fetch the project's checkouts now and look for a new deploy commit. */
   checkDeploy: (projectId: string) =>
@@ -194,12 +209,14 @@ export const api = {
   putRoles: (roles: Record<string, { provider_id: string; model: string; effort?: string; context_window?: number } | null>) =>
     request<ModelsView>('PUT', '/api/v1/models/roles', roles),
   shells: (projectId: string) => request<{ shells: Shell[] }>('GET', `/api/v1/projects/${projectId}/shells`),
-  /** Needs a recent passkey login: fails with code "reauth" otherwise. */
+  /** Opening a terminal is critical: Face ID, checked by the machine. */
   openShell: (projectId: string, nodeId: string, cols: number, rows: number) =>
-    request<{ node_id: string; job_id: string; command: string; root: string }>('POST', `/api/v1/projects/${projectId}/shells`, { node_id: nodeId, cols, rows }),
+    withPermit(nodeId, { op: 'shell.open' }, () =>
+      request<{ node_id: string; job_id: string; command: string; root: string }>('POST', `/api/v1/projects/${projectId}/shells`, { node_id: nodeId, cols, rows })),
   readFile: (id: string, agent: string, file: string) => request<ConfigFile>('GET', `/api/v1/nodes/${id}/files/${agent}/${file}`),
   writeFile: (id: string, agent: string, file: string, content: string, base: string) =>
-    request<ConfigFile>('PUT', `/api/v1/nodes/${id}/files/${agent}/${file}`, { content, base_sha256: base }),
+    withPermit(id, { op: 'config.write', agent, file }, () =>
+      request<ConfigFile>('PUT', `/api/v1/nodes/${id}/files/${agent}/${file}`, { content, base_sha256: base })),
   /** Sends a message; without a topic it starts one (its id is the message id). */
   send: (threadId: string, content: string, context?: MessageContext, attachments?: string[], topicId = '') =>
     request<{ message_id: string; seq: number; topic_id: string }>('POST', `/api/v1/threads/${threadId}/messages`, {
@@ -246,9 +263,11 @@ export const api = {
   updatePersona: (id: string, p: Partial<Persona>) => request<Persona>('PATCH', `/api/v1/personas/${id}`, p),
   deletePersona: (id: string) => request<unknown>('DELETE', `/api/v1/personas/${id}`),
   repos: () => request<{ repos: RepoScan[] }>('GET', '/api/v1/repos'),
-  setRole: (id: string, role: 'dev' | 'server') => request<{ role: string }>('PUT', `/api/v1/nodes/${id}/role`, { role }),
+  setRole: (id: string, role: 'dev' | 'server') =>
+    withPermit(id, { op: 'node.set_role' }, () => request<{ role: string }>('PUT', `/api/v1/nodes/${id}/role`, { role })),
   setWorkspaces: (id: string, workspaces: string[]) =>
-    request<{ workspaces: string[]; repos: unknown[] }>('PUT', `/api/v1/nodes/${id}/workspaces`, { workspaces }),
+    withPermit(id, { op: 'node.set_workspaces' }, () =>
+      request<{ workspaces: string[]; repos: unknown[] }>('PUT', `/api/v1/nodes/${id}/workspaces`, { workspaces })),
   scanNode: (id: string) => request<{ workspaces: string[] }>('POST', `/api/v1/nodes/${id}/scan`),
   newProject: (b: { name: string; node_id?: string; layout?: 'wokspace' | 'plain'; owner?: string; private?: boolean; thread_id?: string }) =>
     request<{ project: Project; run: Run }>('POST', '/api/v1/projects/new', b),

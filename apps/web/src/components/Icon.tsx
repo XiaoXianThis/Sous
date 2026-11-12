@@ -13,6 +13,7 @@ import {
   RefreshIcon, Rocket01Icon, Search01Icon, ServerIcon, Settings02Icon, Shield01Icon, SidebarRightIcon,
   SparklesIcon, StopIcon, Sun03Icon, Target02Icon, TextAlignLeftIcon, Tick02Icon, UserIcon, UserMultipleIcon,
   ViewIcon,
+  LockIcon,
 } from '@hugeicons/core-free-icons'
 
 const icons: Record<string, IconSvgElement> = {
@@ -88,6 +89,7 @@ const icons: Record<string, IconSvgElement> = {
   shield: Shield01Icon,
   key: Key01Icon,
   fingerprint: FingerPrintIcon,
+  lock: LockIcon,
   download: Download01Icon,
   pulse: Activity01Icon,
   sun: Sun03Icon,

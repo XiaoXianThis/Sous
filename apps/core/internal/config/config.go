@@ -310,3 +310,38 @@ type ApprovalPolicy struct {
 	AllowMedium       bool `yaml:"allow_medium"`
 	MaxAIAllowsPerRun int  `yaml:"max_ai_allows_per_run"`
 }
+
+// ForBrain is the Hub config of a brain machine (decision 0031): its data
+// lives in dataDir, there is no listener, and file (brain.yaml next to
+// node.json, optional) may set models, web search, MCP and the like.
+// publicURL is the page's origin (push notifications name it).
+func ForBrain(dataDir, publicURL, file string) (*Hub, error) {
+	c := &Hub{}
+	base := filepath.Dir(dataDir)
+	if file != "" {
+		raw, err := os.ReadFile(file)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err == nil {
+			if err := yaml.Unmarshal(raw, c); err != nil {
+				return nil, fmt.Errorf("%s: %w", file, err)
+			}
+			base = filepath.Dir(file)
+		}
+	}
+	c.DataDir, c.Listen, c.WebDir, c.TLSCert, c.TLSKey, c.Dev = dataDir, "127.0.0.1:0", "", "", "", false
+	if publicURL != "" {
+		c.PublicURL = publicURL
+	}
+	c.applyDefaults(base)
+	if c.EnvFile != "" {
+		if err := loadEnvFile(c.EnvFile); err != nil {
+			return nil, fmt.Errorf("env_file: %w", err)
+		}
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}

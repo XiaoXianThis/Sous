@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import Usage from './Usage'
 import SystemList from './SystemList'
 import Versions from './Versions'
+import { Security } from './Trust'
 
 // group is for the phone's grouped list, after iOS Settings.
 const tabs = [
@@ -28,6 +29,7 @@ const tabs = [
   { key: 'system', text: '系统状态', icon: 'system', group: 1 },
   { key: 'settings', text: '通知与默认', icon: 'bell', group: 2 },
   { key: 'appearance', text: '外观', icon: 'moon', group: 2 },
+  { key: 'security', text: '安全', icon: 'shield', group: 3 },
   { key: 'account', text: '账号', icon: 'key', group: 3 },
 ]
 const statusText = { connecting: '连接中', online: '已连接', offline: '离线，正在重连' }
@@ -120,6 +122,8 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
       <Settings onClose={close} />
     ) : key === 'appearance' ? (
       <Appearance />
+    ) : key === 'security' ? (
+      <Security />
     ) : (
       <div className="card p-4 grid gap-4 justify-items-start">
         <div className="flex items-center gap-3">
@@ -133,7 +137,7 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
           </div>
         </div>
         <Versions />
-        <button className="btn ghost hover:!text-danger" onClick={onLogout}><Icon name="logout" size={15} />退出登录</button>
+        <button className="btn ghost hover:!text-danger" onClick={onLogout}><Icon name="lock" size={15} />锁定</button>
       </div>
     )
   )

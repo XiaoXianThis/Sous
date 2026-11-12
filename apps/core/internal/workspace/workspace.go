@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -172,12 +173,30 @@ func startPoint(ctx context.Context, top string, st Start) (base, note string, e
 	return base, note, nil
 }
 
-// Fetch updates the remote-tracking branches of origin without asking for
-// credentials: a prompt would hang the run.
+// Fetch updates origin using the user's credential helpers. Terminal prompts
+// are disabled, but helpers can still show OS authorization dialogs.
 func Fetch(ctx context.Context, top string) (string, error) {
+	return fetch(ctx, top, false)
+}
+
+// FetchBackground updates origin without invoking credential helpers on macOS:
+// osxkeychain can show authorization dialogs even with GIT_TERMINAL_PROMPT=0.
+// Private HTTPS repositories requiring a helper must be synced explicitly.
+func FetchBackground(ctx context.Context, top string) (string, error) {
+	return fetch(ctx, top, runtime.GOOS == "darwin")
+}
+
+func fetch(ctx context.Context, top string, disableHelpers bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", top, "fetch", "--prune", "--quiet", "origin")
+	args := []string{"-C", top}
+	if disableHelpers {
+		// An empty helper resets the inherited list, including URL-scoped
+		// helpers. These overrides apply only to this command.
+		args = append(args, "-c", "credential.helper=")
+	}
+	args = append(args, "fetch", "--prune", "--quiet", "origin")
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = noPrompt()
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {

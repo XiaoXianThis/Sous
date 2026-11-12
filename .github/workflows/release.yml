@@ -1,8 +1,12 @@
 name: release
 # Pushing a tag such as v0.1.0 tests everything, builds the PWA, and
-# publishes sous (Windows, macOS, Linux) and sous-hub (Linux) to GitHub
+# publishes sous (Windows, macOS, Linux) and sous-relay (Linux) to GitHub
 # Releases with goreleaser (apps/core/.goreleaser.yaml). Daemons update
-# themselves from these releases (internal/update).
+# themselves from these releases (internal/update), but only after the author
+# signed checksums.txt locally with the offline release key (decision 0030):
+#   sous release sign --key ~/.config/sous/release-key.json --tag vX.Y.Z checksums.txt
+#   gh release upload vX.Y.Z checksums.txt.sig
+# CI never holds that key.
 #
 # The job runs on macOS so the darwin binaries can be signed with the fixed
 # self-signed identity "Sous Dev Signing" (decision 0026,

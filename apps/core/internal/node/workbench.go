@@ -366,7 +366,7 @@ func (d *Daemon) fetchLoop(ctx context.Context) {
 				if r.Remote == "" || ctx.Err() != nil {
 					continue
 				}
-				if _, err := workspace.Fetch(ctx, r.Path); err == nil {
+				if _, err := workspace.FetchBackground(ctx, r.Path); err == nil {
 					fetched++
 				}
 			}

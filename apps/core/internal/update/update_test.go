@@ -1,6 +1,8 @@
 package update
 
 import (
+	"time"
+
 	"archive/tar"
 	"archive/zip"
 	"bytes"
@@ -9,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/trust"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,17 +63,33 @@ func fakeGitHub(t *testing.T, binary []byte, corrupt bool) *httptest.Server {
 	if corrupt {
 		sums = strings.Repeat("0", 64) + "  " + name + "\n"
 	}
+	// Releases are signed with a test key standing in for the author's.
+	k, _ := trust.NewSignKey()
+	old := ReleaseKeys
+	ReleaseKeys = []string{trust.B64.EncodeToString(k.Public())}
+	t.Cleanup(func() { ReleaseKeys = old })
+	sig, _ := SignRelease(k, "v0.2.0", []byte(sums), time.Now().Unix())
+	if *signMode == "missing" {
+		sig = nil
+	} else if *signMode == "stranger" {
+		other, _ := trust.NewSignKey()
+		sig, _ = SignRelease(other, "v0.2.0", []byte(sums), time.Now().Unix())
+	}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/u/sous/releases/latest", "/repos/u/sous/releases/tags/v0.2.0":
-			json.NewEncoder(w).Encode(Release{Tag: "v0.2.0", Assets: []Asset{
-				{Name: name, URL: srv.URL + "/dl/" + name}, {Name: "checksums.txt", URL: srv.URL + "/dl/checksums.txt"},
-			}})
+			assets := []Asset{{Name: name, URL: srv.URL + "/dl/" + name}, {Name: "checksums.txt", URL: srv.URL + "/dl/checksums.txt"}}
+			if sig != nil {
+				assets = append(assets, Asset{Name: SigAsset, URL: srv.URL + "/dl/" + SigAsset})
+			}
+			json.NewEncoder(w).Encode(Release{Tag: "v0.2.0", Assets: assets})
 		case "/dl/" + name:
 			w.Write(archive.Bytes())
 		case "/dl/checksums.txt":
 			w.Write([]byte(sums))
+		case "/dl/" + SigAsset:
+			w.Write(sig)
 		default:
 			http.NotFound(w, r)
 		}
@@ -114,4 +133,22 @@ func TestNoRelease(t *testing.T) {
 	if _, err := (Client{Repo: "u/none", APIBase: srv.URL}).Release(context.Background(), ""); err != ErrNoRelease {
 		t.Fatalf("err: %v", err)
 	}
+}
+
+var signMode = new(string)
+
+func TestInstallRefusesUnsignedOrForeignReleases(t *testing.T) {
+	for _, mode := range []string{"missing", "stranger"} {
+		*signMode = mode
+		srv := fakeGitHub(t, []byte("evil binary"), false)
+		exe := filepath.Join(t.TempDir(), "sous")
+		os.WriteFile(exe, []byte("old binary"), 0o755)
+		if _, err := (Client{Repo: "u/sous", APIBase: srv.URL}).Install(context.Background(), "", exe); err == nil {
+			t.Fatalf("%s signature: installed anyway", mode)
+		}
+		if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+			t.Fatalf("%s signature: the executable was replaced", mode)
+		}
+	}
+	*signMode = ""
 }

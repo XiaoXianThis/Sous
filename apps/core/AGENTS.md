@@ -1,8 +1,8 @@
 # core
 
-- Purpose: sous 的 Go 核心。编译出两个二进制：`sous-hub`（服务端大脑，部署在 Linux 服务器）和 `sous`（客户端 daemon + 命令行，运行在 Windows / macOS / Linux）。
+- Purpose: sous 的 Go 核心。编译出两个二进制：`sous-relay`（服务器上的盲中继，决策 0030）和 `sous`（每台电脑上的 daemon + 命令行；被用户指定为大脑的电脑还在 daemon 里运行大脑，即 0.2 的 Hub，决策 0031）。
 - Stack: Go（版本见 `go.mod`），SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO），`coder/websocket`，`go-webauthn/webauthn`，`kardianos/service`（客户端的系统服务），`aymanbagabas/go-pty`（安装和登录用的伪终端，含 Windows ConPTY），`pelletier/go-toml/v2`（校验 TOML 配置文件），`mvdan.cc/sh/v3 v3.12.0`（只使用 syntax 解析，不执行 shell）。
-- Depends on: 运行时读取 `build/web/`（web 的构建产物）作为 PWA 静态文件。对外提供 `docs/api/core-hub-http.md`、`docs/api/core-hub-node.md`、`docs/api/core-daemon-ipc.md` 三份契约。
+- Depends on: none（0.3 起页面托管在 Vercel，不再由 core 托管）。对外提供 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`、`core-hub-node.md`、`core-daemon-ipc.md`。
 
 ## Tasks
 
@@ -11,18 +11,29 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 | task | command | windows |
 |---|---|---|
 | install | go mod download | |
-| dev | go build -trimpath -o bin/ ./cmd/sous-hub && SOUS_SIGN="${SOUS_SIGN:-auto}" sh scripts/sign-darwin.sh bin/sous-hub && exec bin/sous-hub -config configs/hub.dev.yaml | go run ./cmd/sous-hub -config configs/hub.dev.yaml |
+| dev | go run ./cmd/sous-relay serve -data .data/relay -listen 127.0.0.1:8788 -origin http://localhost:5173 | |
+| relay-init | go run ./cmd/sous-relay init -data .data/relay | |
 | test | go test ./... | |
 | vet | go vet ./... | |
 | fmt | gofmt -l -w . | |
-| build | go build -trimpath -o "$WOK_OUT/" ./cmd/... && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-hub" | go build -trimpath -o "$WOK_OUT/" ./cmd/... |
+| build | go build -trimpath -o "$WOK_OUT/" ./cmd/... && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-relay" | go build -trimpath -o "$WOK_OUT/" ./cmd/... |
 | release-snapshot | goreleaser release --snapshot --clean | |
 | setup-signing | sh scripts/setup-macos-signing.sh | echo setup-signing is for macOS only |
-| build-hub-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-hub |
+| build-relay-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay |
 
 ## Conventions
 
-- 结构：`cmd/sous-hub`（服务端）、`cmd/sous`（客户端：pair / daemon / status / agents / chat / update / service / unpair）是入口；业务代码都在 `internal/` 下：
+- 零信任（0.3，`docs/architecture/trust.md`，`work/specs/zero-trust`）：
+  - `internal/trust`：密钥（P-256 签名、X-Wing HPKE）、签名文档、名册、断言校验、通道、配对串、数据密钥。格式和页面的 `apps/web/src/trust` 逐字节一致，改动要同时改两边，并重新生成向量：`SOUS_WRITE_VECTORS=1 go test ./internal/trust -run Vectors` 和 `SOUS_WRITE_VECTORS=1 bun run test`（在 apps/web）。测试里用 `trust/trusttest` 的软件 Passkey。
+  - `internal/relay`（`cmd/sous-relay`）：盲中继。它的检查只是让诚实的中继保持整洁，接收方会再校验一遍。`Tap` / `Inject` / `InjectDoc` 只给测试扮演撒谎的中继用。
+  - `internal/tunnel`：机器连中继的客户端，负责文档校验和持久化（`trust/tunnel.json`，包括见过的通道 id）、通道、link（机器 ↔ 大脑的帧流）和 RPC；`tunnel/tunneltest` 用来在测试里起中继、扮演用户的页面（`World`、`PairPage`）。
+  - `internal/node`：`transport.go`（发行版只走中继；包内测试的 `legacy_transport_test.go` 直连进程内的 Hub）、`trustnode.go`（密钥、配对 `PairRelay`、会话发来的许可和终端输入、审计）、`guard.go`（检查大脑发来的每一帧，`ScopeError` 前缀）、`audit.go`。
+  - `internal/brain`：选主、租约、加密快照、在内存监听器上跑 Hub、RPC 和 link 的桥接；`Attach` 在每个 daemon 上运行，名册决定这台能不能当大脑。端到端测试：`e2e_test.go`（全流程和故障切换）、`adversary_test.go`（撒谎的中继）。
+  - `auth.Tunnel`：大脑放进请求 context 的来源（会话 SID、机器 Device、Fresh）。`RequireFresh` 在隧道模式下只认 Fresh。
+  - 更新必须带作者离线发布密钥的签名（`internal/update/release.go`，公钥在 `releasekey.go`）；`sous release keygen|sign` 在作者本机运行，私钥不进 CI。
+  - 本地试完整系统：`wok dev core` 起中继，`wok run core relay-init` 拿认领码，`wok dev web` 打开页面完成首次设置；然后 `go run ./cmd/sous pair --home <临时目录> http://127.0.0.1:8788 <配对串>` 和 `go run ./cmd/sous daemon --home <同一目录>`，大脑的模型可以写在 `<目录>/brain.yaml`（例如 `roles: {supervisor: mock/echo}`）。
+
+- 结构：`cmd/sous-relay`（服务器上的中继）、`cmd/sous`（客户端：pair / daemon / trust / brain / release / status / agents / chat / update / service / unpair）是入口；“Hub”的包（下面列的）现在运行在大脑机器的 daemon 里；业务代码都在 `internal/` 下：
   - Hub：event、store、eventlog、effects、provider、supervisor、prompts、tool、auth、httpapi、nodehub（机器、Run、审批、暂停、追加消息、归档、设备令牌接口）、task（任务引擎：状态、派发、按任务选的验收、审批 agent、中断后重试、git 操作、项目顾问、按部署分支自动部署、主管的任务工具、任务和项目接口）、router（选机器和 agent，纯函数）、notify（Web Push、通知设置）、trigger（定时任务、跟进、数据保留）、inspector（巡检 agent）、hub（组装）。
   - 客户端：node（daemon、持久化的发件箱、Run 执行和恢复、暂停、git 操作、顾问的空闲和恢复、IPC 服务、自更新）、policy（权限分类、模式表、底线规则）、agents（agent 注册表和检测）、acp（ACP 客户端）、workspace（worktree、就地任务的影子仓库快照、diff、commit / merge / push / PR / undo）、ipc（本地 JSON-RPC 的协议和客户端）。
   - Hub 的联网：web（网页抓取和搜索引擎，带内网防护）。
@@ -41,9 +52,9 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 - 唯一写入者：领域数据只能通过 `eventlog.Log` 写入（追加事件 + 投影视图 + 入队副作用，一个事务）。不要绕过它直接写 `events` 或视图表。
 - 事件表只追加。`migrations` 只能在末尾追加新版本；已发布的迁移不能修改。
 - 模型提供方实现 `provider.Provider` 并在 `init()` 里 `provider.Register`。新增 kind 时补上用 `httptest` 模拟 SSE 的测试。
-- 本地开发：`configs/hub.dev.yaml` 默认用 OpenCode Go 订阅的 `deepseek-v4.1-flash`（`OPENCODE_API_KEY`），密钥从 `apps/core/.env` 读取（从 `.env.example` 复制，已被 git 忽略，绝不提交）。没有密钥时，把 `roles.supervisor` 改成 `mock/echo` 即可离线使用。`dev: true` 时开放仅限本机回环地址的 `POST /api/v1/auth/dev-login`，生产配置不要开启。
+- Hub 的配置（`internal/config`）：大脑用 `config.ForBrain`，读取机器上可选的 `~/.sous/brain.yaml`；`configs/hub.dev.yaml` 只剩 Hub 的包测试和历史参考在用。原来的说明：`configs/hub.dev.yaml` 默认用 OpenCode Go 订阅的 `deepseek-v4.1-flash`（`OPENCODE_API_KEY`），密钥从 `apps/core/.env` 读取（从 `.env.example` 复制，已被 git 忽略，绝不提交）。没有密钥时，把 `roles.supervisor` 改成 `mock/echo` 即可离线使用。`dev: true` 时开放仅限本机回环地址的 `POST /api/v1/auth/dev-login`，生产配置不要开启。
 - 数据目录 `.data/` 和 `bin/` 已被忽略，不要提交。
-- 运维命令：`sous-hub admin passkey-reset [--revoke-all]`、`sous-hub admin backup <file>`。
+- 运维命令：`sous trust status|reset`、`sous brain import <0.2 的 hub.db>`、`sous release keygen|sign`。
 - 本地试客户端：用 `--home` 指定一个临时目录，避免碰到 `~/.sous`。例如 `go run ./cmd/sous pair http://localhost:8787 <配对码> --home /tmp/sous-node`，然后 `go run ./cmd/sous daemon --home /tmp/sous-node`。在 `node.json` 的 `agents` 字段里可以覆盖某个 agent 的启动命令。
 - opencode 的权限靠 `internal/agents` 里的 `OPENCODE_CONFIG_CONTENT` 设成 `ask`，否则它不经 sous 的策略直接执行。在 `node.json` 里覆盖 opencode 的启动命令时，不要再设 `OPENCODE_CONFIG_CONTENT`（会把这些规则覆盖掉）；选模型用 `["env", "OPENCODE_CONFIG=<含 model 的 json 文件>", "opencode", "acp"]`。
 - 发布：打 `v*` tag 触发 `.github/workflows/release.yml`（macOS runner，交叉编译全部目标），用 `.goreleaser.yaml` 构建并发布到 GitHub Releases；压缩包名必须是 `<二进制>_<版本>_<系统>_<架构>`，`internal/update` 按这个名字找安装包。本地先 `wok build web`，再 `wok run core release-snapshot` 试构建（产物在 `dist/`，已忽略；macOS 上会用本机身份给 darwin 产物签名）。

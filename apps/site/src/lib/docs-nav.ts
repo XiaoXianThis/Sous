@@ -47,7 +47,7 @@ export const DOC_GROUPS: DocGroupMeta[] = [
         title: '5 分钟跑起来：安装与部署 Hub',
         description: '安装二进制、本地快速启动或在 Linux 服务器上部署 sous-hub，打开网页并接入第一台电脑。',
         slug: 'getting-started',
-        repoPath: 'docs/guides/deploy-hub.md',
+        repoPath: 'docs/guides/deploy.md',
         stage: 1,
       },
       {

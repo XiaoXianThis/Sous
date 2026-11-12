@@ -126,6 +126,12 @@ func sameOptions(a, b []proto.ConfigOption) bool {
 // serve answers one request. It runs on its own goroutine.
 func (a *admin) serve(ctx context.Context, reqID string, req proto.NodeRequest) {
 	res, err := a.do(ctx, req)
+	a.d.mu.Lock()
+	nt := a.d.trust
+	a.d.mu.Unlock()
+	if nt != nil {
+		nt.jobStarted(reqID, res)
+	}
 	resp := proto.NodeResponse{ReqID: reqID, OK: err == nil}
 	if err != nil {
 		var ne *proto.NodeError

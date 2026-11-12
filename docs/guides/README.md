@@ -13,6 +13,6 @@ How-to guides for people: setting up a development environment, using, deploying
 
 | guide | for |
 |---|---|
-| [deploy-hub.md](deploy-hub.md) | 把 Hub 部署到 Linux 服务器，配置 HTTPS、Passkey 和备份 |
+| [deploy.md](deploy.md) | 部署 0.3：服务器上的中继、Vercel 上的页面、首次设置，从 0.2 迁移，发布签名 |
 | [connect-machine.md](connect-machine.md) | 在电脑上安装 sous 客户端、配对、注册成系统服务 |
 | [macos-signing-and-permissions.md](macos-signing-and-permissions.md) | macOS：用固定签名身份让文件访问授权跨重建有效，给 sous 开完全磁盘访问权限 |

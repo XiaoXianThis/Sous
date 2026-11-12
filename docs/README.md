@@ -8,15 +8,17 @@
 ## 文档索引
 
 - **使用与运维指南（[guides/README.md](guides/README.md)）**
-  - [部署 Hub](guides/deploy-hub.md)
+  - [部署（中继 + Vercel + 大脑机器）](guides/deploy.md)
   - [接入一台电脑或服务器](guides/connect-machine.md)
   - [macOS 签名与隐私权限](guides/macos-signing-and-permissions.md)
 - **系统架构（[architecture/README.md](architecture/README.md)）**
   - [工作台：项目、预设、任务和机器](architecture/workbench.md)
   - [主管的上下文](architecture/supervisor-context.md)
+  - [零信任：中继、大脑和机器](architecture/trust.md)
 - **架构决策记录（[decisions/README.md](decisions/README.md)）**
-  - ADR `0001`–`0027`（常驻架构、Hub/Node 边界、ACP 子 agent、权限模式、自动审批分层、长上下文、MCP、预设与主管闭环、话题等）
+  - ADR `0001`–`0031`（常驻架构、Hub/Node 边界、ACP 子 agent、权限模式、自动审批分层、长上下文、MCP、预设与主管闭环、话题、零信任与去中心化大脑等）
 - **应用间接口契约（[api/README.md](api/README.md)）**
+  - [core-relay.md](api/core-relay.md) · [sous-envelope.md](api/sous-envelope.md) · [core-brain-rpc.md](api/core-brain-rpc.md)
   - [core-hub-http.md](api/core-hub-http.md)
   - [core-hub-node.md](api/core-hub-node.md)
   - [core-daemon-ipc.md](api/core-daemon-ipc.md)

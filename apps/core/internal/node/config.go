@@ -18,11 +18,20 @@ import (
 // Config is ~/.sous/node.json. It holds the device token, so it is written
 // with mode 0600.
 type Config struct {
-	ApprovalInspectDisabled bool   `json:"approval_inspect_disabled,omitempty"`
-	HubURL                  string `json:"hub_url"` // https://agent.wxian.cc
-	NodeID                  string `json:"node_id"`
-	Name                    string `json:"name"`
-	Token                   string `json:"token"`
+	ApprovalInspectDisabled bool `json:"approval_inspect_disabled,omitempty"`
+	// 0.2 fields: a 0.3 daemon refuses to run with only these (pair again).
+	HubURL string `json:"hub_url,omitempty"`
+	Token  string `json:"token,omitempty"`
+
+	NodeID string `json:"node_id"`
+	Name   string `json:"name"`
+	// 0.3 (decision 0030): the relay, and the user's identity key pinned at
+	// pairing. The machine's own keys are in trust/keys.json.
+	RelayURL string `json:"relay_url,omitempty"`
+	Identity string `json:"identity,omitempty"`
+	// AllowOpen false refuses the open permission mode here even when the
+	// user's autonomy scope allows it. Only this file changes it.
+	AllowOpen *bool `json:"allow_open,omitempty"`
 	// Concurrency bounds how many runs execute at once (default 2).
 	Concurrency int `json:"concurrency,omitempty"`
 	// SousMCP overrides how sous's own MCP server for sub-agents starts
@@ -130,6 +139,9 @@ func ExpandPath(p string) string {
 }
 
 // AdminEnabled reports whether the Hub may administer this machine.
+// OpenAllowed reports whether this machine lets the open mode run at all.
+func (c Config) OpenAllowed() bool { return c.AllowOpen == nil || *c.AllowOpen }
+
 func (c Config) AdminEnabled() bool { return c.RemoteAdmin == nil || *c.RemoteAdmin }
 
 // ShellEnabled reports whether the page may open shells on this machine.
@@ -153,7 +165,7 @@ func Root() (string, error) {
 
 func configPath(root string) string { return filepath.Join(root, "node.json") }
 
-var ErrNotPaired = errors.New("this machine is not paired yet: run `sous pair <hub-url> <code>`")
+var ErrNotPaired = errors.New("这台机器还没有配对：在页面上点“添加机器”，再运行 `sous pair <中继地址> <配对串>`")
 
 // LoadConfig reads the config from root.
 func LoadConfig(root string) (Config, error) {
@@ -168,7 +180,9 @@ func LoadConfig(root string) (Config, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", configPath(root), err)
 	}
-	if c.HubURL == "" || c.NodeID == "" || c.Token == "" {
+	// 0.3 pairs through a relay; a 0.2 config (hub_url and token) still
+	// loads, and the daemon then asks for a new pairing (ErrNeedsPairing).
+	if c.NodeID == "" || (c.RelayURL == "" && (c.HubURL == "" || c.Token == "")) {
 		return Config{}, ErrNotPaired
 	}
 	if c.Concurrency <= 0 {

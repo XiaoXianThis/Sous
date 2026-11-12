@@ -3,9 +3,12 @@ title: "5 分钟跑起来：安装与部署 Hub"
 description: "安装 sous 二进制、在本地或 Linux 服务器上启动 sous-hub、打开网页注册 Passkey 并接入第一台电脑。"
 group: "getting-started"
 order: 2
-sourceDoc: "docs/guides/deploy-hub.md"
+sourceDoc: "docs/guides/deploy.md"
 updatedAt: "2026-11"
 ---
+
+> **0.3 起部署方式已改变**：服务器上运行 `sous-relay`（盲中继），页面部署到 Vercel，AI 运行在你指定的大脑机器上。以 [部署指南](https://github.com/XiaoXianThis/Sous/blob/main/docs/guides/deploy.md) 为准；本页下面关于 `sous-hub` 的内容适用于 0.2。
+
 
 本页带你用最快的方式把 `sous` 跑起来。你可以先在**同一台电脑上花 5 分钟完成本地体验**（路线 A），也可以直接在 **Linux 服务器上完成生产级 HTTPS 部署**（路线 B）。
 

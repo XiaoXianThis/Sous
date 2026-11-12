@@ -1,59 +1,60 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import Login from './components/Login'
+import { useCallback, useEffect, useState } from 'react'
 import Shell from './components/Shell'
+import { BrainOffline } from './components/Trust'
+import Unlock from './components/Unlock'
 import { api } from './lib/api'
 import { startSession, stopSession } from './lib/app'
-import type { Me } from './lib/types'
+import { BrainOffline as Offline } from './trust/rpc'
+import { isUnlocked, lock, useVault } from './trust/vault'
 
+/**
+ * Locked: the unlock screen, nothing else. Unlocked: talk to the brain
+ * through the relay; while no brain machine is online, the machine
+ * controls still work (decision 0031).
+ */
 export default function App() {
-  const [me, setMe] = useState<Me | null>(null)
+  useVault()
+  const unlocked = isUnlocked()
+  const [ready, setReady] = useState(false)
+  const [offline, setOffline] = useState('')
   const [error, setError] = useState('')
 
-  const refreshRef = useRef<() => Promise<void>>(async () => {})
-
-  const loggedOut = useCallback(() => {
-    stopSession()
-    void refreshRef.current()
-  }, [])
-
-  const refresh = useCallback(async () => {
+  const connect = useCallback(async () => {
     try {
       setError('')
-      const m = await api.me()
-      setMe(m)
-      if (m.logged_in) await startSession(loggedOut)
+      await api.me()
+      setOffline('')
+      await startSession(lock)
+      setReady(true)
     } catch (e) {
-      setError((e as Error).message)
+      if (!isUnlocked()) return
+      if (e instanceof Offline) setOffline((e as Error).message)
+      else setError((e as Error).message)
     }
-  }, [loggedOut])
-  refreshRef.current = refresh
-
-  const logout = useCallback(async () => {
-    await api.logout().catch(() => {})
-    loggedOut()
-  }, [loggedOut])
+  }, [])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    if (!unlocked) {
+      stopSession()
+      setReady(false)
+      return
+    }
+    if (ready) return
+    void connect()
+    const t = setInterval(() => !ready && void connect(), 8000)
+    return () => clearInterval(t)
+  }, [unlocked, ready, connect])
 
+  if (!unlocked) return <Unlock />
+  if (ready) return <Shell onLogout={lock} />
+  if (offline) return <BrainOffline message={offline} />
   if (error) {
     return (
       <div className="h-full grid place-content-center justify-items-center gap-3 p-4 text-center">
-        <p>连接 Hub 失败：{error}</p>
-        <button className="btn" onClick={() => void refresh()}>
-          重试
-        </button>
+        <p>连接大脑失败：{error}</p>
+        <button className="btn" onClick={() => void connect()}>重试</button>
       </div>
     )
   }
-  if (!me) {
-    return (
-      <div className="h-full grid place-content-center justify-items-center gap-3 p-4 text-center text-muted">加载中…</div>
-    )
-  }
-  if (!me.logged_in) {
-    return <Login me={me} onLoggedIn={refresh} />
-  }
-  return <Shell onLogout={logout} />
+  return <div className="h-full grid place-content-center justify-items-center gap-3 p-4 text-center text-muted">正在连接大脑…</div>
 }

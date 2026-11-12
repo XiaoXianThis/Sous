@@ -8,6 +8,7 @@ import AgentIcon, { agentTitle } from './AgentIcon'
 import ApprovalCard from './ApprovalCard'
 import { errorKindText } from '../lib/tasks'
 import Icon from './Icon'
+import { permit } from '../trust/vault'
 import Markdown from './Markdown'
 import { Clamp, Thinking } from './Message'
 import { PlanList, ToolList } from './RunSteps'
@@ -200,6 +201,7 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
             ) : (
               <p className={`m-0 ${run.status === 'interrupted' ? 'text-muted' : 'text-danger'} text-[12.5px] [overflow-wrap:anywhere] flex gap-1.5 items-start`}><Icon name="alert" size={14} className="mt-[2px]" />{run.error}</p>
             ))}
+            {run.status === 'failed' && run.error?.startsWith('超出自主范围：') && run.task_id && <PermitRetry run={run} />}
             {run.outcome === 'no_action' && (
               <p className="m-0 text-warm text-[12.5px] flex gap-1.5 items-start"><Icon name="alert" size={14} className="mt-[2px]" />本轮正常结束，未记录到工具调用或本轮文件改动；任务是否完成以验收结论为准。</p>
             )}
@@ -219,5 +221,36 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
 
       {viewer && <TextViewer title={viewer.title} text={viewer.text} diff={viewer.diff} onClose={() => setViewer(null)} />}
     </>
+  )
+}
+
+/**
+ * A run the machine refused for being outside the user's autonomy scope
+ * (decision 0031): one tap sends that machine a permit for this task, then
+ * dispatches the task again. The permit is good for five minutes, once.
+ */
+function PermitRetry({ run }: { run: { node_id: string; task_id?: string } }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle')
+  const [error, setError] = useState('')
+  async function go() {
+    setState('busy')
+    setError('')
+    try {
+      await permit(run.node_id, 'run', { task_id: run.task_id! }, false)
+      await api.dispatchTask(run.task_id!, run.node_id)
+      setState('done')
+    } catch (e) {
+      setError((e as Error).message)
+      setState('idle')
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 text-[12.5px]">
+      <button className="btn small" disabled={state !== 'idle'} onClick={() => void go()}>
+        {state === 'done' ? '已许可，重新派发了' : state === 'busy' ? '正在许可…' : '许可并重试'}
+      </button>
+      <span className="text-muted">只放行这个任务一次，5 分钟内有效</span>
+      {error && <span className="text-danger">{error}</span>}
+    </div>
   )
 }
