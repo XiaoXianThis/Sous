@@ -202,6 +202,7 @@ func (s *Supervisor) compact(ctx context.Context, threadID, reason string) (err 
 		}
 		summary = next
 	}
+	summary = s.tidy(ctx, threadID, seg.Summary, summary, !isMeeting(thread))
 	p := event.CompactedPayload{Segment: seg.Segment + 1, CoversUpTo: cut, Summary: summary,
 		Profile: s.profile(ctx), Reason: reason, Model: s.opt.CompactorModel}
 	if u, err := st.RecentThreadUsage(ctx, threadID, "supervisor", 1); err == nil {

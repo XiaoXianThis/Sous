@@ -44,3 +44,4 @@ Architecture decision records: what was decided, why, and which options were rej
 | [0029](0029-meetings.md) | 会议：在独立上下文里讨论，散会后把纪要交回对话 | Accepted |
 | [0030](0030-zero-trust-relay.md) | 零信任：服务器只当盲中继，Node 只认用户的签名 | Accepted |
 | [0031](0031-decentralized-brain.md) | 去中心化的大脑：用户指定机器、租约选主、不做第二道防线 | Accepted |
+| [0032](0032-summary-budget-and-archive.md) | 摘要的预算：过期待办丢弃，旧决定和偏好归档到长期记忆 | Accepted |
