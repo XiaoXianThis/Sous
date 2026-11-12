@@ -31,4 +31,6 @@
 
 - [x] `v0.3.0-alpha2`：tag、CI 构建、离线签名、上传桌面版（macOS arm64、Windows amd64）
 - [x] 部署：Vercel 页面、hkvps 中继、本机作为大脑（第一次全量快照 170 秒，之后每次约 0.3 MB）
-- [ ] CI 的 Windows 审批测试（`unsupported shell`）在 alpha1 就已失败，待修
+- [x] CI 的 Windows 审批测试（`unsupported shell`）修好；顺带修了不解析时自定义高风险规则漏掉 argv 命令
+- [x] `v0.3.0-alpha3`：带上面的修复，tag、CI 构建、离线签名、上传桌面版
+- [ ] 部署 alpha3：hkvps 中继、本机 sous 和桌面版（页面不变，不用重新部署）
