@@ -51,7 +51,7 @@ D1–D10 已拍板（见 `design.md` §0）。按里程碑顺序执行，每个�
 - [x] 4.6 中继数据库明文检查（requirements 验收 4）
 - [ ] 4.7 真机使用验收：iPhone、macOS、Windows（requirements 验收 5）
 - [x] 4.8 文档：`docs/api` 的三份新契约（替换 `core-hub-node.md`、`core-hub-http.md`）、`docs/architecture/trust.md`、`apps/core/AGENTS.md`、`apps/web/AGENTS.md`
-- [ ] 4.9 发布 `v0.3.0-alpha1`（预发布），用新流程签名
+- [x] 4.9 发布 `v0.3.0-alpha1`（预发布），用新流程签名
 
 ## 后续
 
