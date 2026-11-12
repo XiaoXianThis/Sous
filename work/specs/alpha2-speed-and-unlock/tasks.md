@@ -29,5 +29,6 @@
 
 ## 发布
 
-- [ ] `v0.3.0-alpha2`：tag、CI 构建、离线签名、上传桌面版
-- [ ] 部署：Vercel 页面、hkvps 中继、本机作为大脑
+- [x] `v0.3.0-alpha2`：tag、CI 构建、离线签名、上传桌面版（macOS arm64、Windows amd64）
+- [x] 部署：Vercel 页面、hkvps 中继、本机作为大脑（第一次全量快照 170 秒，之后每次约 0.3 MB）
+- [ ] CI 的 Windows 审批测试（`unsupported shell`）在 alpha1 就已失败，待修
