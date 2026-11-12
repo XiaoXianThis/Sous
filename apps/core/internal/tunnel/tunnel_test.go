@@ -66,6 +66,35 @@ func TestSessionToNodeAndBack(t *testing.T) {
 	tunneltest.Eventually(t, "queued mail delivered", func() bool { return nodeIn.count() == 4 })
 }
 
+func TestChannelsRekey(t *testing.T) {
+	old := trust.ChanRekeyAfter
+	trust.ChanRekeyAfter = 200 * time.Millisecond
+	t.Cleanup(func() { trust.ChanRekeyAfter = old })
+	w := tunneltest.NewWorld(t)
+	k := w.AddNode("mac", -1)
+	var nodeIn, sessIn inbox
+	node := w.Client(k, tunnel.Config{Handler: nodeIn.handle, StateDir: t.TempDir()})
+	sess, _, _ := w.NewSession(sessIn.handle)
+	ctx := context.Background()
+	tunneltest.Eventually(t, "node sees itself in the roster", func() bool { return node.Roster() != nil })
+	for i := 1; i <= 3; i++ {
+		if err := sess.Send(ctx, trust.NodeAddr(k.ID), []byte(`{"n":1}`)); err != nil {
+			t.Fatal(err)
+		}
+		tunneltest.Eventually(t, "node receives", func() bool { return nodeIn.count() == i })
+		time.Sleep(300 * time.Millisecond)
+	}
+	if in, _ := node.Channels(); in < 2 {
+		t.Fatalf("the session kept one channel (%d inbound): no rekey", in)
+	}
+	nodeIn.mu.Lock()
+	gaps := nodeIn.gaps
+	nodeIn.mu.Unlock()
+	if gaps != 0 {
+		t.Fatal("a rekey looked like lost messages")
+	}
+}
+
 func TestMachineNotInRosterIsRefused(t *testing.T) {
 	w := tunneltest.NewWorld(t)
 	stranger := tunneltest.NewKeys()

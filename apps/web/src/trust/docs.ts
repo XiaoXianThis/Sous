@@ -18,6 +18,8 @@ export interface RosterNode {
   role?: string
   brain?: { priority: number }
   frozen?: boolean
+  /** The machine's terminal (sous chat) may read every conversation and answer every approval. */
+  console?: boolean
   added?: number
 }
 
@@ -129,6 +131,7 @@ export function rosterNeedsAssertion(a: Roster, b: Roster): boolean {
     if (!na || na.sign_pub !== nb.sign_pub || na.kem_pub !== nb.kem_pub) return true
     if (!!na.brain !== !!nb.brain || (na.brain && nb.brain && na.brain.priority !== nb.brain.priority)) return true
     if (na.frozen && !nb.frozen) return true
+    if (!na.console && nb.console) return true
   }
   return false
 }

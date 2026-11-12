@@ -31,7 +31,7 @@ export interface ProviderInput {
   models?: string[]
 }
 
-import { fromUtf8, utf8 } from '../trust/bytes'
+import { b64, fromUtf8, sha256, utf8 } from '../trust/bytes'
 import { nodeAddr } from '../trust/docs'
 import { rpc, rpcJSON } from '../trust/rpc'
 import { ask, intentHeaders, permit } from '../trust/vault'
@@ -73,6 +73,11 @@ async function upload(file: Blob, name: string): Promise<Attachment> {
  * user's Face ID goes straight to the machine, then the brain may ask it.
  * The machine checks the permit; the brain cannot forge one.
  */
+/** How a permit names a secret, a file's content or a list: by SHA-256 (node.RequestMatch). */
+async function digest(s: string): Promise<string> {
+  return b64(await sha256(utf8(s)))
+}
+
 async function withPermit<T>(nodeId: string, match: Record<string, string>, call: () => Promise<T>): Promise<T> {
   await permit(nodeId, match.op ? 'admin' : 'update', match, true)
   return call()
@@ -172,15 +177,17 @@ export const api = {
   probeAgent: (id: string, agent: string) =>
     request<{ options: ConfigOption[] | null; at: number }>('POST', `/api/v1/nodes/${id}/agents/${agent}/probe`),
   agentJob: (id: string, agent: string, what: 'install' | 'login' | 'logout', size: { cols: number; rows: number }, upgrade = false) =>
-    withPermit(id, { op: `agents.${what}`, agent }, () =>
+    withPermit(id, what === 'install' ? { op: `agents.${what}`, agent, upgrade: String(upgrade) } : { op: `agents.${what}`, agent }, () =>
       request<JobStarted>('POST', `/api/v1/nodes/${id}/agents/${agent}/${what}`, { ...size, upgrade })),
   setAgentDisabled: (id: string, agent: string, disabled: boolean) =>
     request<AgentInfo>('POST', `/api/v1/nodes/${id}/agents/${agent}/disabled`, { disabled }),
   setAgentDefaults: (id: string, agent: string, options: Record<string, string>) =>
     request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/defaults`, { options }),
-  setAgentEnv: (id: string, agent: string, name: string, value: string) =>
-    withPermit(id, { op: 'agents.set_env', agent, name }, () =>
-      request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/env`, { name, value })),
+  setAgentEnv: async (id: string, agent: string, name: string, value: string) => {
+    value = value.trim()
+    return withPermit(id, { op: 'agents.set_env', agent, name, value_sha256: await digest(value) }, () =>
+      request<{ ok: boolean }>('PUT', `/api/v1/nodes/${id}/agents/${agent}/env`, { name, value }))
+  },
   jobTail: (id: string, job: string) => request<JobTail>('GET', `/api/v1/nodes/${id}/jobs/${job}`),
   jobInput: (id: string, job: string, data: string) => jobDirect(id, 'job.input', { job_id: job, data }),
   jobResize: (id: string, job: string, cols: number, rows: number) => jobDirect(id, 'job.resize', { job_id: job, cols, rows }),
@@ -214,8 +221,8 @@ export const api = {
     withPermit(nodeId, { op: 'shell.open' }, () =>
       request<{ node_id: string; job_id: string; command: string; root: string }>('POST', `/api/v1/projects/${projectId}/shells`, { node_id: nodeId, cols, rows })),
   readFile: (id: string, agent: string, file: string) => request<ConfigFile>('GET', `/api/v1/nodes/${id}/files/${agent}/${file}`),
-  writeFile: (id: string, agent: string, file: string, content: string, base: string) =>
-    withPermit(id, { op: 'config.write', agent, file }, () =>
+  writeFile: async (id: string, agent: string, file: string, content: string, base: string) =>
+    withPermit(id, { op: 'config.write', agent, file, content_sha256: await digest(content) }, () =>
       request<ConfigFile>('PUT', `/api/v1/nodes/${id}/files/${agent}/${file}`, { content, base_sha256: base })),
   /** Sends a message; without a topic it starts one (its id is the message id). */
   send: (threadId: string, content: string, context?: MessageContext, attachments?: string[], topicId = '') =>
@@ -264,9 +271,9 @@ export const api = {
   deletePersona: (id: string) => request<unknown>('DELETE', `/api/v1/personas/${id}`),
   repos: () => request<{ repos: RepoScan[] }>('GET', '/api/v1/repos'),
   setRole: (id: string, role: 'dev' | 'server') =>
-    withPermit(id, { op: 'node.set_role' }, () => request<{ role: string }>('PUT', `/api/v1/nodes/${id}/role`, { role })),
-  setWorkspaces: (id: string, workspaces: string[]) =>
-    withPermit(id, { op: 'node.set_workspaces' }, () =>
+    withPermit(id, { op: 'node.set_role', role }, () => request<{ role: string }>('PUT', `/api/v1/nodes/${id}/role`, { role })),
+  setWorkspaces: async (id: string, workspaces: string[]) =>
+    withPermit(id, { op: 'node.set_workspaces', workspaces_sha256: await digest(workspaces.join('\0')) }, () =>
       request<{ workspaces: string[]; repos: unknown[] }>('PUT', `/api/v1/nodes/${id}/workspaces`, { workspaces })),
   scanNode: (id: string) => request<{ workspaces: string[] }>('POST', `/api/v1/nodes/${id}/scan`),
   newProject: (b: { name: string; node_id?: string; layout?: 'wokspace' | 'plain'; owner?: string; private?: boolean; thread_id?: string }) =>

@@ -61,6 +61,8 @@ D1–D10 已拍板（见 `design.md` §0）。按里程碑顺序执行，每个�
 
 ## 安全验收发现（[security-review.md](security-review.md)）
 
-- [ ] 机器的设备接口按机器授权：默认不能读全部对话、不能审批别的机器的审批（S5）
-- [ ] 关键操作许可绑定请求内容（`config.write`、`set_env`、`set_role`、`set_workspaces`）
+- [x] 机器的设备接口按机器授权：名册的 `console` 开关，关闭时只能记笔记、处理本机 Run 的审批（S5）
+- [x] 关键操作许可绑定请求内容（`config.write`、`set_env`、`set_role`、`set_workspaces`、`install` 的 `upgrade`）
+- [x] 通道定期换钥（每小时或 10 万条消息）
+- [ ] 前向保密：机器的短期预密钥（每天一把，用机器签名密钥签发，过期删除）；数据域密钥定期轮换
 - [ ] 自主范围补上仓库白名单；`VerifyAssertion` 的时效、名册 `prev` 链核对

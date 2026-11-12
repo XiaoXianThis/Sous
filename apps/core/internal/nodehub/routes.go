@@ -1,6 +1,7 @@
 package nodehub
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
@@ -250,6 +252,15 @@ func (h *Hub) listApprovals(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
+	if id, limited := limitedMachine(r); limited {
+		mine := as[:0]
+		for _, a := range as {
+			if h.approvalOn(r.Context(), a, id) {
+				mine = append(mine, a)
+			}
+		}
+		as = mine
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": as})
 }
 
@@ -261,6 +272,13 @@ func (h *Hub) decide(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
+	}
+	if id, limited := limitedMachine(r); limited {
+		a, err := h.log.Store.Approval(r.Context(), r.PathValue("id"))
+		if err != nil || !h.approvalOn(r.Context(), a, id) {
+			writeError(w, http.StatusNotFound, "not_found", "审批不存在")
+			return
+		}
 	}
 	err := h.Decide(r.Context(), r.PathValue("id"), body.OptionID, body.Note)
 	if errors.Is(err, store.ErrNotFound) {
@@ -286,4 +304,23 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 func internal(w http.ResponseWriter, err error) {
 	slog.Error("nodehub: internal error", "err", err)
 	writeError(w, http.StatusInternalServerError, "internal", "服务器内部错误")
+}
+
+// limitedMachine reports the machine of a device request whose console the
+// user did not open (decision 0030): it only sees its own runs' approvals.
+func limitedMachine(r *http.Request) (string, bool) {
+	t, ok := auth.TunnelOf(r.Context())
+	if !ok || t.Device == "" || !t.Limited {
+		return "", false
+	}
+	return t.Device, true
+}
+
+// approvalOn reports whether an approval belongs to a run on machine id.
+func (h *Hub) approvalOn(ctx context.Context, a store.Approval, id string) bool {
+	if a.RunID == "" {
+		return false
+	}
+	run, err := h.log.Store.Run(ctx, a.RunID)
+	return err == nil && run.NodeID == id
 }

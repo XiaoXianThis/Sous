@@ -380,6 +380,17 @@ export function setFrozen(nodeId: string, frozen: boolean) {
   })
 }
 
+/**
+ * Opens or closes a machine's console: whether `sous chat` on it may read
+ * every conversation and answer every approval. Opening needs Face ID.
+ */
+export function setConsole(nodeId: string, on: boolean) {
+  return updateRoster((r) => {
+    const x = r.nodes.find((n) => n.id === nodeId)
+    if (x) x.console = on || undefined
+  })
+}
+
 /** Kicks a machine out: Face ID, a new roster, and new data keys if it was a brain. */
 export async function kick(nodeId: string) {
   const wasBrain = !!roster()?.nodes.find((n) => n.id === nodeId)?.brain
@@ -517,7 +528,7 @@ export interface PairRequest {
  * Starts "add a machine": returns the pairing string to paste on the
  * machine, and a promise of the machine's request when it joins.
  */
-export async function startPairing(): Promise<{ code: string; exp: number; request: Promise<PairRequest>; confirm: (brain: number | null) => Promise<void>; cancel: () => void }> {
+export async function startPairing(): Promise<{ code: string; exp: number; request: Promise<PairRequest>; confirm: (brain: number | null, console: boolean) => Promise<void>; cancel: () => void }> {
   if (!u) throw new Locked()
   const n = u.net
   const secret = random(16)
@@ -539,13 +550,14 @@ export async function startPairing(): Promise<{ code: string; exp: number; reque
   return {
     code, exp, request,
     cancel: () => n.closeRoom(room),
-    confirm: async (brain) => {
+    confirm: async (brain, console) => {
       if (!got) throw new Error('机器还没有发来请求')
       const h = got
       if ((await nodeIdOf(unb64(h.sign_pub))) !== h.node) throw new Error('机器的 id 和密钥不符')
       await updateRoster((r) => {
         const x: RosterNode = { id: h.node, name: h.name, sign_pub: h.sign_pub, kem_pub: h.kem_pub, key_storage: h.key_storage, os: h.os, role: h.role, added: now() }
         if (brain !== null) x.brain = { priority: brain }
+        if (console) x.console = true
         r.nodes.push(x)
       })
       const welcome = utf8(JSON.stringify({ t: 'pair.welcome', roster: n.rosterUpdate }))

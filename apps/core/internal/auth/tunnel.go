@@ -9,7 +9,10 @@ import "context"
 type Tunnel struct {
 	SID    string // a page's session
 	Device string // a machine's device call (sous chat, sous mcp)
-	Fresh  bool   // the user verified this very request
+	// Limited marks a machine whose console the user did not open: it may
+	// write notes and answer approvals of its own runs, nothing more.
+	Limited bool
+	Fresh   bool // the user verified this very request
 }
 
 type tunnelKey struct{}

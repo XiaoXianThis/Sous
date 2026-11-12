@@ -39,6 +39,14 @@ type Wire struct {
 // an old channel long after it ended.
 const ChanOpenTTL = 10 * time.Minute
 
+// A sender opens a fresh channel (a fresh key) every ChanRekeyAfter or
+// ChanRekeyMsgs messages, whichever comes first, so one leaked channel key
+// exposes at most that much. Variables only so tests can shorten them.
+var (
+	ChanRekeyAfter        = time.Hour
+	ChanRekeyMsgs  uint64 = 100_000
+)
+
 // Addresses on the relay.
 func NodeAddr(id string) string     { return "node:" + id }
 func SessionAddr(sid string) string { return "sess:" + sid }
@@ -49,10 +57,16 @@ func chanInfo(ch, from, to string) []byte {
 
 // OutChannel seals messages to one recipient.
 type OutChannel struct {
-	ID   string
-	open Signed
-	aead cipher.AEAD
-	seq  uint64
+	ID     string
+	open   Signed
+	aead   cipher.AEAD
+	seq    uint64
+	opened time.Time
+}
+
+// Stale reports whether the sender should open a new channel instead.
+func (c *OutChannel) Stale(now time.Time) bool {
+	return now.Sub(c.opened) >= ChanRekeyAfter || c.seq >= ChanRekeyMsgs
 }
 
 // NewOutChannel opens a channel from one address to another.
@@ -79,7 +93,7 @@ func NewOutChannel(from, to string, signer *SignKey, recipientKEM []byte, now ti
 	if err != nil {
 		return nil, err
 	}
-	return &OutChannel{ID: ch, open: open, aead: aead}, nil
+	return &OutChannel{ID: ch, open: open, aead: aead, opened: now}, nil
 }
 
 // Seal encrypts the next message. The first one carries the opening.

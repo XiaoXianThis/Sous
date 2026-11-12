@@ -82,6 +82,7 @@ type Client struct {
 type inbound struct {
 	ch   *trust.InChannel
 	from string
+	at   time.Time // when it was accepted
 }
 
 // state is what persists across restarts.
@@ -414,6 +415,11 @@ func (c *Client) Send(ctx context.Context, to string, payload []byte) error {
 	defer c.smu.Unlock()
 	c.mu.Lock()
 	oc := c.out[to]
+	if oc != nil && oc.Stale(c.cfg.Now()) {
+		// Time for a fresh key: the next message opens a new channel.
+		delete(c.out, to)
+		oc = nil
+	}
 	c.mu.Unlock()
 	if oc == nil {
 		kem, err := c.kemOf(to)
@@ -618,8 +624,24 @@ func (c *Client) accept(w trust.Wire) (*inbound, error) {
 	if err != nil {
 		return nil, err
 	}
-	ib := &inbound{ch: in, from: o.From}
+	now := c.cfg.Now()
+	ib := &inbound{ch: in, from: o.From, at: now}
 	c.mu.Lock()
+	// The sender rekeyed: keep its previous channel a while for messages
+	// still on the way, and forget older ones with their keys.
+	for id, old := range c.in {
+		if old.from == o.From && now.Sub(old.at) > ChanGrace {
+			newest := true
+			for _, x := range c.in {
+				if x != old && x.from == o.From && x.at.After(old.at) {
+					newest = false
+				}
+			}
+			if !newest {
+				delete(c.in, id)
+			}
+		}
+	}
 	c.in[w.Ch] = ib
 	if c.st.Seen == nil {
 		c.st.Seen = map[string]int64{}
@@ -634,6 +656,16 @@ func (c *Client) accept(w trust.Wire) (*inbound, error) {
 	c.mu.Unlock()
 	c.save()
 	return ib, nil
+}
+
+// ChanGrace is how long a sender's replaced channel is still read.
+const ChanGrace = 10 * time.Minute
+
+// Channels counts the open channels (for diagnostics and tests).
+func (c *Client) Channels() (in, out int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.in), len(c.out)
 }
 
 // ForgetInbound drops channels from a sender (it was kicked or frozen).

@@ -9,7 +9,7 @@ import { nodeAddr, type RosterNode, type Scope, type Scopes } from '../trust/doc
 import { sha256, utf8, b64 } from '../trust/bytes'
 import {
   addPasskey, ask, identityFingerprint, isUnlocked, kick, lock, lockAfter, lockChoices, net, paused, permit, roster,
-  saveScopes, scopes, setBrain, setFrozen, setLockAfter, setPaused, startPairing, useVault, type PairRequest,
+  saveScopes, scopes, setBrain, setConsole, setFrozen, setLockAfter, setPaused, startPairing, useVault, type PairRequest,
 } from '../trust/vault'
 import { Cancelled } from '../trust/webauthn'
 import Icon from './Icon'
@@ -81,6 +81,7 @@ function RosterRow({ n, online, thinking, alert, run }: {
         <span className="text-muted text-[12px]">{osName[n.os ?? ''] ?? n.os}{n.role === 'server' ? ' · 服务器' : ''}</span>
         {n.brain && <span className="pill">{thinking ? '正在思考' : '大脑'} · 优先级 {n.brain.priority}</span>}
         {n.frozen && <span className="pill tone-danger">已冻结</span>}
+        {n.console && !n.brain && <span className="pill" data-tip="这台机器上的 sous chat 能看全部对话、处理所有审批">终端对话</span>}
         {alert?.frozen && <span className="pill tone-danger" title={alert.reason}>自我冻结</span>}
         {n.key_storage === 'software' && <span className="text-faint text-[12px]" data-tip="密钥存在文件里（权限 0600），不在安全芯片里">软件密钥</span>}
       </div>
@@ -105,6 +106,14 @@ function RosterRow({ n, online, thinking, alert, run }: {
         {n.brain && brainCount > 1 && (
           <button className="link" onClick={() => void run(() => setBrain(n.id, Math.max(0, n.brain!.priority - 1)))}>提高优先级</button>
         )}
+        {!n.brain && (n.console ? (
+          <button className="link" onClick={() => void run(() => setConsole(n.id, false))}>关闭终端对话</button>
+        ) : (
+          <button className="link" data-tip="让这台机器上的 sous chat 能看全部对话、处理所有审批" onClick={() => {
+            if (n.role === 'server' && !confirm(`“${n.name}”是服务器。打开后，拿到这台服务器的人就能读你所有对话、替你审批。仍要打开吗？`)) return
+            void run(() => setConsole(n.id, true))
+          }}>开放终端对话（刷 Face ID）</button>
+        ))}
         <button className="link" onClick={() => setAudit((a) => !a)}>{audit ? '收起审计' : '审计记录'}</button>
         <button className="link text-danger" onClick={() => {
           if (!confirm(`踢出“${n.name}”？\n\n它会立刻被所有机器拒绝，删除自己的密钥，之后读不到任何新数据。要再用需要重新配对。`)) return
@@ -135,6 +144,7 @@ function AddMachine({ onDone }: { onDone: () => void }) {
   const [s, setS] = useState<Awaited<ReturnType<typeof startPairing>> | null>(null)
   const [req, setReq] = useState<PairRequest | null>(null)
   const [brain, setBrainChoice] = useState(false)
+  const [consoleOn, setConsoleOn] = useState<boolean | null>(null)
   const { error, run, setError } = useErr()
   const [done, setDone] = useState(false)
 
@@ -174,9 +184,15 @@ function AddMachine({ onDone }: { onDone: () => void }) {
             <input type="checkbox" checked={brain} onChange={(e) => setBrainChoice(e.currentTarget.checked)} />
             设为大脑机器（AI 在这里思考；只选你信任的常开电脑）
           </label>
+          {!brain && (
+            <label className="flex gap-2 items-center text-[13px]">
+              <input type="checkbox" checked={consoleOn ?? req.role !== 'server'} onChange={(e) => setConsoleOn(e.currentTarget.checked)} />
+              开放终端对话（这台机器上的 sous chat 能看全部对话、处理所有审批；服务器不建议）
+            </label>
+          )}
           <div className="flex gap-3 items-center">
             <button className="btn small" onClick={() => void run(async () => {
-              await s!.confirm(brain ? (roster()?.nodes.filter((n) => n.brain).length ?? 0) : null)
+              await s!.confirm(brain ? (roster()?.nodes.filter((n) => n.brain).length ?? 0) : null, !brain && (consoleOn ?? req.role !== 'server'))
               setDone(true)
             })}><Icon name="fingerprint" size={15} />刷 Face ID 确认添加</button>
             <button className="link" onClick={onDone}>拒绝</button>

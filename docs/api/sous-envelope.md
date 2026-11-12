@@ -18,7 +18,7 @@
 
 | t | 签名者 | 内容 |
 |---|---|---|
-| `roster` | 身份 | `v`、`prev`、`user{sign_pub, kem_pub, passkeys[]}`、`rp_id`、`origins`、`relay`、`nodes[{id, name, sign_pub, kem_pub, key_storage, os, role, brain{priority}?, frozen?}]` |
+| `roster` | 身份 | `v`、`prev`、`user{sign_pub, kem_pub, passkeys[]}`、`rp_id`、`origins`、`relay`、`nodes[{id, name, sign_pub, kem_pub, key_storage, os, role, brain{priority}?, frozen?, console?}]`。`console` 为真时，这台机器的终端（`sous chat`）能读全部对话、处理所有审批；从无到有需要断言 |
 | `session` | 身份 | `sid`、`sign_pub`、`kem_pub`、`iat`、`exp`（有效期最长 24 小时） |
 | `scopes` | 身份，并附断言 | `v`、`default`、`projects{项目键: Scope}`。Scope 包括 `nodes`、`max_mode`、`allow_merge`、`allow_ops`、`allow_open` |
 | `pause` | 身份 | `v`、`paused` |
@@ -40,6 +40,19 @@
 - **许可（permit）**：`{t:"permit", id, sid, node, action, match, critical, iat, exp}`，由会话直接发给目标机器，消息为 `{k:"permit", id, raw, assertion?}`。
   - `action` 取值：`admin`（match 里至少有 `op`）、`update`（`version`）、`run`（`task_id`）、`unfreeze`。
   - 关键操作的许可必须附带断言。许可有效 5 分钟，用一次就失效。
+  - `admin` 许可必须写明它批准的内容，机器按请求重新算出同样的字段，逐项核对（`node.RequestMatch`）：
+
+    | op | match 必须包含 |
+    |---|---|
+    | `agents.install` | `agent`、`upgrade`（`"true"`/`"false"`） |
+    | `agents.login`、`agents.logout` | `agent` |
+    | `agents.set_env` | `agent`、`name`、`value_sha256` |
+    | `config.write` | `agent`、`file`、`content_sha256` |
+    | `node.set_role` | `role` |
+    | `node.set_workspaces` | `workspaces_sha256`（各路径用 NUL 连接后的 SHA-256） |
+    | `shell.open` | 无（终端只接受打开它的会话输入） |
+
+    `*_sha256` 都是 UTF-8 字节的 SHA-256，base64url 编码。
 - **意图（intent）**：`{t:"intent", sid, method, path, body_sha256, nonce, iat}`。只对大脑本身的关键请求使用（模型供应商、MCP），放在 RPC 请求头 `X-Sous-Intent` 和 `X-Sous-Assertion` 里。
 
 ## 通道
@@ -51,6 +64,7 @@
   - 通道确实是发给自己、自己的 KEM 密钥。
   - 开通道时间在 10 分钟以内，并且这个通道 id 以前没见过（重启后也记得）。
   - seq 必须递增；出现跳号要上报。
+- **换钥**：发送方每小时或每 10 万条消息换一条新通道（新的 HPKE 封装、新的密钥）。接收方继续读旧通道 10 分钟，之后丢掉更早的通道和它们的密钥。
 - **收到不认识的通道**：如果消息里没有 `open`，接收方回复 `{reset: ch}`，发送方换一条新通道重发。
 - **通道里的载荷**是 JSON：`{k:"link"...}` 是机器和大脑之间的帧流（附带方向标记 `dir`），其余 `k` 见 `core-brain-rpc.md`。
 

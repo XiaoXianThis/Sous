@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,15 +104,9 @@ func (nt *nodeTrust) check(f proto.Frame) (ok bool, reason string, violation boo
 			return false, "终端输入只接受打开它的会话直接发来的", true
 		}
 		if criticalOps[req.Op] {
-			match := map[string]string{"op": req.Op}
 			var args map[string]any
 			json.Unmarshal(req.Args, &args)
-			for k, v := range args {
-				if s, isStr := v.(string); isStr && k != "owner" && k != "content" && k != "value" && k != "base_sha256" {
-					match[k] = s
-				}
-			}
-			sid, ok := nt.usePermitMatching(trust.PermitAdmin, match)
+			sid, ok := nt.usePermitMatching(trust.PermitAdmin, RequestMatch(req.Op, args))
 			if !ok {
 				return false, "“" + req.Op + "”需要你在页面上刷一次 Face ID", true
 			}
@@ -284,14 +280,86 @@ func (nt *nodeTrust) usePermit(action string, want map[string]string, critical b
 	return false
 }
 
+// boundArgs are what a critical permit must name for each op, so the brain
+// cannot keep the user's approval and change what it approved: the API key
+// written, the config file's content, the role, the workspaces. A shell's
+// root is not bound: the shell belongs to the session that opened it, and
+// that session can cd anywhere anyway.
+var boundArgs = map[string][]string{
+	proto.OpInstall:       {"agent", "upgrade"},
+	proto.OpLogin:         {"agent"},
+	proto.OpLogout:        {"agent"},
+	proto.OpSetEnv:        {"agent", "name", "value_sha256"},
+	proto.OpConfigWrite:   {"agent", "file", "content_sha256"},
+	proto.OpShellOpen:     {},
+	proto.OpSetRole:       {"role"},
+	proto.OpSetWorkspaces: {"workspaces_sha256"},
+}
+
+// RequestMatch describes a critical request the way a permit names it:
+// strings as they are, booleans as "true"/"false", secrets and file
+// contents by SHA-256, and the workspace list by the SHA-256 of its paths
+// joined by NUL. The page computes the same (src/lib/api.ts).
+func RequestMatch(op string, args map[string]any) map[string]string {
+	m := map[string]string{"op": op}
+	for k, v := range args {
+		switch v := v.(type) {
+		case string:
+			switch k {
+			case "content", "value":
+				m[k+"_sha256"] = sha256B64(v)
+			case "owner", "base_sha256":
+			default:
+				m[k] = v
+			}
+		case bool:
+			m[k] = strconv.FormatBool(v)
+		case []any:
+			if k == "workspaces" {
+				parts := make([]string, 0, len(v))
+				for _, x := range v {
+					s, _ := x.(string)
+					parts = append(parts, s)
+				}
+				m["workspaces_sha256"] = sha256B64(strings.Join(parts, "\x00"))
+			}
+		}
+	}
+	for _, k := range boundArgs[op] {
+		if _, ok := m[k]; !ok {
+			switch {
+			case k == "upgrade":
+				m[k] = "false" // omitted means a fresh install
+			case strings.HasSuffix(k, "_sha256"):
+				m[k] = sha256B64("")
+			}
+		}
+	}
+	return m
+}
+
+func sha256B64(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return trust.B64.EncodeToString(h[:])
+}
+
 // usePermitMatching consumes an admin permit whose every match key equals
-// the request's; the permit must name the op.
+// the request's; the permit must name the op and every bound argument.
 func (nt *nodeTrust) usePermitMatching(action string, req map[string]string) (string, bool) {
 	nt.mu.Lock()
 	defer nt.mu.Unlock()
 	now := nt.c.Now().Unix()
 	for id, p := range nt.permits {
 		if p.Action != action || p.Exp < now || !p.Critical || p.Match["op"] == "" {
+			continue
+		}
+		bound := true
+		for _, k := range boundArgs[p.Match["op"]] {
+			if _, ok := p.Match[k]; !ok {
+				bound = false
+			}
+		}
+		if !bound {
 			continue
 		}
 		ok := true
