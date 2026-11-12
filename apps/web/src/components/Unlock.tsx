@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Cancelled, passkeysAvailable } from '../trust/webauthn'
-import { relayUrl, setRelayUrl, setup, unlock } from '../trust/vault'
+import { localDevice, relayUrl, setRelayUrl, setup, unlock, verifyName } from '../trust/vault'
 import Icon from './Icon'
 
 /**
@@ -40,8 +40,11 @@ export default function Unlock() {
             <p className="mt-0 mb-3 text-muted text-[13px]">已锁定。只有你本人能解锁。</p>
             <button className="btn w-full" disabled={busy} onClick={() => void run(unlock)}>
               <Icon name="fingerprint" size={18} />
-              {busy ? '正在解锁…' : '用 Face ID / 指纹 / PIN 解锁'}
+              {busy ? '正在解锁…' : localDevice() ? `用${verifyName()}解锁` : '解锁'}
             </button>
+            {!localDevice() && (
+              <p className="m-0 text-muted text-[12px]">这台设备还没有自己的 Passkey：这一次可能要用手机扫码。解锁后在“信任”页点“让这台设备直接解锁”，以后用{verifyName()}就行。</p>
+            )}
             <p className="m-0 text-faint text-[12px] [overflow-wrap:anywhere]">中继：{relayUrl()}</p>
             <button className="link text-[13px]" onClick={() => setMode('setup')}>换一个中继或首次设置</button>
           </>

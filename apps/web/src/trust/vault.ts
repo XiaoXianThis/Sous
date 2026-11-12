@@ -6,7 +6,8 @@ import { useSyncExternalStore } from 'react'
 import { b64, fromUtf8, now, random, sha256, unb64, utf8, type Bytes } from './bytes'
 import { kemFromSeed, kemGenerate, openFrom, sealTo, type KemKey } from './hpke'
 import { keyId, signDoc, signFromJwk, signGenerate, payloadOf, type SignKey, type Signed } from './sign'
-import { assertCritical, createPasskey, prfUnlock } from './webauthn'
+import { assertCritical, assertWith, createPasskey, prfTry, prfUnlock } from './webauthn'
+import { deleteDeviceKey, loadDeviceKey, newDeviceKey } from './device'
 import { anonRequest, Net } from './net'
 import {
   defaultScopes, nodeAddr, rosterNeedsAssertion, sessionAddr,
@@ -20,6 +21,39 @@ import { sha256 as nsha256 } from '@noble/hashes/sha2.js'
 
 const RELAY_KEY = 'sous.relay'
 const LOCK_KEY = 'sous.lockAfter'
+const DEVICE_KEY = 'sous.device'
+
+/**
+ * This device's own passkey (decision 0033): unlocking asks for it alone, so
+ * the browser shows Face ID, Touch ID, a fingerprint or the Windows PIN
+ * instead of a phone. 'prf' passkeys open the identity themselves; 'device'
+ * ones (no PRF) prove the user to the relay, which then hands out the
+ * identity sealed under a key kept only in this browser.
+ */
+export interface LocalDevice {
+  relay: string
+  cred_id: string
+  mode: 'prf' | 'device'
+}
+
+export function localDevice(): LocalDevice | null {
+  try {
+    const d = JSON.parse(localStorage.getItem(DEVICE_KEY) || 'null') as LocalDevice | null
+    return d && d.relay === relayUrl() ? d : null
+  } catch {
+    return null
+  }
+}
+
+function setLocalDevice(d: LocalDevice | null) {
+  try {
+    if (d) localStorage.setItem(DEVICE_KEY, JSON.stringify(d))
+    else localStorage.removeItem(DEVICE_KEY)
+  } catch {
+    // private window: unlocking simply asks for any passkey each time
+  }
+  emit()
+}
 
 /** The relay this page talks to: set at first setup, or at build time. */
 export function relayUrl(): string {
@@ -138,6 +172,16 @@ async function unwrapIdentity(prf: Uint8Array, w: { salt: string; ct: string }):
   }
 }
 
+/** How this device verifies its user, for buttons. */
+export function verifyName(): string {
+  const ua = navigator.userAgent
+  if (/iPhone|iPad/.test(ua)) return 'Face ID'
+  if (/Android/.test(ua)) return '指纹'
+  if (/Windows/.test(ua)) return 'Windows PIN'
+  if (/Mac/.test(ua)) return '触控 ID 或开机密码'
+  return 'Passkey'
+}
+
 function deviceLabel(): string {
   const ua = navigator.userAgent
   if (/iPhone/.test(ua)) return 'iPhone'
@@ -169,25 +213,63 @@ export async function setup(relay: string, claimToken: string) {
   const doc = await signDoc(idSign, r)
   await anonRequest(relay, { t: 'claim', token: claimToken.trim(), body: { roster: { doc }, bundle } })
   setRelayUrl(relay)
+  setLocalDevice({ relay, cred_id: credId, mode: 'prf' })
   await open(relay, credId, idSign, idKem)
 }
 
-/** Unlocks with the passkey (Face ID / fingerprint / PIN). */
+/** Unlocks with the passkey (Face ID / Touch ID / fingerprint / PIN). */
 export async function unlock() {
   const relay = relayUrl()
   if (!relay) throw new Error('还没有设置中继地址')
   const r = await anonRequest(relay, { t: 'get', name: 'identity' })
   const bundle = r.body as Bundle | undefined
   if (!bundle?.wraps) throw new Error('这个中继还没有完成首次设置')
-  const { credId, prf } = await prfUnlock(Object.keys(bundle.wraps))
-  const w = bundle.wraps[credId]
-  if (!w) throw new Error('这个 Passkey 没有登记在这个中继上')
-  const secret = await unwrapIdentity(prf, w)
+  const dev = localDevice()
+  let credId: string
+  let secret: { sign: JsonWebKey; kem: string }
+  if (dev?.mode === 'device') {
+    ({ credId, secret } = await unlockDevice(relay, dev))
+  } else {
+    const mine = dev && bundle.wraps[dev.cred_id] ? [dev.cred_id] : null
+    if (dev && !mine) setLocalDevice(null) // its passkey was removed
+    const got = await prfUnlock(mine ?? Object.keys(bundle.wraps))
+    credId = got.credId
+    const w = bundle.wraps[credId]
+    if (!w) throw new Error('这个 Passkey 没有登记在这个中继上')
+    secret = await unwrapIdentity(got.prf, w)
+    // A synced passkey that already lives on this device becomes its own.
+    if (!mine && got.attachment === 'platform') setLocalDevice({ relay, cred_id: credId, mode: 'prf' })
+  }
   const idSign = await signFromJwk(secret.sign)
   if (b64(idSign.pub) !== bundle.sign_pub) throw new Error('身份包被改动过')
   const idKem = kemFromSeed(unb64(secret.kem))
   if (b64(idKem.pub) !== bundle.kem_pub) throw new Error('身份包被改动过')
   await open(relay, credId, idSign, idKem)
+}
+
+async function unlockDevice(relay: string, dev: LocalDevice) {
+  const key = await loadDeviceKey(dev.cred_id)
+  if (!key) {
+    setLocalDevice(null)
+    throw new Error('这台设备的密钥丢了（浏览器数据被清除过）。请用手机解锁后，在信任页重新添加这台设备。')
+  }
+  const { nonce } = await anonRequest(relay, { t: 'devwrap.challenge' })
+  const assertion = await assertWith(unb64(nonce!), [dev.cred_id])
+  const r = await anonRequest(relay, { t: 'devwrap.get', name: dev.cred_id, nonce, data: assertion })
+  const w = r.body as { iv: string; ct: string }
+  try {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(w.iv) }, key, unb64(w.ct))
+    return { credId: dev.cred_id, secret: JSON.parse(fromUtf8(new Uint8Array(pt))) as { sign: JsonWebKey; kem: string } }
+  } catch {
+    throw new Error('这台设备的密钥解不开中继给的身份包')
+  }
+}
+
+/** Forgets this device's own passkey: unlocking asks for any passkey again. */
+export async function forgetThisDevice() {
+  const d = localDevice()
+  if (d?.mode === 'device') await deleteDeviceKey(d.cred_id)
+  setLocalDevice(null)
 }
 
 async function certify(idSign: SignKey, sSign: SignKey, sKem: KemKey, sidv: string): Promise<{ cert: Signed; iat: number; exp: number }> {
@@ -325,7 +407,7 @@ function passkeys() {
 
 /** Face ID over exactly these bytes. */
 export async function approve(payload: Uint8Array): Promise<Assertion> {
-  return assertCritical(payload, passkeys())
+  return assertCritical(payload, passkeys(), localDevice()?.cred_id)
 }
 
 /**
@@ -419,23 +501,42 @@ export function rename(nodeId: string, name: string) {
   })
 }
 
-/** Adds a passkey of another device (Face ID on this one first). */
+/**
+ * Makes this device's own passkey (Face ID, Touch ID, a fingerprint or the
+ * Windows PIN). The identity is then wrapped for it: by its PRF output when
+ * it has one, otherwise by a key kept only in this browser and stored on the
+ * relay behind this passkey (decision 0033). Needs the identity once, from a
+ * passkey already registered (on a new device, usually the phone).
+ */
 export async function addPasskey() {
   if (!u) throw new Locked()
+  const relay = u.relay
   const pk = await createPasskey(deviceLabel())
-  const { credId, prf } = await prfUnlock([pk.cred_id])
-  const r = await anonRequest(u.relay, { t: 'get', name: 'identity' })
+  const fresh = await prfTry([pk.cred_id])
+  const r = await anonRequest(relay, { t: 'get', name: 'identity' })
   const bundle = r.body as Bundle
-  // Wrap the identity for the new passkey: re-derive it from this session's
-  // original passkey is impossible (keys are non-extractable), so ask the
-  // user to unlock once more with the existing one to get the secret.
+  // The session's keys are non-extractable, so the identity's secret comes
+  // from one more unlock with a passkey that already has a wrap.
   const old = await prfUnlock(Object.keys(bundle.wraps))
   const secret = await unwrapIdentity(old.prf, bundle.wraps[old.credId])
-  bundle.wraps[credId] = await wrapIdentity(prf, secret)
+  if (fresh.prf) {
+    bundle.wraps[pk.cred_id] = await wrapIdentity(fresh.prf, secret)
+  } else {
+    pk.label = pk.label + '（设备密钥）'
+  }
   await updateRoster((ro) => {
     ro.user.passkeys.push(pk)
   })
-  await u.net.put('identity', bundle)
+  if (fresh.prf) {
+    await u.net.put('identity', bundle)
+    setLocalDevice({ relay, cred_id: pk.cred_id, mode: 'prf' })
+    return
+  }
+  const key = await newDeviceKey(pk.cred_id)
+  const iv = random(12)
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, utf8(JSON.stringify(secret))))
+  await u.net.request({ t: 'devwrap.put', name: pk.cred_id, body: { iv: b64(iv), ct: b64(ct) } })
+  setLocalDevice({ relay, cred_id: pk.cred_id, mode: 'device' })
 }
 
 // --- data keys of the brain (design §7) -------------------------------------

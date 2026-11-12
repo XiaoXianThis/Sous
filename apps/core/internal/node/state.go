@@ -121,6 +121,9 @@ type Status struct {
 	Name         string    `json:"name"`
 	HubURL       string    `json:"hub_url"`
 	HubConnected bool      `json:"hub_connected"`
+	RelayURL     string    `json:"relay_url,omitempty"`
+	PageURL      string    `json:"page_url,omitempty"` // the roster's first origin
+	Brain        string    `json:"brain,omitempty"`    // "leading", "standby" or empty
 	Pending      int       `json:"pending_frames"`
 	Runs         []RunInfo `json:"runs"`
 	StartedAt    int64     `json:"started_at"`
@@ -129,7 +132,9 @@ type Status struct {
 func (d *Daemon) Status() Status {
 	d.mu.Lock()
 	st := Status{Version: version.Version, NodeID: d.conf().NodeID, Name: d.conf().Name, HubURL: d.conf().HubURL, HubConnected: d.online,
-		StartedAt: d.startedAt.UnixMilli(), Runs: []RunInfo{}}
+		RelayURL: d.conf().RelayURL, StartedAt: d.startedAt.UnixMilli(), Runs: []RunInfo{}}
+	brainRole := d.brainRole
+	nt := d.trust
 	runs := make([]*run, 0, len(d.runs))
 	for _, r := range d.runs {
 		runs = append(runs, r)
@@ -141,7 +146,22 @@ func (d *Daemon) Status() Status {
 		r.mu.Unlock()
 	}
 	st.Pending = d.ob.pendingCount()
+	if brainRole != nil {
+		st.Brain = brainRole()
+	}
+	if nt != nil && nt.c != nil {
+		if r := nt.c.Roster(); r != nil && len(r.Origins) > 0 {
+			st.PageURL = r.Origins[0]
+		}
+	}
 	return st
+}
+
+// SetBrainRole lets the brain report its role in Status.
+func (d *Daemon) SetBrainRole(fn func() string) {
+	d.mu.Lock()
+	d.brainRole = fn
+	d.mu.Unlock()
 }
 
 // Probe checks that the daemon's locks answer, for the watchdog.

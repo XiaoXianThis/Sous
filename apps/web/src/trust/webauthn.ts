@@ -1,4 +1,4 @@
-// Passkeys: Face ID, a fingerprint or the Windows PIN. Two uses:
+// Passkeys: Face ID, a fingerprint, Touch ID or the Windows PIN. Two uses:
 //  - unlocking: the PRF extension turns the passkey into a key that opens
 //    the identity (no password exists anywhere);
 //  - critical operations: an assertion whose challenge is the operation
@@ -34,10 +34,13 @@ export async function createPasskey(label: string): Promise<Passkey> {
         user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'sous', displayName: 'sous 主人' },
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         pubKeyCredParams: [{ type: 'public-key', alg: -7 }], // ES256 only: the machines check P-256
-        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        // This device's own authenticator (Face ID, Touch ID, Windows Hello),
+        // so the browser does not offer a phone instead.
+        authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+        hints: ['client-device'],
         timeout: 120000,
         extensions: { prf: {} } as AuthenticationExtensionsClientInputs,
-      },
+      } as PublicKeyCredentialCreationOptions,
     })) as PublicKeyCredential | null
   } catch (e) {
     throw friendly(e)
@@ -52,8 +55,21 @@ export async function createPasskey(label: string): Promise<Passkey> {
   return { cred_id: b64(new Uint8Array(cred.rawId)), pub: b64(raw), label, added: Math.floor(Date.now() / 1000) }
 }
 
-/** Asks for the passkey and returns the PRF output that unlocks the identity. */
-export async function prfUnlock(allow?: string[]): Promise<{ credId: string; prf: Bytes }> {
+function hintsFor(allow?: string[]): string[] | undefined {
+  // One credential means this device's own: keep the browser from offering a phone.
+  return allow?.length === 1 ? ['client-device'] : undefined
+}
+
+export interface PrfResult {
+  credId: string
+  /** null when this authenticator has no PRF (Windows Hello on most builds) */
+  prf: Bytes | null
+  /** 'platform' for this device's own authenticator, 'cross-platform' for a phone or key */
+  attachment: string | null
+}
+
+/** Asks for the passkey and returns its PRF output, when it has one. */
+export async function prfTry(allow?: string[]): Promise<PrfResult> {
   let cred: PublicKeyCredential | null
   try {
     cred = (await navigator.credentials.get({
@@ -62,9 +78,10 @@ export async function prfUnlock(allow?: string[]): Promise<{ credId: string; prf
         rpId: location.hostname,
         allowCredentials: allow?.map((id) => ({ type: 'public-key' as const, id: unb64(id) })),
         userVerification: 'required',
+        hints: hintsFor(allow),
         timeout: 120000,
         extensions: { prf: { eval: { first: PRF_SALT } } } as AuthenticationExtensionsClientInputs,
-      },
+      } as PublicKeyCredentialRequestOptions,
     })) as PublicKeyCredential | null
   } catch (e) {
     throw friendly(e)
@@ -72,10 +89,16 @@ export async function prfUnlock(allow?: string[]): Promise<{ credId: string; prf
   if (!cred) throw new Cancelled()
   const ext = cred.getClientExtensionResults() as { prf?: { results?: { first?: ArrayBuffer } } }
   const first = ext.prf?.results?.first
-  if (!first) {
-    throw new Error('这个设备或浏览器不支持 Passkey 的 PRF 扩展，无法解锁。可以在这里用手机扫码，用手机上的 Passkey 解锁。')
+  return { credId: b64(new Uint8Array(cred.rawId)), prf: first ? new Uint8Array(first) : null, attachment: cred.authenticatorAttachment ?? null }
+}
+
+/** Asks for the passkey and returns the PRF output that unlocks the identity. */
+export async function prfUnlock(allow?: string[]): Promise<{ credId: string; prf: Bytes; attachment: string | null }> {
+  const r = await prfTry(allow)
+  if (!r.prf) {
+    throw new Error('这个 Passkey 不支持 PRF 扩展，解不开身份。请用手机或已经添加过的设备解锁。')
   }
-  return { credId: b64(new Uint8Array(cred.rawId)), prf: new Uint8Array(first) }
+  return { credId: r.credId, prf: r.prf, attachment: r.attachment }
 }
 
 /** The challenge of a critical operation: the operation itself. */
@@ -84,18 +107,25 @@ export async function criticalChallenge(payload: Uint8Array): Promise<Bytes> {
 }
 
 /** Signs a critical operation with the user's passkey (user verification required). */
-export async function assertCritical(payload: Uint8Array, passkeys: Passkey[]): Promise<Assertion> {
-  const challenge = await criticalChallenge(payload)
+export async function assertCritical(payload: Uint8Array, passkeys: Passkey[], prefer?: string): Promise<Assertion> {
+  const ids = passkeys.map((p) => p.cred_id)
+  // This device's own passkey alone, when it is one of them: no phone prompt.
+  return assertWith(await criticalChallenge(payload), prefer && ids.includes(prefer) ? [prefer] : ids)
+}
+
+/** A WebAuthn assertion over challenge by one of allow. */
+export async function assertWith(challenge: Bytes, allow: string[]): Promise<Assertion> {
   let cred: PublicKeyCredential | null
   try {
     cred = (await navigator.credentials.get({
       publicKey: {
         challenge,
         rpId: location.hostname,
-        allowCredentials: passkeys.map((p) => ({ type: 'public-key' as const, id: unb64(p.cred_id) })),
+        allowCredentials: allow.map((id) => ({ type: 'public-key' as const, id: unb64(id) })),
         userVerification: 'required',
+        hints: hintsFor(allow),
         timeout: 120000,
-      },
+      } as PublicKeyCredentialRequestOptions,
     })) as PublicKeyCredential | null
   } catch (e) {
     throw friendly(e)

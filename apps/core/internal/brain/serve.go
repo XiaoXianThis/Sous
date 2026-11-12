@@ -2,6 +2,7 @@ package brain
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -257,6 +258,24 @@ func (b *Brain) rpc(from string, m tunnel.RPCMsg, t auth.Tunnel) {
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 6<<20))
 	res.Status, res.Body = resp.StatusCode, trust.B64.EncodeToString(data)
 	res.Header = map[string]string{"Content-Type": resp.Header.Get("Content-Type")}
+	compressResponse(m, &res, data)
+}
+
+// Compression is opt-in so older clients continue to receive plain bodies.
+func compressResponse(req tunnel.RPCMsg, res *tunnel.RPCMsg, data []byte) {
+	if req.Header["X-Sous-Accept-Encoding"] != "gzip" || len(data) < 8<<10 {
+		return
+	}
+	var buf bytes.Buffer
+	z, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if _, err := z.Write(data); err != nil {
+		return
+	}
+	if err := z.Close(); err != nil || buf.Len() >= len(data) {
+		return
+	}
+	res.Body = trust.B64.EncodeToString(buf.Bytes())
+	res.Header["X-Sous-Content-Encoding"] = "gzip"
 }
 
 // checkIntent verifies that the user approved this exact request just now.

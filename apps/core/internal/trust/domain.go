@@ -68,13 +68,15 @@ func (d DomainKeys) Current() (int64, error) {
 // SnapshotManifest describes the brain's encrypted state on the relay.
 type SnapshotManifest struct {
 	T      string   `json:"t"`
+	V      int      `json:"v,omitempty"` // 2: content-named chunks in Names
 	Holder string   `json:"holder"`
 	Term   int64    `json:"term"`
 	Seq    int64    `json:"seq"` // grows with every snapshot, across terms
 	Epoch  int64    `json:"epoch"`
 	IAT    int64    `json:"iat"`
 	Size   int64    `json:"size"`
-	Chunks []string `json:"chunks"` // SHA-256 of each encrypted chunk
+	Chunks []string `json:"chunks"`          // SHA-256 of each encrypted chunk
+	Names  []string `json:"names,omitempty"` // v2: each chunk's blob name, in order
 }
 
 // SnapshotAAD binds a chunk to its snapshot and position.

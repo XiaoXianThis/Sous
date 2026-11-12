@@ -10,6 +10,8 @@ export interface ToolCall {
 
 export interface RunView {
   run: Run
+  /** False for a summary whose stored process has not been requested yet. */
+  historyLoaded?: boolean
   /** seq of the run.queued event, to place the run in its thread's timeline */
   seq: number
   tools: ToolCall[]
@@ -167,6 +169,7 @@ export function runFromHistory(run: Run, events: HubEvent[], approvals: Approval
   }
   v.run = run
   v.approvals = approvals
+  v.historyLoaded = true
   return v
 }
 

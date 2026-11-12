@@ -2,7 +2,7 @@
 
 - Provider: core（`sous-relay`，`internal/relay`）
 - Consumers: core（`sous` 的 `internal/tunnel`）、web（`src/trust/net.ts`）
-- Status: 已实现（0.3.0-alpha1，决策 0030）。以代码为准。
+- Status: 已实现（0.3.0-alpha2，决策 0030、0033）。以代码为准。
 
 中继是一个“盲邮局”：转发和存放密文、存放签名文档，不持有任何有用的密钥。它做的校验只是为了让诚实的中继保持整洁；**每个接收方都会自己重新校验**，中继说的话一律不信（格式见 `sous-envelope.md`）。
 
@@ -19,7 +19,7 @@
    - **认证**：`{"t":"auth","addr","pub","sig","cert"?}`。其中 `sig` 是对 nonce 的签名（上下文 `sous/v1/relay-auth`）。
      - `addr` 为 `node:<id>` 时，这台机器必须在名册里，且公钥一致。
      - `addr` 为 `sess:<sid>` 时，必须带上身份签发、仍在有效期内的会话证书 `cert`，证书里的公钥要和 `pub` 一致。
-   - **匿名**：`{"t":"anon"}`。匿名连接只能做三件事：认领中继（`claim`）、读取身份包（`get identity`）、进出配对房间（`room.join` / `room.send`）。
+   - **匿名**：`{"t":"anon"}`。匿名连接只能做四件事：认领中继（`claim`）、读取身份包（`get identity`）、取设备密钥包（`devwrap.challenge` / `devwrap.get`）、进出配对房间（`room.join` / `room.send`）。
 3. 中继应答 `{"t":"welcome","addr"?}`。机器连上后，中继会按顺序推送它信箱里积压的消息。
 
 ## 请求
@@ -31,7 +31,11 @@
 | `ack` | `id` | 机器确认收到信箱里的第 `id` 条 |
 | `get` | `name` | 读文档：`roster`、`roster@<v>`（历史版本）、`scopes`、`pause`、`domain`、`lease`、`snapshot`、`identity`、`alert/<node>` |
 | `put` | `name`、`body` | 写文档，见下表 |
-| `blob.put` / `blob.get` | `name`、`blob`（base64url） | 大块数据（快照分块 `snapshot/<槽>/<i>`）。只有持有租约的大脑能写快照 |
+| `blob.put` / `blob.get` | `name`、`blob`（base64url） | 大块数据。快照块叫 `snapshot/c/<按内容的带密钥哈希>`（0.3.0-alpha1 是 `snapshot/<槽>/<i>`）。只有持有租约的大脑能写快照 |
+| `blob.keep` | `name: "snapshot/"`、`body: [要保留的块名]` | 删除 `snapshot/` 下不在列表里的块。只有持有租约的大脑能用；大脑传最新两份清单的块 |
+| `devwrap.put` | `name`（Passkey 的 cred_id）、`body`（`{iv, ct}`） | 会话保存一台设备的设备密钥包（决策 0033）。`cred_id` 必须在名册里。不广播、不能用 `get` 读 |
+| `devwrap.challenge` | — | 匿名。返回 `{nonce}`：32 字节一次性挑战，2 倍断言有效期内有效 |
+| `devwrap.get` | `name`（cred_id）、`nonce`、`data`（断言） | 匿名。断言必须由这把 Passkey 对 `nonce` 的原始字节签名、UV 为 1、来源和 rp_id 符合名册；挑战用一次就作废。通过后返回 `{t:"devwrap", body}` |
 | `room.open` | `room` | 已认证的会话打开配对房间（有效 10 分钟） |
 | `room.join` / `room.send` | `room`、`data` | 机器加入房间，双方互发消息。房间编号由配对串里的秘密派生，中继不知道秘密本身 |
 | `presence` | — | 返回 `{online: [地址]}`。中继说谁在线并不可信，只用来参考 |

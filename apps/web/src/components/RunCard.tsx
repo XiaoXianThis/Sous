@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { showProject, ui } from '../lib/app'
+import { loadRunHistory, showProject, ui } from '../lib/app'
 import { looks, runLook, runStatusText as statusText } from '../lib/status'
 import { gitOpText, isActive, type RunView } from '../lib/runs'
 import { duration } from '../lib/time'
@@ -146,11 +146,14 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
           <>
             {prompt && <p className="m-0 line-clamp-2 text-[13px] text-muted [overflow-wrap:anywhere]" title={prompt}>{prompt}</p>}
 
-            {(hasProcess || active) && (
+            {(hasProcess || active || view.historyLoaded === false) && (
               <button
                 className="justify-self-start inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-[12.5px] text-muted hover:text-ink min-w-0 max-w-full"
                 aria-expanded={process}
-                onClick={() => setProcess(!process)}
+                onClick={() => {
+                  setProcess(!process)
+                  if (!process && view.historyLoaded === false) void act('history', () => loadRunHistory(run.id))
+                }}
               >
                 {active && !run.paused ? <span className="w-1.5 h-1.5 rounded-full bg-info live-dot flex-none"></span> : <Icon name="terminal" size={13} />}
                 <span className="font-semibold whitespace-nowrap">{active ? '执行中' : '执行过程'}</span>
@@ -174,7 +177,7 @@ export default function RunCard({ view, nodeName, latest = true }: { view: RunVi
                 {view.statusLine && active && !run.paused && (
                   <p className="m-0 text-[12.5px] text-muted flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-info live-dot"></span>{view.statusLine}</p>
                 )}
-                {!hasProcess && !view.statusLine && <p className="m-0 text-[12.5px] text-faint">还没有动静</p>}
+                {!hasProcess && !view.statusLine && <p className="m-0 text-[12.5px] text-faint">{busy === 'history' ? '正在读取执行过程…' : '还没有动静'}</p>}
               </div>
             )}
             {run.paused && active && (

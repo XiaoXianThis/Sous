@@ -237,6 +237,8 @@ export function onHubEvent(fn: (ev: HubEvent) => void): () => void {
 }
 
 export async function startSession(onLoggedOut: () => void) {
+  stream?.stop()
+  stream = null
   const [{ threads }] = await Promise.all([api.threads()])
   chat.state.threads = sortThreads(threads)
   if (!ui.state.current || !threads.some((t) => t.id === ui.state.current)) {
@@ -244,8 +246,9 @@ export async function startSession(onLoggedOut: () => void) {
   }
   chat.emit()
   ui.emit()
+  // Establish the history cursor before opening the live stream. Opening
+  // since=0 first replays every stored event over the shared relay tunnel.
   if (ui.state.current) await openThread(ui.state.current)
-  stream?.stop()
   const feed = liveFeed()
   stream = new EventStream(
     () => chat.state.lastSeq,
@@ -329,19 +332,58 @@ function addThread(t: Thread) {
 }
 
 /** Loads a thread's history and Runs once. */
-export async function loadThread(id: string) {
+const loadingThreads = new Map<string, Promise<void>>()
+
+export function loadThread(id: string): Promise<void> {
+  const pending = loadingThreads.get(id)
+  if (pending) return pending
+  const loading = loadThreadHistory(id).finally(() => loadingThreads.delete(id))
+  loadingThreads.set(id, loading)
+  return loading
+}
+
+async function loadThreadHistory(id: string) {
   if (!id || ui.state.loaded[id]) return
   const [page, { runs }] = await Promise.all([api.messages(id), api.runs(id)])
   mergeHistory(chat.state, id, page.messages)
-  const details = await Promise.all(runs.filter((r) => !chat.state.runs[r.id]).map((r) => api.run(r.id)))
-  for (const d of details) {
-    if (!chat.state.runs[d.run.id]) chat.state.runs[d.run.id] = runFromHistory(d.run, d.events, d.approvals)
-  }
-  // Start the stream after what the page already covers.
   if (chat.state.lastSeq === 0) chat.state.lastSeq = page.last_seq
+  for (const run of runs) {
+    if (!chat.state.runs[run.id]) {
+      // Summaries lack run.queued's sequence. Place them beside the nearest
+      // loaded message until their process is opened and supplies the exact seq.
+      const next = page.messages.find((m) => m.created_at >= run.created_at)
+      const seq = next ? next.seq - 0.5 : (page.messages.at(-1)?.seq ?? 0) + 0.5
+      chat.state.runs[run.id] = { ...runFromHistory(run, [], []), seq, historyLoaded: false }
+    }
+  }
+  chat.emit()
+  // Completed runs need only their summary until someone opens their process.
+  // Restore approvals and activity for live runs without downloading old logs.
+  const pending = runs.filter((r) => (r.status === 'running' || r.status === 'queued') && !chat.state.runs[r.id].historyLoaded)
+  await Promise.all(Array.from({ length: Math.min(2, pending.length) }, async () => {
+    for (;;) {
+      const run = pending.shift()
+      if (!run) return
+      await loadRunHistory(run.id)
+    }
+  }))
   ui.state.loaded[id] = true
   chat.emit()
   ui.emit()
+}
+
+const loadingRuns = new Map<string, Promise<void>>()
+
+export function loadRunHistory(id: string): Promise<void> {
+  if (chat.state.runs[id]?.historyLoaded) return Promise.resolve()
+  const pending = loadingRuns.get(id)
+  if (pending) return pending
+  const loading = api.run(id).then((d) => {
+    chat.state.runs[id] = runFromHistory(d.run, d.events, d.approvals)
+    chat.emit()
+  }).finally(() => loadingRuns.delete(id))
+  loadingRuns.set(id, loading)
+  return loading
 }
 
 export async function newThread() {

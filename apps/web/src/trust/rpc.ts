@@ -34,14 +34,20 @@ export async function rpc(method: string, path: string, body?: Uint8Array, heade
   for (let attempt = 0; attempt < 3; attempt++) {
     const to = await brainAddr()
     try {
-      const res = await ask(to, { k: 'rpc', method, path, header: headers, body: body ? b64(body) : '' }, 'rpc.res', 120000)
+      const res = await ask(to, { k: 'rpc', method, path, header: { ...headers, 'X-Sous-Accept-Encoding': 'gzip' }, body: body ? b64(body) : '' }, 'rpc.res', 120000)
       if (typeof res.error === 'string' && res.error) {
         // The lease moved between our look and its answer: ask the new one.
         lastErr = new Error(res.error)
         await new Promise((r) => setTimeout(r, 1000))
         continue
       }
-      return { status: res.status as number, body: unb64((res.body as string) || ''), contentType: (res.header as Record<string, string>)?.['Content-Type'] ?? '' }
+      const responseHeaders = res.header as Record<string, string> | undefined
+      let data = unb64((res.body as string) || '')
+      if (responseHeaders?.['X-Sous-Content-Encoding'] === 'gzip') {
+        const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))
+        data = new Uint8Array(await new Response(stream).arrayBuffer())
+      }
+      return { status: res.status as number, body: data, contentType: responseHeaders?.['Content-Type'] ?? '' }
     } catch (e) {
       lastErr = e as Error
       if (e instanceof Locked) throw e

@@ -15,7 +15,7 @@ Each subdirectory is an independent app that follows its own language's conventi
 |---|---|---|---|
 | core | 中继 sous-relay + 每台电脑的 daemon / CLI（大脑机器上运行大脑） | Go, SQLite | none |
 | web | PWA：聊天、任务、审批、设置；部署到 Vercel | React | core（契约 core-relay、sous-envelope、core-brain-rpc、core-hub-http） |
-| desktop | 托盘 + 窗口，内嵌 web | Go, Wails v3 | web（build/web）；core（契约 core-daemon-ipc、core-hub-http） |
+| desktop | 桌面版：托盘 + 打开 sous 页面，打包并管理本机的 sous daemon | Go, Wails v3 | core（build/core 的 `sous`；契约 core-daemon-ipc） |
 | site | 官网 + 文档站 | Astro, Tailwind CSS | none |
 
 ## App AGENTS.md template

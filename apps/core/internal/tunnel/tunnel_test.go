@@ -3,6 +3,7 @@ package tunnel_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,34 @@ type inbox struct {
 	msgs []string
 	from []string
 	gaps int
+}
+
+func TestCanceledRequestsPreserveConnection(t *testing.T) {
+	for _, operation := range []string{"get", "send"} {
+		t.Run(operation, func(t *testing.T) {
+			w := tunneltest.NewWorld(t)
+			k := w.AddNode("mac", -1)
+			var received inbox
+			node := w.Client(k, tunnel.Config{Handler: received.handle})
+			sess, _, _ := w.NewSession(nil)
+			tunneltest.Eventually(t, "node roster", func() bool { return node.Roster() != nil })
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var err error
+			if operation == "get" {
+				_, err = sess.Get(ctx, "roster")
+			} else {
+				err = sess.Send(ctx, trust.NodeAddr(k.ID), []byte("canceled"))
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled request: %v", err)
+			}
+			if err := sess.Send(context.Background(), trust.NodeAddr(k.ID), []byte("still connected")); err != nil {
+				t.Fatalf("canceled request broke the shared connection: %v", err)
+			}
+			tunneltest.Eventually(t, "next message delivered", func() bool { return received.count() == 1 })
+		})
+	}
 }
 
 func (b *inbox) handle(from string, p []byte, gap bool) {

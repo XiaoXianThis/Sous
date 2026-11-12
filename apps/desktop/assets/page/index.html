@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sous</title>
+<style>
+  :root { --bg: #f7f6f3; --ink: #1d1d1f; --muted: #6e6e73; --panel: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --ink: #f2f2f2; --muted: #a1a1a6; --panel: #222225; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { width: min(440px, 100% - 32px); background: var(--panel); border-radius: 24px; padding: 32px; }
+  h1 { margin: 0 0 8px; font-size: 22px; }
+  p { color: var(--muted); }
+  code { background: rgba(127,127,127,.15); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>这台电脑还没有接入 sous</h1>
+  <p>在已解锁的设备上打开 sous 页面，进入“设置 → 机器 → 添加机器”，把得到的配对命令在这台电脑的终端里运行（<code>sous pair …</code>）。</p>
+  <p>配对完成后，托盘里的 sous 会自动启动本机服务，“打开 sous”会打开你的 sous 页面。</p>
+</main>
+</body>
+</html>

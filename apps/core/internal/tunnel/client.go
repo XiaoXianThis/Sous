@@ -256,7 +256,8 @@ func (c *Client) keepalive(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			// A ping waits for the write in progress; give it room on a slow uplink.
+			pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 			err := ws.Ping(pctx)
 			cancel()
 			if err != nil {
@@ -275,6 +276,14 @@ func writeJSON(ctx context.Context, ws *websocket.Conn, v any) error {
 	return ws.Write(ctx, websocket.MessageText, raw)
 }
 
+// writeTimeout allows a frame 30 seconds plus one second per 16 KB, so a
+// large frame on a slow uplink (around 100 KB/s) is not cut off: a write
+// that times out closes the whole connection.
+func writeTimeout(f rframe) time.Duration {
+	n := len(f.Data) + len(f.Blob) + len(f.Body)
+	return 30*time.Second + time.Duration(n/(16<<10))*time.Second
+}
+
 func (c *Client) write(ctx context.Context, f rframe) error {
 	c.mu.Lock()
 	ws := c.ws
@@ -284,7 +293,14 @@ func (c *Client) write(ctx context.Context, f rframe) error {
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// A request may expire while queued. Passing that context to Write
+	// would close the shared socket and interrupt unrelated requests.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Once a frame starts, finish it within its own bounded timeout. A caller
+	// canceling midway must not tear down every user's shared connection.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout(f))
 	defer cancel()
 	return writeJSON(wctx, ws, f)
 }
@@ -400,6 +416,17 @@ func (c *Client) BlobPut(ctx context.Context, name string, data []byte) error {
 	return err
 }
 
+// BlobKeep deletes every blob under prefix except the named ones (only the
+// lease holder may do it for snapshot/).
+func (c *Client) BlobKeep(ctx context.Context, prefix string, keep []string) error {
+	body, err := json.Marshal(keep)
+	if err != nil {
+		return err
+	}
+	_, err = c.request(ctx, rframe{T: "blob.keep", Name: prefix, Body: body})
+	return err
+}
+
 // BlobGet reads bytes; empty when missing.
 func (c *Client) BlobGet(ctx context.Context, name string) ([]byte, error) {
 	r, err := c.request(ctx, rframe{T: "blob.get", Name: name})
@@ -413,6 +440,9 @@ func (c *Client) BlobGet(ctx context.Context, name string) ([]byte, error) {
 func (c *Client) Send(ctx context.Context, to string, payload []byte) error {
 	c.smu.Lock()
 	defer c.smu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	oc := c.out[to]
 	if oc != nil && oc.Stale(c.cfg.Now()) {

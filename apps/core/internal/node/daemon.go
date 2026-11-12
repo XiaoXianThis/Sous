@@ -31,10 +31,11 @@ const (
 var ErrRevoked = errors.New("这台机器已被踢出（或不再被接受），要再用请重新配对")
 
 type Daemon struct {
-	root string
-	ob   *outbox
-	sem  chan struct{}
-	base []agents.Spec // the built-in agents, before node.json
+	brainRole func() string // set by the brain; reported in Status
+	root      string
+	ob        *outbox
+	sem       chan struct{}
+	base      []agents.Spec // the built-in agents, before node.json
 
 	// cfgMu guards what node.json decides and a reload replaces.
 	cfgMu  sync.RWMutex

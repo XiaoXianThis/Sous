@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Shell from './components/Shell'
 import { BrainOffline } from './components/Trust'
 import Unlock from './components/Unlock'
@@ -18,8 +18,11 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [offline, setOffline] = useState('')
   const [error, setError] = useState('')
+  const connecting = useRef(false)
 
   const connect = useCallback(async () => {
+    if (connecting.current) return
+    connecting.current = true
     try {
       setError('')
       await api.me()
@@ -30,6 +33,8 @@ export default function App() {
       if (!isUnlocked()) return
       if (e instanceof Offline) setOffline((e as Error).message)
       else setError((e as Error).message)
+    } finally {
+      connecting.current = false
     }
   }, [])
 

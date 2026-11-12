@@ -20,6 +20,10 @@
 
 ## 2. 安装 sous 客户端
 
+**桌面版（macOS、Windows，推荐个人电脑用）**：从 GitHub Releases 下载 `sous-desktop_<版本>_<系统>_<架构>.zip`。macOS 解压后把 `sous.app` 拖进“应用程序”；Windows 解压出 `sous` 文件夹，运行里面的 `sous-desktop.exe`。桌面版只有托盘图标：里面带着 `sous`，配对后会自动在后台运行它（这台电脑被设为大脑时也在这里当大脑），菜单里可以“开机自动运行”、检查更新、打开 sous 页面。macOS 上页面在浏览器里打开（Passkey 要求），Windows 上在应用窗口里打开，用 Windows PIN 解锁。配对仍用下面第 3 步的命令，`sous` 在 `sous.app/Contents/MacOS/sous`（Windows 是 `sous.exe`，和桌面版同一目录）。
+
+**只装命令行（服务器，或者不想要托盘）**：
+
 **一条命令安装（也用来更新）**——脚本会下载最新 Release、按 `checksums.txt` 校验、装到 `~/.local/bin`（已装过则原地替换，并重启运行中的服务）：
 
 macOS / Linux：
