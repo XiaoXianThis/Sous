@@ -22,6 +22,7 @@
 - **只转发安全的请求头**：`Content-Type`、`Accept`、`If-Match`、`If-None-Match`、`Last-Event-ID`。不使用 Cookie，也不做 CSRF 校验。
 - **已经去掉的路由**，访问时返回 410：配对码、`DELETE /nodes/{id}`、`/node/pair`、`/auth/*`。机器的加入和移除改走名册。
 - **机器只能调用设备接口** `/api/v1/device/*`，访问其他路径返回 403。设备身份就是那台机器本身。
+- **机器的终端对话默认按名册限制**：名册里 `console` 为假（大脑机器除外）时，机器只能 `POST /notes`、`GET /approvals`（只返回本机 Run 的审批）、`POST /approvals/{id}/decide`（只限本机 Run 的审批）；对话、消息和事件流返回 403 `console_closed`。打开 `console` 是关键操作。
 - **大脑本身的关键请求**（模型供应商、MCP 等）：大脑先返回 401 `reauth`，页面随后带上意图和断言重发同一个请求，大脑核对两者都和这次请求对得上才执行。
 - **由机器自己把关的关键操作**：页面先把许可直接发给机器，再调用大脑。机器上的守卫检查许可，大脑无法替用户伪造。这类操作包括：打开终端、安装 / 登录 / 退出 agent、写 API Key、写配置文件、修改角色或工作空间、更新。终端输入（`job.input`）由会话直接发给机器，大脑转发的输入一律拒绝。
 - **机器直接回答会话的消息**：`permit.res`、`job.input.res`、`job.resize.res`、`audit`（`{k:"audit.get", since}` 的应答，带哈希链）、`node.pong`。

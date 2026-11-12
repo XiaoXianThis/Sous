@@ -14,6 +14,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/acp/acptest"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/brain"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/ipc"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/trust"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tunnel"
@@ -258,12 +259,26 @@ func TestZeroTrustEndToEnd(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Face ID") {
 		t.Fatal("set_env without a permit:", err)
 	}
+	envMatch := node.RequestMatch("agents.set_env", map[string]any{"agent": "fake", "name": "FOO_KEY", "value": "secret"})
 	// A permit without the assertion is refused by the machine.
-	if res := p.permit(w, worker.cfg.NodeID, trust.PermitAdmin, map[string]string{"op": "agents.set_env", "agent": "fake", "name": "FOO_KEY"}, false); res["ok"] == true {
+	if res := p.permit(w, worker.cfg.NodeID, trust.PermitAdmin, envMatch, false); res["ok"] == true {
 		t.Fatal("a critical permit without an assertion was accepted")
 	}
-	if res := p.permit(w, worker.cfg.NodeID, trust.PermitAdmin, map[string]string{"op": "agents.set_env", "agent": "fake", "name": "FOO_KEY"}, true); res["ok"] != true {
+	// A permit that does not name the value approves nothing.
+	p.permit(w, worker.cfg.NodeID, trust.PermitAdmin, map[string]string{"op": "agents.set_env", "agent": "fake", "name": "FOO_KEY"}, true)
+	if err := p.call("PUT", "/api/v1/nodes/"+worker.cfg.NodeID+"/agents/fake/env", env, nil); err == nil {
+		t.Fatal("a permit without the value's hash approved set_env")
+	}
+	// The brain cannot swap the approved value for another.
+	if res := p.permit(w, worker.cfg.NodeID, trust.PermitAdmin, envMatch, true); res["ok"] != true {
 		t.Fatal("permit refused:", res)
+	}
+	if err := p.call("PUT", "/api/v1/nodes/"+worker.cfg.NodeID+"/agents/fake/env", map[string]string{"name": "FOO_KEY", "value": "attacker"}, nil); err == nil {
+		t.Fatal("a permit for one value let the brain write another")
+	}
+	// Three refusals froze the machine, as they should; the user thaws it.
+	if res := p.permit(w, worker.cfg.NodeID, trust.PermitUnfreeze, nil, true); res["ok"] != true {
+		t.Fatal("unfreeze refused:", res)
 	}
 	p.mustCall("PUT", "/api/v1/nodes/"+worker.cfg.NodeID+"/agents/fake/env", env, nil)
 	// The permit was used up.
@@ -276,6 +291,10 @@ func TestZeroTrustEndToEnd(t *testing.T) {
 	if err := p.call("POST", "/api/v1/models/providers", prov, nil); err == nil {
 		t.Fatal("adding a model provider without Face ID worked")
 	}
+
+	// 4b. A machine's own terminal (sous chat) sees only what its console
+	// allows: notes and its own approvals, until the user opens it.
+	checkConsole(t, w, worker)
 
 	// 5. Nothing readable reached the relay.
 	time.Sleep(time.Second)
@@ -336,6 +355,51 @@ func TestZeroTrustEndToEnd(t *testing.T) {
 		return false
 	})
 	assertNoPlaintext(t, w.Dir, marker)
+}
+
+func checkConsole(t *testing.T, w *tunneltest.World, m *machine) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.d.ServeIPC(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := ipc.Dial(ipc.Path(m.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	call := func(method string, params any) error {
+		cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
+		defer ccancel()
+		var out json.RawMessage
+		return cl.Call(cctx, method, params, &out)
+	}
+	for _, c := range []struct {
+		method string
+		params any
+	}{{"threads.list", nil}, {"messages.list", map[string]string{"thread_id": "x"}}, {"chat.send", map[string]string{"content": "hi"}}} {
+		if err := call(c.method, c.params); err == nil || !strings.Contains(err.Error(), "终端对话") {
+			t.Fatalf("%s on a closed console: %v", c.method, err)
+		}
+	}
+	if err := call("note.add", map[string]string{"text": "a note from the worker"}); err != nil {
+		t.Fatal("a note on a closed console:", err)
+	}
+	if err := call("approvals.list", nil); err != nil {
+		t.Fatal("own approvals on a closed console:", err)
+	}
+	if err := call("approvals.decide", map[string]string{"id": "someone-elses"}); err == nil {
+		t.Fatal("answered an approval of another machine")
+	}
+	w.Update(func(r *trust.Roster) {
+		for i := range r.Nodes {
+			if r.Nodes[i].ID == m.cfg.NodeID {
+				r.Nodes[i].Console = true
+			}
+		}
+	})
+	tunneltest.Eventually(t, "the opened console reads the conversations", func() bool { return call("threads.list", nil) == nil })
 }
 
 func assertNoPlaintext(t *testing.T, dir, marker string) {

@@ -311,6 +311,7 @@ export class Net {
 
   private async sendNow(to: string, msg: unknown) {
     let oc = this.out.get(to)
+    if (oc?.stale()) oc = undefined // time for a fresh key
     if (!oc) {
       const id = to.startsWith('node:') ? to.slice(5) : ''
       const n = this.roster?.nodes.find((x) => x.id === id)

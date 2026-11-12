@@ -44,8 +44,16 @@ type RosterNode struct {
 	Role       string `json:"role,omitempty"`
 	Brain      *Brain `json:"brain,omitempty"`
 	Frozen     bool   `json:"frozen,omitempty"`
-	Added      int64  `json:"added,omitempty"`
+	// Console lets the machine's own terminal (sous chat) read every
+	// conversation and answer every approval as the user would. Without it
+	// the machine only writes notes and answers approvals of its own runs.
+	// Brain machines hold the data anyway and need no flag.
+	Console bool  `json:"console,omitempty"`
+	Added   int64 `json:"added,omitempty"`
 }
+
+// FullDevice reports whether a machine's device calls may see everything.
+func (n RosterNode) FullDevice() bool { return n.Console || n.Brain != nil }
 
 // Brain marks a machine the user allows to run the brain. Lower Priority
 // wins the election.
@@ -138,8 +146,8 @@ func AcceptRoster(identityPub []byte, cur *Roster, u RosterUpdate, now time.Time
 
 // RosterNeedsAssertion reports whether going from a to b needs the user's
 // fresh verification: anything that adds or removes a member, changes a
-// key, a brain, the relay or the origins, or unfreezes a machine. Freezing
-// and renaming do not.
+// key, a brain, the relay or the origins, unfreezes a machine or opens its
+// console. Freezing, closing a console and renaming do not.
 func RosterNeedsAssertion(a, b *Roster) bool {
 	if a.RPID != b.RPID || a.Relay != b.Relay || !slices.Equal(a.Origins, b.Origins) || a.User.KEMPub != b.User.KEMPub {
 		return true
@@ -164,6 +172,9 @@ func RosterNeedsAssertion(a, b *Roster) bool {
 			return true
 		}
 		if na.Frozen && !nb.Frozen {
+			return true
+		}
+		if !na.Console && nb.Console {
 			return true
 		}
 	}

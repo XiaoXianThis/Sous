@@ -40,8 +40,13 @@ async function keyIdOf(pub: Uint8Array): Promise<string> {
   return b64(h.subarray(0, 12))
 }
 
+/** Mirrors trust.ChanRekeyAfter / ChanRekeyMsgs: a fresh channel key every hour or 100k messages. */
+export const CHAN_REKEY_AFTER_MS = 3600_000
+export const CHAN_REKEY_MSGS = 100_000
+
 export class OutChannel {
   private seq = 0
+  private readonly opened = Date.now()
   private constructor(readonly id: string, readonly opening: Signed, private key: CryptoKey) {}
 
   static async open(from: string, to: string, signer: SignKey, recipientKem: Uint8Array): Promise<OutChannel> {
@@ -50,6 +55,11 @@ export class OutChannel {
     const key = await aesKey(hpkeExport(ctx, 'sous/v1/chan-key', 32))
     const o: ChanOpen = { t: 'chan', ch, from, to, to_key: await keyIdOf(recipientKem), enc: b64(enc), iat: now() }
     return new OutChannel(ch, await signDoc(signer, o), key)
+  }
+
+  /** Whether the sender should open a new channel instead. */
+  stale(at = Date.now()): boolean {
+    return at - this.opened >= CHAN_REKEY_AFTER_MS || this.seq >= CHAN_REKEY_MSGS
   }
 
   async seal(pt: Uint8Array): Promise<Wire> {

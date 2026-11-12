@@ -27,7 +27,7 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
   - `internal/trust`：密钥（P-256 签名、X-Wing HPKE）、签名文档、名册、断言校验、通道、配对串、数据密钥。格式和页面的 `apps/web/src/trust` 逐字节一致，改动要同时改两边，并重新生成向量：`SOUS_WRITE_VECTORS=1 go test ./internal/trust -run Vectors` 和 `SOUS_WRITE_VECTORS=1 bun run test`（在 apps/web）。测试里用 `trust/trusttest` 的软件 Passkey。
   - `internal/relay`（`cmd/sous-relay`）：盲中继。它的检查只是让诚实的中继保持整洁，接收方会再校验一遍。`Tap` / `Inject` / `InjectDoc` 只给测试扮演撒谎的中继用。
   - `internal/tunnel`：机器连中继的客户端，负责文档校验和持久化（`trust/tunnel.json`，包括见过的通道 id）、通道、link（机器 ↔ 大脑的帧流）和 RPC；`tunnel/tunneltest` 用来在测试里起中继、扮演用户的页面（`World`、`PairPage`）。
-  - `internal/node`：`transport.go`（发行版只走中继；包内测试的 `legacy_transport_test.go` 直连进程内的 Hub）、`trustnode.go`（密钥、配对 `PairRelay`、会话发来的许可和终端输入、审计）、`guard.go`（检查大脑发来的每一帧，`ScopeError` 前缀）、`audit.go`。
+  - `internal/node`：`transport.go`（发行版只走中继；包内测试的 `legacy_transport_test.go` 直连进程内的 Hub）、`trustnode.go`（密钥、配对 `PairRelay`、会话发来的许可和终端输入、审计）、`guard.go`（检查大脑发来的每一帧，`ScopeError` 前缀；关键操作的许可按 `RequestMatch` / `boundArgs` 核对内容，新增关键操作时两处都要补）、`audit.go`。
   - `internal/brain`：选主、租约、加密快照、在内存监听器上跑 Hub、RPC 和 link 的桥接；`Attach` 在每个 daemon 上运行，名册决定这台能不能当大脑。端到端测试：`e2e_test.go`（全流程和故障切换）、`adversary_test.go`（撒谎的中继）。
   - `auth.Tunnel`：大脑放进请求 context 的来源（会话 SID、机器 Device、Fresh）。`RequireFresh` 在隧道模式下只认 Fresh。
   - 更新必须带作者离线发布密钥的签名（`internal/update/release.go`，公钥在 `releasekey.go`）；`sous release keygen|sign` 在作者本机运行，私钥不进 CI。

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -116,14 +117,38 @@ func (b *Brain) MachineMessage(from string, payload []byte) {
 		return
 	}
 	id, _ := cutNode(from)
+	t := auth.Tunnel{Device: id, Limited: true}
+	if r := b.C.Roster(); r != nil {
+		if n, ok := r.Node(id); ok && n.FullDevice() {
+			t.Limited = false
+		}
+	}
 	if m.K == "rpc" || m.K == "ws.open" {
-		path := m.Path
-		if !strings.HasPrefix(path, "/api/v1/device/") {
+		if !strings.HasPrefix(m.Path, "/api/v1/device/") {
 			b.answer(from, tunnel.RPCMsg{K: "rpc.res", ID: m.ID, Status: 403, Body: errBody("forbidden", "机器只能调用设备接口")})
 			return
 		}
+		p, _, _ := strings.Cut(m.Path, "?")
+		if t.Limited && (m.K == "ws.open" || p != path.Clean(p) || strings.Contains(p, "%") || !matches(limitedDevice, routeKey(m.Method, p))) {
+			const msg = "这台机器没有开放终端对话：在页面的机器详情里打开“终端对话”（需要 Face ID）"
+			if m.K == "ws.open" {
+				b.answer(from, tunnel.RPCMsg{K: "ws.close", ID: m.ID, Error: msg})
+			} else {
+				b.answer(from, tunnel.RPCMsg{K: "rpc.res", ID: m.ID, Status: 403, Body: errBody("console_closed", msg)})
+			}
+			return
+		}
 	}
-	b.serve(from, m, auth.Tunnel{Device: id})
+	b.serve(from, m, t)
+}
+
+// limitedDevice is what a machine without an open console may call: write
+// a note, and see and answer the approvals of its own runs (the handlers
+// filter those by machine).
+var limitedDevice = []*regexp.Regexp{
+	regexp.MustCompile(`^POST /api/v1/device/notes$`),
+	regexp.MustCompile(`^GET /api/v1/device/approvals$`),
+	regexp.MustCompile(`^POST /api/v1/device/approvals/[^/]+/decide$`),
 }
 
 func (b *Brain) serve(from string, m tunnel.RPCMsg, t auth.Tunnel) {

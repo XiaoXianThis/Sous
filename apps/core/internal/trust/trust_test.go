@@ -143,6 +143,17 @@ func TestRosterUpdates(t *testing.T) {
 	if _, err := trust.AcceptRoster(w.id.Public(), &f, trust.RosterUpdate{Doc: tdoc}, now, nil); err == nil {
 		t.Fatal("unfreezing without an assertion was accepted")
 	}
+	// Opening a machine's console needs an assertion; closing it does not.
+	a, b := got, got
+	a.Nodes = []trust.RosterNode{got.Nodes[0]}
+	b.Nodes = []trust.RosterNode{got.Nodes[0]}
+	b.Nodes[0].Console = true
+	if !trust.RosterNeedsAssertion(&a, &b) {
+		t.Fatal("opening a console needs no assertion")
+	}
+	if trust.RosterNeedsAssertion(&b, &a) {
+		t.Fatal("closing a console needs an assertion")
+	}
 	// A roster signed by anyone but the identity is rejected.
 	evil := must[*trust.SignKey](t)(trust.NewSignKey())
 	edoc := must[trust.Signed](t)(trust.Sign(evil, trust.TRoster, frozen))
