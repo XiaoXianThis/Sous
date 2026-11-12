@@ -13,6 +13,9 @@ Contracts between apps. This is the only source-level agreement apps share.
 
 | contract | provider | consumers |
 |---|---|---|
-| [core-hub-http](core-hub-http.md) | core（sous-hub） | web、desktop |
-| [core-hub-node](core-hub-node.md) | core（sous-hub） | core（sous daemon） |
+| [core-relay](core-relay.md) | core（sous-relay） | core（sous）、web |
+| [sous-envelope](sous-envelope.md) | core（internal/trust） | core、web |
+| [core-brain-rpc](core-brain-rpc.md) | core（大脑） | web、core（sous daemon） |
+| [core-hub-http](core-hub-http.md) | core（大脑，经 core-brain-rpc） | web、desktop |
+| [core-hub-node](core-hub-node.md) | core（大脑，经 core-brain-rpc 的 link） | core（sous daemon） |
 | [core-daemon-ipc](core-daemon-ipc.md) | core（sous daemon） | core（sous CLI）、desktop |

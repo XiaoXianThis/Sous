@@ -6,15 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/coder/websocket"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ipc"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
@@ -36,42 +32,13 @@ func (d *Daemon) ServeIPC(ctx context.Context, logs *LogRing) error {
 	return nil
 }
 
-var hubHTTP = &http.Client{Timeout: 30 * time.Second}
-
-// hub calls a device endpoint of the Hub.
+// hub calls a device endpoint of the brain (sous chat, sous note, sous mcp).
 func (d *Daemon) hub(ctx context.Context, method, path string, body, out any) error {
-	var rd io.Reader
-	if body != nil {
-		raw, _ := json.Marshal(body)
-		rd = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, d.conf().HubURL+"/api/v1/device"+path, rd)
+	t, err := d.transport()
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+d.conf().Token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := hubHTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("连不上 Hub：%w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if resp.StatusCode >= 300 {
-		var e struct {
-			Error struct{ Message string } `json:"error"`
-		}
-		if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
-			return errors.New(e.Error.Message)
-		}
-		return fmt.Errorf("Hub 返回 %s", resp.Status)
-	}
-	if out != nil {
-		return json.Unmarshal(raw, out)
-	}
-	return nil
+	return t.Call(ctx, method, "/api/v1/device"+path, body, out)
 }
 
 func (d *Daemon) ipcCall(ctx context.Context, method string, params json.RawMessage, notify func(string, any) error, logs *LogRing) (any, error) {
@@ -182,40 +149,39 @@ func (d *Daemon) ipcCall(ctx context.Context, method string, params json.RawMess
 	return nil, fmt.Errorf("unknown method %q", method)
 }
 
-// relayEvents streams the Hub's event stream to a local client as "event"
+// relayEvents streams the brain's event stream to a local client as "event"
 // notifications, reconnecting until the client goes away.
 func (d *Daemon) relayEvents(ctx context.Context, since int64, notify func(string, any) error) {
-	u := strings.Replace(d.conf().HubURL, "http", "ws", 1) + "/api/v1/device/ws"
-	hdr := http.Header{}
-	hdr.Set("Authorization", "Bearer "+d.conf().Token)
 	backoff := time.Second
 	for ctx.Err() == nil {
-		ws, _, err := websocket.Dial(ctx, fmt.Sprintf("%s?since=%d", u, since), &websocket.DialOptions{HTTPHeader: hdr})
-		if err == nil {
-			ws.SetReadLimit(16 << 20)
-			backoff = time.Second
-			notify("hub", map[string]bool{"connected": true})
-			for {
-				_, raw, err := ws.Read(ctx)
-				if err != nil {
-					break
-				}
-				var ev struct {
-					Seq int64 `json:"seq"`
-				}
-				json.Unmarshal(raw, &ev)
-				if ev.Seq > 0 {
-					since = ev.Seq
-				}
-				if notify("event", json.RawMessage(raw)) != nil {
-					ws.CloseNow()
-					return
-				}
+		t, err := d.transport()
+		if err != nil {
+			return
+		}
+		connected := false
+		err = t.Stream(ctx, fmt.Sprintf("/api/v1/device/ws?since=%d", since), func(raw []byte) error {
+			if !connected {
+				connected = true
+				backoff = time.Second
+				notify("hub", map[string]bool{"connected": true})
 			}
-			ws.CloseNow()
-			if notify("hub", map[string]bool{"connected": false}) != nil {
-				return
+			var ev struct {
+				Seq int64 `json:"seq"`
 			}
+			json.Unmarshal(raw, &ev)
+			if ev.Seq > 0 {
+				since = ev.Seq
+			}
+			if notify("event", json.RawMessage(raw)) != nil {
+				return errClientGone
+			}
+			return nil
+		})
+		if errors.Is(err, errClientGone) {
+			return
+		}
+		if notify("hub", map[string]bool{"connected": false}) != nil {
+			return
 		}
 		select {
 		case <-ctx.Done():

@@ -3,6 +3,8 @@ import { usePhone } from '../lib/phone'
 import AgentSwitch from './AgentSwitch'
 import { ago } from '../lib/time'
 import { api } from '../lib/api'
+import { kick, rename as trustRename } from '../trust/vault'
+import { RosterPanel } from './Trust'
 import { useChat } from '../lib/app'
 import { jobTitle, latestJob } from '../lib/jobs'
 import type { AgentInfo, Node, Updates } from '../lib/types'
@@ -20,7 +22,6 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   const [nodes, setNodes] = useState<Node[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [code, setCode] = useState<{ code: string; expires_at: number } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [updates, setUpdates] = useState<Updates | null>(null)
@@ -52,7 +53,7 @@ export default function Machines({ onClose }: { onClose: () => void }) {
     const tag = updates?.latest?.tag ?? ''
     if (!confirm(`把“${n.name}”上的 sous 更新到 ${tag}？\n\n它会下载新版本、替换自己并重启；正在执行的任务会在重启后接着做。`)) return
     try {
-      const r = await api.updateNode(n.id)
+      const r = await api.updateNode(n.id, tag)
       setUpdating((u) => ({ ...u, [n.id]: `正在更新到 ${r.version}…` }))
     } catch (e) {
       setError((e as Error).message)
@@ -94,17 +95,10 @@ export default function Machines({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function pair() {
-    try {
-      setCode(await api.pairingCode())
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
-
   async function rename(n: Node) {
     if (!draftName.trim()) return
     try {
+      await trustRename(n.id, draftName.trim())
       await api.renameNode(n.id, draftName.trim())
       setRenaming(null)
       await load()
@@ -114,9 +108,9 @@ export default function Machines({ onClose }: { onClose: () => void }) {
   }
 
   async function remove(n: Node) {
-    if (!confirm(`删除机器“${n.name}”？\n\n它会立刻断开，之后需要重新配对才能使用。`)) return
+    if (!confirm(`踢出机器“${n.name}”？\n\n它会立刻被所有机器拒绝、删除自己的密钥，之后读不到任何新数据。需要刷一次 Face ID。`)) return
     try {
-      await api.removeNode(n.id)
+      await kick(n.id)
       await load()
     } catch (e) {
       setError((e as Error).message)
@@ -198,7 +192,6 @@ export default function Machines({ onClose }: { onClose: () => void }) {
     </div>
   )
 
-  const pairCommand = code ? `sous pair ${location.origin} ${code.code}` : ''
   return (
     // Laid flat into a settings page; what it opens are dialogs again.
     <SheetPageContext.Provider value={false}>
@@ -210,32 +203,20 @@ export default function Machines({ onClose }: { onClose: () => void }) {
             <Icon name="x" size={18} />
           </button>
         </header>
-        <p className="text-muted text-[13px] m-0">装了 sous 客户端的电脑。sous 会把编程任务派到这些电脑上的 agent 去做。</p>
+        <p className="text-muted text-[13px] m-0">装了 sous 客户端的电脑。每台只接受你签名的指令，或者大脑在你给的自主范围内发的指令。</p>
 
-        {code ? (
-          <div className="border border-dashed border-accent rounded-[14px] px-3 py-2.5 grid gap-2">
-            <p className="m-0 text-[14px]">在要添加的电脑上运行（10 分钟内有效）：</p>
-            <code className="font-mono text-[13px] bg-page px-2.5 py-2 rounded-[10px] [overflow-wrap:anywhere] select-all">{pairCommand}</code>
-            <p className="text-muted text-[13px] m-0">服务器加上 <code>--role server</code>；加上 <code>--workspace ~/Code</code> 指定放项目的目录。</p>
-            <div className="flex gap-3 items-center">
-              <button className="btn small ghost py-[7px] px-4" onClick={() => void navigator.clipboard?.writeText(pairCommand)}>复制命令</button>
-              <button className="link" onClick={() => setCode(null)}>完成</button>
-            </div>
-          </div>
-        ) : (
-          <button className="btn small justify-self-start self-start" onClick={() => void pair()}><Icon name="plus" size={15} stroke={2.2} />配对新机器</button>
-        )}
+        <RosterPanel />
 
         {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}
 
         {updates && (
           <p className="m-0 text-[13px] text-muted flex gap-1.5 flex-wrap items-baseline">
-            Hub {updates.hub.version}
+            大脑 {updates.hub.version}
             {updates.latest ? <> · 最新发布 <a className="text-accent" href={updates.latest.url} target="_blank" rel="noreferrer">{updates.latest.tag}</a></> : updates.error ? <> · 检查更新失败：{updates.error}</> : null}
             <button className="link" onClick={() => void loadUpdates(true)}>检查更新</button>
           </p>
         )}
-        {updates?.hub.update_available && <p className="text-muted text-[13px] m-0">Hub 有新版本：在服务器上按部署指南替换 sous-hub 并重启服务。</p>}
+        {updates?.hub.update_available && <p className="text-muted text-[13px] m-0">有新版本：中继在服务器上按部署指南替换 sous-relay；机器在下面点“更新”（要刷 Face ID）。</p>}
 
         <ul className="list-none m-0 p-0 overflow-y-auto grid gap-2">
           {nodes.map((n) => (

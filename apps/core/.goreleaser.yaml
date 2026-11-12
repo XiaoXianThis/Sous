@@ -31,9 +31,9 @@ builds:
       post:
         - cmd: sh scripts/sign-darwin.sh "{{ .Path }}"
           output: true
-  - id: sous-hub
-    main: ./cmd/sous-hub
-    binary: sous-hub
+  - id: sous-relay
+    main: ./cmd/sous-relay
+    binary: sous-relay
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
     ldflags: ["-s -w -X github.com/XiaoXianThis/Sous/apps/core/internal/version.Version={{ .Tag }}"]
@@ -49,9 +49,9 @@ archives:
       - goos: windows
         formats: [zip]
     files: [none*]
-  - id: sous-hub
-    ids: [sous-hub]
-    name_template: "sous-hub_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: sous-relay
+    ids: [sous-relay]
+    name_template: "sous-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files:
       # The Hub serves the PWA from web/ next to it (web_dir in hub.yaml).

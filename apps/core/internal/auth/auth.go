@@ -159,6 +159,9 @@ func (a *Auth) ResetPasskeys(ctx context.Context, revokeAll bool) (string, error
 
 // Session returns the CSRF token of the request's session, or ErrForbidden.
 func (a *Auth) Session(r *http.Request) (string, error) {
+	if t, ok := TunnelOf(r.Context()); ok && t.SID != "" {
+		return "", nil
+	}
 	c, err := r.Cookie(SessionCookie)
 	if err != nil || c.Value == "" {
 		return "", ErrForbidden
@@ -174,6 +177,10 @@ func (a *Auth) Session(r *http.Request) (string, error) {
 // and HEAD must also carry the session's CSRF token in X-CSRF-Token.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if t, ok := TunnelOf(r.Context()); ok && t.SID != "" {
+			next.ServeHTTP(w, r) // no cookie, so no CSRF to check
+			return
+		}
 		csrf, err := a.Session(r)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
@@ -198,6 +205,13 @@ const FreshLogin = 15 * time.Minute
 // then asks for the passkey again and retries. Guards what a stolen cookie
 // must not be enough for, such as opening a shell on a machine.
 func (a *Auth) RequireFresh(w http.ResponseWriter, r *http.Request) bool {
+	if t, ok := TunnelOf(r.Context()); ok {
+		if t.Fresh {
+			return true
+		}
+		writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要你刷一次 Face ID")
+		return false
+	}
 	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
 		if at, err := a.st.SessionCreated(r.Context(), hash(c.Value)); err == nil && time.Since(at) < FreshLogin {
 			return true
@@ -211,6 +225,9 @@ func (a *Auth) RequireFresh(w http.ResponseWriter, r *http.Request) bool {
 // belong to one session (shells). It is not the session token, nor what the
 // database keeps, so it is safe to hand to a machine.
 func (a *Auth) Owner(r *http.Request) string {
+	if t, ok := TunnelOf(r.Context()); ok && t.SID != "" {
+		return hash("sous-session-owner:tunnel:" + t.SID)
+	}
 	c, err := r.Cookie(SessionCookie)
 	if err != nil || c.Value == "" {
 		return ""

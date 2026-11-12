@@ -29,6 +29,7 @@ machine_look /  ──► 机器与执行位置       ──► 通过 sous mcp 
 
 ## 核心能力
 
+0. **零信任（0.3，决策 0030/0031）**：服务器上只有一个看不到数据、也控制不了任何机器的盲中继；AI 在你指定的“大脑机器”上思考；每台机器只接受你签名的指令或你授权范围内的指令，详见 [零信任](docs/architecture/trust.md)。下面第 1 条描述的是 0.2 的形态。
 1. **Hub 只动脑，Node 才动手**：`sous-hub` 常驻 Linux 服务器，负责模型调用、单一事件日志（`eventlog.Log`）、长对话分段摘要与通知，**绝不执行 shell 命令、不直接读写代码仓库**；`sous` 客户端运行在你的开发机与服务器上，主动连接 Hub（无需公网 IP 或入站端口），并在本地二次强制校验权限模式与底线规则。
 2. **统一调度多家编程 Agent（ACP）**：通过标准 Agent Client Protocol 驱动本机已安装并登录的 **Claude Code**、**Codex**、**Cursor**、**OpenCode**、**Kiro**，并支持在 `~/.sous/node.json` 的 `custom_agents` 中接入任意自定义 ACP agent。常用的「agent + 模型 + 思考强度」可保存为**预设**，由主管按在线电脑自动匹配。
 3. **独立 Worktree 与就地快照隔离**：代码任务可在 `~/.sous/worktrees/<仓库名>/<id>/` 的独立分支（`sous/<标题>-<id>`）中执行，不触碰原工作区；就地任务（`in_place`）自动拍快照并支持一键恢复。任务做完后改动停在分支上，只有你明确发话才执行 `git_commit`、`git_merge`（仅快进）、`git_push` 或 `git_pr`，绝不擅自合并主分支。
@@ -85,19 +86,19 @@ cd Sous
 
 wok ls                        # 查看所有应用及其任务
 wok build web                 # 构建 PWA 前端 -> build/web/
-wok build core                # 构建本机 sous 与 sous-hub -> build/core/
-wok run core build-hub-linux  # 交叉编译 Linux 服务端 -> build/core/linux-amd64/sous-hub
+wok build core                # 构建本机 sous 与 sous-relay -> build/core/
+wok run core build-relay-linux  # 交叉编译 Linux 中继 -> build/core/linux-amd64/sous-relay
 wok build site                # 构建官网与文档站 -> build/site/
 ```
 
-服务端 `sous-hub` 的完整生产部署步骤（`systemd` + `Caddy` HTTPS + Passkey 注册 + 每日备份）请参见 [部署 Hub](docs/guides/deploy-hub.md)。
+服务端 `sous-hub` 的完整生产部署步骤（`systemd` + `Caddy` HTTPS + Passkey 注册 + 每日备份）请参见 [部署](docs/guides/deploy.md)。
 
 ---
 
 ## 文档链接
 
 - **文档总入口**：[docs/README.md](docs/README.md)
-- **使用与运维指南**：[部署 Hub](docs/guides/deploy-hub.md) · [接入一台电脑或服务器](docs/guides/connect-machine.md) · [macOS 签名与隐私权限](docs/guides/macos-signing-and-permissions.md)
+- **使用与运维指南**：[部署](docs/guides/deploy.md) · [接入一台电脑或服务器](docs/guides/connect-machine.md) · [macOS 签名与隐私权限](docs/guides/macos-signing-and-permissions.md)
 - **系统架构**：[工作台：项目、预设、任务和机器](docs/architecture/workbench.md) · [主管的上下文与分段摘要](docs/architecture/supervisor-context.md)
 - **架构决策记录（ADR）**：[decisions/README.md（0001–0026）](docs/decisions/README.md)
 - **应用间接口契约**：[api/README.md](docs/api/README.md)（[core-hub-http](docs/api/core-hub-http.md) · [core-hub-node](docs/api/core-hub-node.md) · [core-daemon-ipc](docs/api/core-daemon-ipc.md)）

@@ -29,21 +29,58 @@ function buildInfo(): Plugin {
   }
 }
 
-// In dev, the Hub runs on :8787 (wok dev core) and Vite proxies the API to it.
-const hub = process.env.SOUS_HUB ?? 'http://127.0.0.1:8787'
+/**
+ * The page is hosted on Vercel (decision 0030) and talks only to the relay.
+ * vercel.json carries a strict CSP: scripts only from this origin, network
+ * only to the relay named by VITE_SOUS_RELAY at build time.
+ */
+function vercelConfig(): Plugin {
+  return {
+    name: 'sous-vercel',
+    apply: 'build',
+    generateBundle() {
+      const relay = (process.env.VITE_SOUS_RELAY ?? '').replace(/\/+$/, '')
+      let connect = "'self'"
+      if (relay) {
+        const u = new URL(relay)
+        const ws = (u.protocol === 'https:' ? 'wss://' : 'ws://') + u.host
+        connect += ` ${u.origin} ${ws}`
+      } else {
+        this.warn('VITE_SOUS_RELAY is not set: the CSP lets the page reach any https/wss host. Set it for a release build.')
+        connect += ' https: wss:'
+      }
+      const csp = [
+        "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+        "font-src 'self' data:", `connect-src ${connect}`, "worker-src 'self'", "manifest-src 'self'",
+        "frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'", "object-src 'none'",
+      ].join('; ')
+      const headers = [
+        { key: 'Content-Security-Policy', value: csp },
+        { key: 'Referrer-Policy', value: 'no-referrer' },
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), publickey-credentials-get=(self), publickey-credentials-create=(self)' },
+        { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
+      ]
+      const config = {
+        headers: [
+          { source: '/(.*)', headers },
+          { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
+          { source: '/index.html', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
+        ],
+        cleanUrls: false,
+        trailingSlash: false,
+      }
+      this.emitFile({ type: 'asset', fileName: 'vercel.json', source: JSON.stringify(config, null, 2) + '\n' })
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), buildInfo()],
+  plugins: [react(), tailwindcss(), buildInfo(), vercelConfig()],
   define: { __BUILD__: JSON.stringify(build) },
-  server: {
-    port: 5173,
-    proxy: {
-      // ws: the system page's live stream is /api/v1/system/stream.
-      '/api': { target: hub, ws: true },
-      '/ws': { target: hub, ws: true },
-      '/healthz': hub,
-    },
-  },
+  // In dev the page talks to a local relay (VITE_SOUS_RELAY, or the address
+  // typed at first setup); there is nothing to proxy.
+  server: { port: 5173 },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

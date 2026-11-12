@@ -15,3 +15,4 @@ How the system is built: what each app is responsible for, how apps relate, data
 - [supervisor-context.md](supervisor-context.md)：主管每轮发给模型的内容，长对话的分段、摘要和查回原文
 - [dispatch.md](dispatch.md)：工作台的“现场”，你、主管、agent 和机器之间怎么流转
 - [system-map.md](system-map.md)：系统模块、连线与实时状态（设置里的“系统状态”）
+- [trust.md](trust.md)：零信任（0.3）：中继、大脑、机器各自信什么，授权分三档，以及中继能做和不能做的

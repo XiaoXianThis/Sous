@@ -91,6 +91,13 @@ func (d *Daemon) savedRuns() map[string]savedRun {
 	return out
 }
 
+// Online reports whether the daemon is connected to the brain now.
+func (d *Daemon) Online() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.online
+}
+
 func (d *Daemon) setOnline(on bool) {
 	d.mu.Lock()
 	d.online = on
@@ -163,7 +170,9 @@ func (d *Daemon) selfUpdate(u proto.NodeUpdate) {
 		d.updating = false
 		d.mu.Unlock()
 	}()
-	tag, err := d.Update(context.Background(), u.Repo, u.Version)
+	// The repository is never the brain's to choose (decision 0030): a
+	// release comes from where this binary says, signed by the author.
+	tag, err := d.Update(context.Background(), "", u.Version)
 	result := proto.NodeUpdateResult{Version: tag}
 	if err != nil {
 		result.Error = err.Error()

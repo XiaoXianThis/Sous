@@ -2,11 +2,60 @@ package workspace
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestBackgroundFetchDoesNotInvokeMacCredentialHelpers(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS background credential policy")
+	}
+	// Exercise real Git authentication against a local endpoint. The helper
+	// leaves a harmless marker on stderr instead of touching the keychain.
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "no-global-config"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	repo := gitInit(t)
+	gitT(t, repo, "remote", "add", "origin", srv.URL+"/repo.git")
+	const marker = "sous-test-credential-helper-invoked"
+	for _, key := range []string{"credential.helper", "credential." + srv.URL + ".helper"} {
+		t.Run(key, func(t *testing.T) {
+			gitT(t, repo, "config", key, "!echo "+marker+" >&2; exit 1")
+			defer gitT(t, repo, "config", "--unset", key)
+			out, err := FetchBackground(context.Background(), repo)
+			if err == nil || strings.Contains(out, marker) {
+				t.Fatalf("background fetch invoked helper or unexpectedly succeeded: %v %s", err, out)
+			}
+			// Explicit synchronization still has access to configured helpers.
+			out, err = Fetch(context.Background(), repo)
+			if err == nil || !strings.Contains(out, marker) {
+				t.Fatalf("explicit fetch did not invoke helper: %v %s", err, out)
+			}
+		})
+	}
+}
+
+func TestBackgroundFetchUpdatesRemoteBranches(t *testing.T) {
+	_, mine, other := twoMachines(t)
+	latest := commitFile(t, other, "background.txt", "new commit\n")
+	gitT(t, other, "push", "-q", "origin", "main")
+	head := gitT(t, mine, "rev-parse", "HEAD")
+	if out, err := FetchBackground(context.Background(), mine); err != nil {
+		t.Fatalf("fetch: %v %s", err, out)
+	}
+	if gitT(t, mine, "rev-parse", "origin/main") != latest || gitT(t, mine, "rev-parse", "HEAD") != head {
+		t.Fatal("background fetch must update origin/main without changing the checkout")
+	}
+}
 
 func TestStateAndSync(t *testing.T) {
 	ctx := context.Background()

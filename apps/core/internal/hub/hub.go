@@ -11,6 +11,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -58,6 +59,13 @@ type Hub struct {
 	// WatchdogOn makes a stuck process exit so its service manager restarts
 	// it. The sous-hub command turns it on; tests leave it off.
 	WatchdogOn bool
+
+	// Brain is set when the Hub runs inside a brain machine's daemon (0.3):
+	// no setup link, no page, and ConnContext tags requests that came
+	// through the relay. Started is closed once it serves.
+	Brain       bool
+	ConnContext func(ctx context.Context, c net.Conn) context.Context
+	Started     chan struct{}
 }
 
 // DBPath is where the Hub keeps its database inside the data directory.
@@ -245,12 +253,25 @@ func pushSubject(cfg *config.Hub) string {
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (h *Hub) Run(ctx context.Context) error {
+	ln, err := net.Listen("tcp", h.Cfg.Listen)
+	if err != nil {
+		return err
+	}
+	return h.RunOn(ctx, ln)
+}
+
+// RunOn runs the Hub serving its HTTP API on ln. The brain (internal/brain)
+// passes an in-memory listener: in 0.3 nothing reaches the API except
+// through the relay.
+func (h *Hub) RunOn(ctx context.Context, ln net.Listener) error {
 	defer h.Store.Close()
 	if _, err := h.Log.EnsureMainThread(ctx); err != nil {
 		return err
 	}
-	if err := h.announceSetup(ctx); err != nil {
-		return err
+	if !h.Brain {
+		if err := h.announceSetup(ctx); err != nil {
+			return err
+		}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -268,23 +289,32 @@ func (h *Hub) Run(ctx context.Context) error {
 		go h.Watchdog.Run(runCtx)
 	}
 
-	srv := &http.Server{Addr: h.Cfg.Listen, Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second,
+	srv := &http.Server{Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnContext: h.ConnContext}
 	errCh := make(chan error, 1)
 	go func() {
-		if h.Cfg.TLS() {
-			errCh <- srv.ListenAndServeTLS(h.Cfg.TLSCert, h.Cfg.TLSKey)
+		if h.Cfg.TLS() && !h.Brain {
+			errCh <- srv.ServeTLS(ln, h.Cfg.TLSCert, h.Cfg.TLSKey)
 			return
 		}
-		errCh <- srv.ListenAndServe()
+		errCh <- srv.Serve(ln)
 	}()
-	slog.Info("sous-hub listening", "addr", h.Cfg.Listen, "public_url", h.Cfg.PublicURL, "dev", h.Cfg.Dev, "commit", version.BuildCommit())
-	logWebBuild(h.Cfg.WebDir)
+	if h.Brain {
+		slog.Info("brain: thinking", "commit", version.BuildCommit())
+	} else {
+		slog.Info("sous-hub listening", "addr", h.Cfg.Listen, "public_url", h.Cfg.PublicURL, "dev", h.Cfg.Dev, "commit", version.BuildCommit())
+		logWebBuild(h.Cfg.WebDir)
+	}
+	if h.Started != nil {
+		close(h.Started)
+	}
 
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
+			cancel()
+			h.Supervisor.Wait()
 			return err
 		}
 	case <-ctx.Done():
@@ -294,10 +324,12 @@ func (h *Hub) Run(ctx context.Context) error {
 	err := srv.Shutdown(shutdownCtx)
 	cancel()
 	h.Supervisor.Wait()
+	if h.MCP != nil {
+		h.MCP.Stop()
+	}
 	return err
 }
 
-// announceSetup prints a one-time registration link while no passkey exists.
 func (h *Hub) announceSetup(ctx context.Context) error {
 	has, err := h.Auth.HasPasskey(ctx)
 	if err != nil || has {

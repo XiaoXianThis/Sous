@@ -1,0 +1,6 @@
+# Caddy terminates TLS and forwards to sous-relay on loopback. TLS only hides
+# metadata from the network: everything inside is end-to-end encrypted
+# already. Replace relay.example.com with the relay's domain.
+relay.example.com {
+	reverse_proxy 127.0.0.1:8788
+}

@@ -1,6 +1,8 @@
 # core-hub-node：Hub ↔ Node（daemon）
 
-- Provider: core（`sous-hub`，`internal/nodehub`）
+> 0.3（决策 0030）：配对改为配对串 + 名册（`sous-envelope.md`）；“连接”一节的 WebSocket 换成加密通道里的 link（`core-brain-rpc.md`）。帧本身不变，但机器上的守卫（`internal/node/guard.go`）会检查大脑发来的每一帧：`run.start` 要在用户的自主范围内或有许可；关键的 `node.request` 和 `node.update` 要有带断言的许可，`node.update` 忽略 `repo` 字段；暂停时拒绝新的工作。被拒绝时返回 `run.ended`（错误以“超出自主范围：”开头）、`node.response{error.code: permit_required}` 或 `node.update_result{error}`。
+
+- Provider: core（大脑，`internal/nodehub`）
 - Consumers: core（`sous daemon`，`internal/node`）
 - Status: 已实现（M2，M3 增加任务、策略和交付相关的字段，M4 增加暂停、追加消息的送达记录、更新和持久化的发件箱，M5 增加机器角色、工作空间、岗位的会话选项、运维 Run 和新建 / clone 项目）。两端在同一个 Go module 里，共用 `internal/proto` 的类型，以代码为准；本文给人看，也为以后用其他语言实现 Node 留下依据。
 

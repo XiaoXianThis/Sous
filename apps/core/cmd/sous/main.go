@@ -1,6 +1,9 @@
 // Command sous is the client on each of the user's machines.
 //
-//	sous pair <hub-url> <code> [--name NAME] [--role server] [--workspace DIR]   pair this machine with a Hub
+//	sous pair <relay-url> <pairing-string> [--name NAME] [--role server] [--workspace DIR]   pair this machine
+//	sous trust status|reset                   show or forget this machine's keys and roster
+//	sous brain import <hub.db>                bring a 0.2 Hub's data into this brain machine
+//	sous release keygen|sign                  the author's release signing (keys stay off CI)
 //	sous daemon                               run the daemon in the foreground
 //	sous status                               show pairing and agents
 //	sous agents                               check which coding agents are usable
@@ -32,6 +35,7 @@ import (
 	"github.com/kardianos/service"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/agents"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/brain"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ipc"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/node"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/sousmcp"
@@ -49,7 +53,10 @@ func main() {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
-  sous pair <hub-url> <code> [--name NAME] [--role dev|server] [--workspace DIR]
+  sous pair <中继地址> <配对串> [--name NAME] [--role dev|server] [--workspace DIR]
+  sous trust status | reset
+  sous brain import <0.2 的 hub.db 备份>
+  sous release keygen --key FILE | sign --key FILE --tag vX.Y.Z <checksums.txt>
   sous daemon
   sous status
   sous agents
@@ -86,6 +93,8 @@ func run(args []string) error {
 	thread := fs.String("thread", "", "thread id (chat; default: the main thread)")
 	check := fs.Bool("check", false, "only check for a newer release (update)")
 	ver := fs.String("version", "", "release tag to install (update; default: the latest)")
+	keyFlag := fs.String("key", "", "release signing key file (release)")
+	tagFlag := fs.String("tag", "", "release tag (release sign)")
 	if err := fs.Parse(reorder(rest)); err != nil {
 		return err
 	}
@@ -109,7 +118,7 @@ func run(args []string) error {
 		return nil
 	case "pair":
 		if fs.NArg() != 2 {
-			return errors.New("usage: sous pair <hub-url> <code> [--name NAME] [--role dev|server] [--workspace DIR]")
+			return errors.New("用法：sous pair <中继地址> <配对串> [--name 名字] [--role dev|server] [--workspace 目录]")
 		}
 		if *role != "" && *role != "dev" && *role != "server" {
 			return errors.New("--role must be dev or server")
@@ -120,13 +129,26 @@ func run(args []string) error {
 				wss = append(wss, w)
 			}
 		}
-		cfg, err := node.PairWith(context.Background(), root, fs.Arg(0), fs.Arg(1), *name, node.PairOptions{Role: *role, Workspaces: wss})
+		cfg, err := node.PairRelay(context.Background(), root, fs.Arg(0), fs.Arg(1), *name, node.PairOptions{Role: *role, Workspaces: wss})
 		if err != nil {
 			return err
 		}
-		fmt.Printf("已配对：%s（id %s）连接到 %s\n", cfg.Name, cfg.NodeID, cfg.HubURL)
+		fmt.Printf("已配对：%s（id %s），经由中继 %s\n", cfg.Name, cfg.NodeID, cfg.RelayURL)
+		fmt.Println("这台机器只接受你的指令：中继和其他机器都无法控制它。")
 		fmt.Println("下一步：运行 `sous service install` 让它开机自动运行，或者先用 `sous daemon` 在前台试一下。")
 		return nil
+	case "trust":
+		if fs.NArg() != 1 {
+			return errors.New("用法：sous trust status | reset")
+		}
+		return trustCommand(root, fs.Arg(0))
+	case "brain":
+		if fs.NArg() != 2 || fs.Arg(0) != "import" {
+			return errors.New("用法：sous brain import <0.2 的 hub.db 备份>")
+		}
+		return brainImport(root, fs.Arg(1))
+	case "release":
+		return releaseCommand(fs.Args(), *keyFlag, *tagFlag)
 	case "daemon":
 		return daemon(root, logs)
 	case "chat":
@@ -168,7 +190,10 @@ func run(args []string) error {
 		if err := os.Remove(root + string(os.PathSeparator) + "node.json"); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		fmt.Println("已在这台电脑上取消配对。记得也在 sous 的“机器”页面里删除它。")
+		if err := node.ResetTrust(root); err != nil {
+			return err
+		}
+		fmt.Println("已在这台电脑上取消配对，密钥已移走。记得也在页面的“机器”里把它踢出。")
 		return nil
 	case "service":
 		if fs.NArg() != 1 {
@@ -223,9 +248,17 @@ func daemon(root string, logs *node.LogRing) error {
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	slog.Info("sous daemon starting", "hub", cfg.HubURL, "node", cfg.NodeID, "home", root, "version", version.Version)
+	if cfg.RelayURL == "" {
+		return node.ErrNeedsPairing
+	}
+	slog.Info("sous daemon starting", "relay", cfg.RelayURL, "node", cfg.NodeID, "home", root, "version", version.Version)
 	agents.AugmentPath() // a service manager's PATH often lacks where agents live
 	d := node.NewDaemon(root, cfg, agents.Builtin())
+	// Every machine takes part in the brain election; the user's roster
+	// decides which ones may win it (decision 0031).
+	if _, err := brain.Attach(ctx, d, root, cfg.NodeID); err != nil {
+		return err
+	}
 	// SOUS_UPDATE_API points updates at another GitHub API (for testing).
 	d.UpdateAPI = os.Getenv("SOUS_UPDATE_API")
 	restart := false
@@ -324,11 +357,11 @@ func status(root string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("机器：%s（id %s）\nHub：%s\n文件：%s\n\n", cfg.Name, cfg.NodeID, cfg.HubURL, root)
+	fmt.Printf("机器：%s（id %s）\n中继：%s\n文件：%s\n\n", cfg.Name, cfg.NodeID, cfg.RelayURL, root)
 	if c, err := ipc.Dial(ipc.Path(root)); err == nil {
 		var st node.Status
 		if c.Call(context.Background(), "status", nil, &st) == nil {
-			conn := map[bool]string{true: "已连接 Hub", false: "未连接 Hub"}[st.HubConnected]
+			conn := map[bool]string{true: "已连接大脑", false: "未连接大脑"}[st.HubConnected]
 			fmt.Printf("daemon：运行中（%s，%s，正在执行 %d 个 Run，待发送 %d 帧）\n\n", st.Version, conn, len(st.Runs), st.Pending)
 		}
 		c.Close()

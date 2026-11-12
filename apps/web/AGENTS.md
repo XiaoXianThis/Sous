@@ -2,7 +2,7 @@
 
 - Purpose: sous 的 PWA 前端：聊天、任务、审批、机器与设置界面。手机、平板、浏览器直接用；构建产物同时被 desktop 内嵌。
 - Stack: React 19 + TypeScript + Vite 6 + Tailwind CSS 4（设计变量在 `src/app.css`，映射成 `bg-page`、`text-ink` 等类），Vitest；`react-markdown` + `remark-gfm` + `highlight.js`（聊天的 Markdown）；PWA（手写 Service Worker 和 manifest，见 `public/`；主屏图标是 `apple-touch-icon.png`（180px）和 `icon-192.png` / `icon-512.png`，由 `icon.svg` 去掉圆角渲染而来，因为 iOS 不认 SVG 图标）；`@xterm/xterm`（机器上安装、登录 agent 时的终端）；shadcn/ui 风格的浮层组件（手抄进 `src/components/ui/`，不用 `npx shadcn`，外观改成本项目的 CSS 变量）：`popover.tsx`（`@radix-ui/react-popover`）、`dropdown-menu.tsx`（`@radix-ui/react-dropdown-menu`）、`dialog.tsx`（`@radix-ui/react-dialog`）、`tooltip.tsx`（全局 portal 悬停提示层 `TipLayer`），类名合并用 `src/lib/utils.ts` 的 `cn()`（`clsx` + `tailwind-merge`）；`motion`（motion.dev，从 `motion/react` 引入，见下面“动画”）。
-- Depends on: core 的 `docs/api/core-hub-http.md` 契约。构建产物 `build/web/` 由 core 的 Hub 托管（运行时读取），也被 desktop 消费。
+- Depends on: core 的契约 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`。构建产物 `build/web/` 部署到 Vercel（决策 0030），也被 desktop 消费。`@noble/post-quantum`、`@noble/curves`、`@noble/hashes` 补 WebCrypto 没有的 X-Wing（ML-KEM-768 + X25519）和 HKDF 分步。
 
 ## Tasks
 
@@ -15,11 +15,14 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 | test | bun run test | |
 | check | bun run check | |
 | build | bun run build -- --outDir "$WOK_OUT" | |
+| deploy | bunx vercel@latest deploy "$WOK_OUT" --prod | |
 
 ## Conventions
 
 - 使用 bun 运行前端 CLI（`bun install`、`bun run`），锁文件是 `bun.lock`（由 `package-lock.json` 迁移，CI 与本地都固定 bun 1.3.14）。
-- `bun run dev` 在 5173 端口启动，把 `/api`（含系统页的 websocket）、`/ws` 代理到 `SOUS_HUB`（默认 `http://127.0.0.1:8787`，先 `wok dev core`）。也可以 `wok build web` 之后直接打开 Hub 的 8787 端口。
+- `bun run dev` 在 5173 端口启动，页面只连中继（首次设置时填写的地址，或构建时的 `VITE_SOUS_RELAY`），先 `wok dev core` 起本地中继。
+- 零信任（`docs/architecture/trust.md`）：`src/trust/` 是浏览器端的信任层，和 `apps/core/internal/trust` 逐字节一致（向量测试 `src/trust/vectors.test.ts`）：`vault.ts`（Passkey PRF 解锁身份、会话证书、自动锁定、名册/范围/暂停/数据密钥/配对、许可和意图）、`net.ts`（中继连接、文档校验、通道）、`rpc.ts`（发给大脑的请求和事件流，`BrainSocket` 模仿 WebSocket）、`webauthn.ts`（PRF 解锁和关键操作的断言）。`lib/api.ts` 的 `request()` 走 RPC；大脑答 `reauth` 时自动签意图重试；机器级的关键操作先 `permit()` 再调用（`withPermit`），终端输入直接发给机器。界面：`Unlock.tsx`（首次设置 / 解锁）、`Trust.tsx`（名册、添加机器、冻结、踢出、大脑、全部暂停、审计、安全设置和自主范围）。
+- 发布：构建时设 `VITE_SOUS_RELAY=https://<中继>`，`vite.config.ts` 会写出带严格 CSP 的 `vercel.json`；部署只从本机 `wok run web deploy`，不接 Git 自动部署。
 - 状态变化写成纯函数放在 `src/lib/reduce.ts`，并配上 `*.test.ts` 单元测试；组件里不写事件处理逻辑。
 - 共享状态在 `src/lib/app.ts`：`chat`、`ui`、`wb` 是可变的 store。改完字段后必须调用对应的 `emit()`，组件用 `useChat()` / `useUi()` / `useWb()` 订阅；不调用 `emit()` 的修改不会重绘。
 - 构建时 `vite.config.ts` 写出 `build-info.json`（commit、是否有未提交改动、构建时间），并把同样的信息定义成 `__BUILD__`；Hub 的 `/healthz` 和设置页的“版本”据此提示旧构建。首包只放 React、图标、Markdown 和 Motion（话题手风琴就在首屏）：设置、项目对话框、终端日志用 `lazy()` 加载，`highlight.js` 在第一次出现代码块时才加载（`Markdown.tsx` 的 `useHljs`）；新加的大依赖也要这样分出去。

@@ -29,4 +29,4 @@ Requirements, designs, and tasks: documents about work in progress.
 | [approval-friction](approval-friction/) | core | 已分批实施并自测，见[实施与16条对比](approval-friction/implementation.md)；medium/300额度仍按方案等待观测 |
 | [notes-meetings-agent-chat](notes-meetings-agent-chat/) | core, web | 设计和执行说明完成，待实现（顺序：记事本 → 会议 → 直接对话） |
 | [system-map](system-map/) | core, web | 已实现；工作台的“现场”视图（人、任务、机器的流转，Canvas2D 2.5D），模块状态在设置的“系统状态” |
-| [zero-trust](zero-trust/) | core, web | 设计完成（0.3.0-alpha1），待 M0 验证 |
+| [zero-trust](zero-trust/) | core, web | 已实现并通过 Go/浏览器端到端测试；文档、Vercel 实际部署、真机验收待做 |

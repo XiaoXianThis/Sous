@@ -3,6 +3,7 @@ package nodehub
 import (
 	"context"
 	"encoding/json"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
 	"unicode/utf8"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
@@ -20,6 +21,14 @@ type deviceKey struct{}
 // messages, the event stream and approvals; never settings or machines.
 func (h *Hub) DeviceAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if t, ok := auth.TunnelOf(r.Context()); ok && t.Device != "" {
+			if n, err := h.log.Store.Node(r.Context(), t.Device); err != nil || n.Revoked {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "unknown machine")
+				return
+			}
+			next(w, r.WithContext(context.WithValue(r.Context(), deviceKey{}, t.Device)))
+			return
+		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if token == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "missing device token")

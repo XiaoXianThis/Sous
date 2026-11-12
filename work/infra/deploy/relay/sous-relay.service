@@ -1,0 +1,28 @@
+# systemd unit for sous-relay (decision 0030). Install to
+# /etc/systemd/system/sous-relay.service. Layout from docs/guides/deploy.md:
+#   /opt/sous/sous-relay   the binary
+#   /opt/sous/relay/       its data (ciphertext and signed documents only)
+# Replace https://sous.example.com with the page's origin on Vercel.
+[Unit]
+Description=sous relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sous
+Group=sous
+WorkingDirectory=/opt/sous
+ExecStart=/opt/sous/sous-relay serve -data /opt/sous/relay -listen 127.0.0.1:8788 -origin https://sous.example.com
+Restart=always
+RestartSec=3
+
+# Hardening: the relay only needs its data directory. It holds no secret
+# worth stealing, but it should not become a foothold either.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/sous/relay
+
+[Install]
+WantedBy=multi-user.target

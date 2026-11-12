@@ -1,10 +1,12 @@
 // The /ws event stream with automatic reconnect from the last seq.
 import type { HubEvent } from './types'
+import { BrainSocket } from '../trust/rpc'
+import { isUnlocked } from '../trust/vault'
 
 export type StreamStatus = 'connecting' | 'online' | 'offline'
 
 export class EventStream {
-  private ws: WebSocket | null = null
+  private ws: BrainSocket | null = null
   private retry = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
@@ -29,8 +31,7 @@ export class EventStream {
 
   private open() {
     this.onStatus('connecting')
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${location.host}/ws?since=${this.since()}`)
+    const ws = new BrainSocket(`/ws?since=${this.since()}`)
     this.ws = ws
     let opened = false
     ws.onopen = () => {
@@ -49,11 +50,7 @@ export class EventStream {
       this.ws = null
       if (this.stopped) return
       this.onStatus('offline')
-      if (!opened) {
-        // The handshake failed: maybe the session expired.
-        const res = await fetch('/api/v1/me').then((r) => r.json()).catch(() => null)
-        if (res && !res.logged_in) return this.onUnauthorized()
-      }
+      if (!opened && !isUnlocked()) return this.onUnauthorized()
       const delay = Math.min(30000, 1000 * 2 ** this.retry++)
       this.timer = setTimeout(() => this.open(), delay)
     }

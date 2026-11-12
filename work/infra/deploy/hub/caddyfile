@@ -1,6 +1,0 @@
-# Caddy terminates TLS (certificates are automatic) and forwards to the Hub,
-# which listens on loopback only. WebSocket upgrades for /ws pass through as is.
-agent.wxian.cc {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:8787
-}

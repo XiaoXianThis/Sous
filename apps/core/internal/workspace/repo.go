@@ -126,8 +126,8 @@ func push(ctx context.Context, dir, refspec string) (string, error) {
 	return string(out), err
 }
 
-// noPrompt is the environment for git talking to a remote: a credential
-// prompt would hang, so it fails instead.
+// noPrompt disables terminal prompts and GCM interaction. It does not suppress
+// OS dialogs from other helpers; background fetches must disable those helpers.
 func noPrompt() []string {
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 	if os.Getenv("GIT_SSH_COMMAND") == "" {
