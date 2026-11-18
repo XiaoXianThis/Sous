@@ -1,0 +1,9 @@
+{
+  "name": "sous-bench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "bun --no-env-file run bench.ts",
+    "test": "bun --no-env-file test"
+  }
+}

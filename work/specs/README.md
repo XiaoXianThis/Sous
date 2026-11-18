@@ -29,5 +29,6 @@ Requirements, designs, and tasks: documents about work in progress.
 | [approval-friction](approval-friction/) | core | 已分批实施并自测，见[实施与16条对比](approval-friction/implementation.md)；medium/300额度仍按方案等待观测 |
 | [notes-meetings-agent-chat](notes-meetings-agent-chat/) | core, web | 设计和执行说明完成，待实现（顺序：记事本 → 会议 → 直接对话） |
 | [system-map](system-map/) | core, web | 已实现；工作台的“现场”视图（人、任务、机器的流转，Canvas2D 2.5D），模块状态在设置的“系统状态” |
+| [sous-benchmark](sous-benchmark/requirements.md) | core | 主管 runner、严格判题和版本配对已实现；查看[持续更新成绩表](sous-benchmark/results.md) |
 | [zero-trust](zero-trust/) | core, web | 已实现并通过 Go/浏览器端到端测试；文档、Vercel 实际部署、真机验收待做 |
 | [alpha2-speed-and-unlock](alpha2-speed-and-unlock/) | core, web, desktop | 已实现并通过自动测试，发布与真机验收进行中 |

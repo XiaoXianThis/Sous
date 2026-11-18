@@ -99,6 +99,7 @@ wok build site                  # 构建官网与文档站 -> build/site/
   - [部署（中继 + Vercel + 大脑机器）](guides/deploy.md)
   - [接入一台电脑或服务器](guides/connect-machine.md)
   - [macOS 签名与隐私权限](guides/macos-signing-and-permissions.md)
+  - [主管 Benchmark：跑分与对照](guides/supervisor-benchmark.md)
 - **系统架构（[architecture/README.md](architecture/README.md)）**
   - [工作台：项目、预设、任务和机器](architecture/workbench.md)
   - [主管的上下文](architecture/supervisor-context.md)
