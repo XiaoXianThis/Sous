@@ -11,9 +11,9 @@ name: release
 #
 # The job runs on macOS so the darwin binaries can be signed with the fixed
 # self-signed identity "Sous Dev Signing" (decision 0026,
-# docs/guides/macos-signing-and-permissions.md). Everything is still cross
-# compiled with CGO_ENABLED=0, so the Linux and Windows builds are the same as
-# before. The identity comes from two repository secrets, created with
+# docs/guides/macos-signing-and-permissions.md). The release CLI and Relay
+# remain pure Go; the Mac desktop shell and sandbox runner use CGO.
+# The identity comes from two repository secrets, created with
 # apps/core/scripts/export-signing-cert.sh:
 #   SOUS_SIGN_CERT_P12           the identity as a base64-encoded .p12
 #   SOUS_SIGN_CERT_P12_PASSWORD  the .p12 password
@@ -137,9 +137,11 @@ jobs:
           codesign --verify --deep --strict "$app"
           want=$(printf '%s' "$SOUS_SIGN_CERT_SHA1" | tr 'A-F' 'a-f')
           for name in sous sous-sandbox sous-desktop; do
+            identifier="cc.wxian.$name"
+            if [ "$name" = sous-desktop ]; then identifier=cc.wxian.sous.desktop; fi
             req=$(codesign -d -r- "$app/Contents/MacOS/$name" 2>&1)
             case "$req" in
-              *"identifier \"cc.wxian.$name\" and certificate leaf = H\"$want\""*) ;;
+              *"identifier \"$identifier\" and certificate leaf = H\"$want\""*) ;;
               *) echo "::error title=macOS signing::$name has an unexpected designated requirement"; exit 1 ;;
             esac
           done

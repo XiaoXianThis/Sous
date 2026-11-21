@@ -12,6 +12,8 @@ import (
 
 const hostedOriginKey = "workspace.hosted_origin"
 
+var errHostedOnWindows = errors.New("hosted-hub requires POSIX private directory permissions and is not supported on Windows")
+
 func verifyHostedDirectory(cfg *config.Hub) error {
 	if strings.ContainsAny(cfg.DataDir, "?#") {
 		return errors.New("invalid hosted database directory")

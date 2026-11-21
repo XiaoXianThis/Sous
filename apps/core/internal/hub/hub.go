@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ func OpenLocalWithAgents(cfg *config.Hub, catalog LocalAgents) (*Hub, error) {
 }
 
 func open(cfg *config.Hub, factory AgentFactory, catalog *LocalAgents) (_ *Hub, err error) {
+	if cfg.HostedWorkspace && runtime.GOOS == "windows" {
+		return nil, errHostedOnWindows
+	}
 	var lock *os.File
 	if cfg.DirectWorkspace() {
 		if err := cfg.Validate(); err != nil {

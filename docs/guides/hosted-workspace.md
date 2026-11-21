@@ -4,6 +4,8 @@
 
 ## 准备一个独立 HTTPS 源站
 
+云 Hub 需要 POSIX 私有目录权限，不支持在 Windows 上托管。这不影响 Windows 桌面客户端和本机工作区。
+
 1. 构建同一版本的 Core 和 WebUI（`wok build core web`；Linux amd64 使用 `wok run core build-hosted-linux`，Linux arm64 使用 `wok run core build-hosted-linux-arm64`）。将 `sous` 与 `build/web` 的构建内容部署在常在线服务器上。保持 WebUI 构建目录与持久数据目录分开；使用只读构建产物。
 2. 为工作区设置**独立域名**；不要与其他应用或工作区共用同一域名的不同端口。域名是 Passkey 的身份边界。`public_url` 只填浏览器使用的 HTTPS origin，不能带路径、凭据、查询或尾随斜杠。即使重新配置，不能把已有数据库直接换到另一域名使用。
 3. 示例位于 `work/infra/deploy/hosted/`：配置文件、systemd 服务以及回环后端的 HTTPS 反代。样例服务账户是专用、无特权的 `sous-hosted`，Web 和二进制位于 `/opt/sous-hosted/`，持久目录 `/var/lib/sous-hosted` 的权限为 `0700`。先创建账户、挂载持久卷并把配置样例放到 `/etc/sous-hosted/workspace.yaml`，更换示例域名后再启动。反代与 Hub 在同一宿主上，保留工作区 Host、Origin 和 WebSocket；不要把回环后端映射到内网或公网。

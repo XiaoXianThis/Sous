@@ -3,11 +3,13 @@ package hub
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,9 @@ import (
 
 func hostedFixture(t *testing.T) *config.Hub {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("hosted-hub requires POSIX private directory permissions; see TestHostedWorkspaceRejectsWindowsWithoutTouchingData")
+	}
 	cfg := config.ForLocalWorkspace(filepath.Join(t.TempDir(), "data"))
 	cfg.LocalWorkspace, cfg.HostedWorkspace = false, true
 	cfg.WebDir = t.TempDir()
@@ -26,6 +31,20 @@ func hostedFixture(t *testing.T) *config.Hub {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestHostedWorkspaceRejectsWindowsWithoutTouchingData(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific platform gate")
+	}
+	cfg := config.ForLocalWorkspace(filepath.Join(t.TempDir(), "must-not-be-created"))
+	cfg.LocalWorkspace, cfg.HostedWorkspace = false, true
+	if _, err := Open(cfg, nil); !errors.Is(err, errHostedOnWindows) {
+		t.Fatalf("expected explicit Windows platform error, got %v", err)
+	}
+	if _, err := os.Lstat(cfg.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsupported platform must not touch workspace data: %v", err)
+	}
 }
 
 func TestHostedWorkspaceFencesAndKeepsSingleAuthority(t *testing.T) {
