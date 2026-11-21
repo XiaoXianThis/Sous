@@ -1,6 +1,6 @@
 # Sous：产品 App 与可组合模块
 
-状态：设计提案，待评审；未修改运行时代码。
+状态：目标设计与分期实施。已落地的范围以及待通过的发布门槛见[验收记录](acceptance.md)。
 
 配套：[讨论结果](discussion-results.md) · [新架构图](architecture.md) · [实施与验收任务](tasks.md)。
 
@@ -30,7 +30,7 @@
 
 首版由 App 入口显式装配几个预置组合，负责启动、探活、停止和权限配置；**不做动态库加载、插件市场或通用插件框架**。模块可以同包、同二进制或跨进程，但不能跨过业务接口直接拿其他模块的内部对象或写它的存储。桌面版可共用现有 Go 运行时产物，并打包 `build/web` 产物；运行时模块不等于新增 `apps/*`，现阶段不搬目录、不改 Wok 布局。Relay 继续作为可选的多机传输层，不升级为本地桌面版的必需模块。
 
-现有桌面版在 `apps/desktop/main.go` 打开配置的页面，随包页面是配对兜底，不是完整工作台；当前 `sous daemon` 要求配置 Relay。完整本地桌面形态需要新增本地装配入口和本地 WebUI 认证接入，不能靠把静态文件塞进旧包就完成。桌面用受控的本机身份通道，不把 localhost 当成已认证用户；远程模式保留现行配对、Passkey 和适用的租约机制。
+配对模式仍打开配置的页面，旧 `sous daemon` 仍要求配置 Relay。新的桌面本机工作台使用随包 WebUI 与独立 `sous hub`；当前本机已启用业务管理、内置主管切换及 Apple Silicon 独立沙盒执行，不接入远程 Node。完整本地桌面形态需要新增本地装配入口和本地 WebUI 认证接入，不能靠把静态文件塞进旧包就完成。桌面用受控的本机身份通道，不把 localhost 当成已认证用户；远程模式保留现行配对、Passkey 和适用的租约机制。
 
 ## 3. ACP 负责会话，MCP 负责工具
 
@@ -51,7 +51,7 @@
 
 ## 5. 从现状切入，不重写整套系统
 
-现有 `apps/core/internal/hub/hub.go` 在 `hub.Open` 里无条件装配 `models.Registry` 和 `supervisor.New`，`Hub.RunOn` 启动主管；`internal/supervisor` 既做模型循环，也做消息编排、上下文和部分 HTTP 路由。`internal/task` 的审核与自动审批、`internal/inspector` 的巡检以及摘要整理还有独立的模型依赖。只把 `supervisor.New` 挪走并不能让 Hub 成为纯工具箱。可复用的是现有事件库、任务/审批领域、Node－Hub 协议、`internal/acp` 和 `internal/sousmcp` 的工具桥模式。
+重构前，`apps/core/internal/hub/hub.go` 在 `hub.Open` 里无条件装配 `models.Registry` 和 `supervisor.New`。这部分已迁入可选 `legacyagent`；`internal/supervisor` 既做模型循环，也做消息编排、上下文和部分 HTTP 路由。`internal/task` 的审核与自动审批、`internal/inspector` 的巡检以及摘要整理还有独立的模型依赖。只把 `supervisor.New` 挪走并不能让 Hub 成为纯工具箱。可复用的是现有事件库、任务/审批领域、Node－Hub 协议、`internal/acp` 和 `internal/sousmcp` 的工具桥模式。
 
 1. **先让 Hub 在无主管下成立。** 把回合队列、业务工具、历史/上下文归 Hub，把推理循环移到可选运行器。用一个有窄接口的旧实现适配器保持现行功能，不把过渡适配器变成新 Hub 的必装依赖。先把 `memory_search`、项目元数据读取、`task_create` 露成同一业务层的 MCP 工具。项目元数据由 Hub 提供，不依赖 Node；仓库内容仍由 Node 按权限提供，不混用现有读文件的 `project_read`。用现有 SQLite 数据验证无主管启动、手动管理和旧线程可读。
 2. **走通可换的同一条链路。** `用户消息 → ACP 回合 → 查 Hub 记忆或项目 → 建任务 → Hub 派发给 Node → 结果回 Hub`。用假 ACP agent 测时序和异常，再用实际候选测试工具注入、取消与权限隔离。把现有主管的推理部分做成可选的 Sous Agent ACP 入口；它与第三方用同一契约。演示原生 Sous Agent 和一个验证过的外部 agent 互换，并验证旧线程、已有任务、运行中的 Run 仍在。
@@ -74,13 +74,13 @@
 
 ## 7. 本地 Node 的沙盒和联网
 
-本地 microVM 首选 PoC 只纳入 **SmolVM、Microsandbox**；Terrarium 不进入这一轮，首版不承诺同时维护两套后端。两者按同一组标准对比：本机生命周期、项目按 Run 导入与清理、宿主撤权与崩溃兜底、无公网出站时的宿主–Guest 通道、受限出站、平台覆盖与实际启动耗时。有运行时热挂载是加分项，不是首版前提。无合格隔离后端时，不开放云端控制本机 Node，不回退到宿主裸跑。
+**首版使用 Microsandbox 作为本地 Node 唯一的 microVM 后端。** 不开发 SmolVM 适配或回退，不采用 Terrarium 或 Docker 运行依赖。PoC 验证选定版本在目标平台上的生命周期、项目按 Run 导入与清理、宿主撤权与崩溃兜底、无公网出站时的宿主–Guest 通道、受限出站与实际启动耗时。首版不依赖热挂载；未通过验收的平台不开放云端控制本机 Node，不回退到宿主裸跑。此处只限定本地 Node，云工作机另行选型。
 
 - **云 Hub 只派任务，不授予宿主权限。** 本机授权器保存用户选择的文件或目录，按项目授权 ID 和有效期限判定访问，不接受云端传来的任意宿主路径。Node、执行端 ACP agent、终端与文件工具在 Guest；宿主只保留窄接口的授权、任务接入和 VM 生命周期管理。不能用终端、文件预览、Git、配置或维护 API 绕过这个边界。本地 Hub 是否沙盒化另行决定。
 - **默认按 Run 导入、在 Guest 内写、在本机审阅后写回。** 任务完成、取消或到期后释放 Guest 和临时项目材料；不以停机暂停冒充撤权，也不复用包含项目数据的预热快照。实时挂载另做；需明确区分只读、实时写和限时无人值守授权，热撤销失败时由宿主终止 VM。
 - **控制通道不等于 Guest 上网。** 宿主小型接入组件主动连 Hub 所在工作区入口或对应 Relay；不要求用户开公网端口。通过本机受限 IPC（如支持的 vsock 通道）把任务和结果交给 Guest；不转发宿主文件系统、通用代理或管理 socket，也不依赖 Hub 在 VM 停机时直连它。Guest 默认不通公网或宿主局域网；必须联网的模型与依赖另按本机策略放行。纯离线配置须验证模型和工具均能离线工作。任务结果的上报范围和模型输入仍决定哪些数据会离开本机；目录只读不能阻止内容通过授权通道发出。
 
-上游参考：[SmolVM 开源运行时](https://github.com/smol-machines/smolvm)、[Microsandbox Go 网络策略](https://docs.microsandbox.dev/sdk/go/networking)。SmolVM 文档支持默认关网与按域名限制出站；Microsandbox 的拒绝全部网络策略不影响宿主–Guest 内置控制通道上的 Exec/FS。候选能力需真实安装与跨平台验收，不能由 SDK/API 存在推断全部可用。
+上游参考：[Microsandbox Go 网络策略](https://docs.microsandbox.dev/sdk/go/networking)。据上游文档，拒绝全部网络流量不影响其内置宿主–Guest 通道的 Exec/FS；Sous 的任务消息通道和异常清理仍需在真实设备验证。优先验证 Go SDK 集成，具体版本、所需调用与分发方式以 PoC 结果为准。
 
 ## 8. 网络拓扑与延迟预算
 

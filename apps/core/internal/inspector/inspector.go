@@ -284,7 +284,7 @@ func (in *Inspector) judge(ctx context.Context, s Suspect) (event.FindingPayload
 		}
 	}
 	reason := subject + "：" + firstLine(s.Facts)
-	if in.Provider != nil {
+	if provider.Usable(ctx, in.Provider) {
 		var out struct{ Severity, Action, Reason string }
 		input := fmt.Sprintf("## 规则\n%s\n\n## 对象\n%s\n\n## 规则看到的情况\n%s\n", s.Rule, subject, s.Facts)
 		if t.ID != "" {

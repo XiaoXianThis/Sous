@@ -1,15 +1,18 @@
 import { ui, useUi } from '../lib/app'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { usePhone } from '../lib/phone'
 import { setTheme, useTheme, type ThemePref } from '../lib/theme'
 import Icon from './Icon'
 import Machines from './Machines'
 import Memories from './Memories'
 import Mcp from './Mcp'
+import { ExternalMCPConnections } from './ExternalMCP'
 import Models from './Models'
 import Personas from './Personas'
 import PhoneHeader, { BackButton } from './PhoneHeader'
 import Schedules from './Schedules'
 import Settings from './Settings'
+import LocalSupervisor from './LocalSupervisor'
 import { SheetPageContext } from './Sheet'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import Usage from './Usage'
@@ -18,10 +21,12 @@ import Versions from './Versions'
 import { Security } from './Trust'
 
 // group is for the phone's grouped list, after iOS Settings.
-const tabs = [
+const allTabs = [
   { key: 'machines', text: '机器', icon: 'laptop', group: 0 },
+  { key: 'supervisor', text: '主管', icon: 'brain', group: 0 },
   { key: 'models', text: '模型', icon: 'cpu', group: 0 },
   { key: 'personas', text: '预设', icon: 'users', group: 0 },
+  { key: 'external-mcp', text: '外部连接', icon: 'bolt', group: 0 },
   { key: 'mcp', text: 'MCP', icon: 'bolt', group: 0 },
   { key: 'schedules', text: '定时任务', icon: 'calendar', group: 1 },
   { key: 'memories', text: '记忆', icon: 'brain', group: 1 },
@@ -83,6 +88,14 @@ function Appearance() {
 
 export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
   const uiState = useUi()
+  const workspace = useDirectWorkspace()
+  const tabs = allTabs.filter(t => {
+    if (t.key === 'external-mcp') return !!workspace?.external_mcp
+    if (t.key === 'supervisor') return !!workspace?.supervisor.choices
+    if (!workspace) return true
+    if (t.key === 'models') return workspace.supervisor.module === 'legacy'
+    return !['mcp', 'security'].includes(t.key)
+  })
   const phone = usePhone()
   const close = () => {
     ui.state.settings = ''
@@ -103,9 +116,18 @@ export default function SettingsModal({ onLogout }: { onLogout: () => void }) {
   const current = tabs.find((t) => t.key === uiState.settings) ?? tabs[0]
   const page = (key: string) => (
     key === 'machines' ? (
-      <Machines onClose={close} />
+      workspace && !workspace.node_pairing ? (
+        <div className="grid gap-2 p-3 text-sm max-w-[480px]">
+          <h3 className="m-0 text-base font-semibold">{workspace.cloud_work ? '云工作机已启用' : '不连接个人电脑'}</h3>
+          <p className="m-0 text-muted">{workspace.local_sandbox_dispatch ? '可以从任务详情请求本机沙盒。目录授权、运行确认和写回都在桌面的「本机沙盒与审阅」中。' : workspace.hosted_workspace ? (workspace.cloud_work ? '在任务详情选择并授权云工作机。它运行你提交的资料副本，不连接个人电脑。' : '可整理项目资料和待办任务。此云工作区尚未启用云工作机，也不会连接个人电脑。') : '可以在这里计划和管理任务。此装配未启用执行，不会在宿主机上直接运行。'}</p>
+        </div>
+      ) : <Machines onClose={close} />
+    ) : key === 'supervisor' ? (
+      <LocalSupervisor />
     ) : key === 'models' ? (
       <Models />
+    ) : key === 'external-mcp' ? (
+      <ExternalMCPConnections />
     ) : key === 'mcp' ? (
       <Mcp />
     ) : key === 'personas' ? (

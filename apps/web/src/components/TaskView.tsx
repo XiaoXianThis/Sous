@@ -11,6 +11,9 @@ import RunCard from './RunCard'
 import StageBar from './StageBar'
 import TalkLog from './TalkLog'
 import TaskDetail from './TaskDetail'
+import SandboxDispatchPanel from './SandboxDispatchPanel'
+import CloudWorkPanel from './CloudWorkPanel'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { SheetPageContext } from './Sheet'
 
 /**
@@ -21,6 +24,7 @@ import { SheetPageContext } from './Sheet'
 export default function TaskView({ id }: { id: string }) {
   const chatState = useChat()
   const wb = useWb()
+  const workspace = useDirectWorkspace()
   const [task, setTask] = useState<Task | null>(null)
   const [runs, setRuns] = useState<Run[]>([])
   const [missing, setMissing] = useState(false)
@@ -98,7 +102,7 @@ export default function TaskView({ id }: { id: string }) {
   const info = looks[look]
   const isOpenTask = !!task && task.status !== 'done' && task.status !== 'cancelled'
   const stuck = !!task && (task.status === 'failed' || task.status === 'blocked')
-  const canDispatch = !!task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
+  const canDispatch = !workspace && !!task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
   const dispatchText = !task ? '' : stuck ? '重试' : task.status === 'queued' ? '重新派发' : task.status === 'done' || task.status === 'cancelled' ? '再做一轮' : '派发'
   const onlineNodes = (data?.nodes ?? []).filter((n) => n.online)
   const whoAgent = task?.last_agent || task?.agent_pref || ''
@@ -168,6 +172,8 @@ export default function TaskView({ id }: { id: string }) {
           ) : task ? (
             <>
 
+              {workspace?.local_sandbox_dispatch && <SandboxDispatchPanel key={task.id} task={task} />}
+              {workspace?.hosted_workspace && workspace.cloud_work && <CloudWorkPanel key={`cloud-${task.id}`} task={task} />}
               {showForm && (
                 // The form is a dialog elsewhere; here it is laid flat into the card (.embed).
                 <div className="card px-4 py-3.5 embed">
@@ -191,7 +197,7 @@ export default function TaskView({ id }: { id: string }) {
               {views.length > 0 && <TalkLog taskId={id} />}
 
               {/* Every run of the task, newest first. */}
-              <section className="grid grid-cols-[minmax(0,1fr)] gap-3" aria-label="执行记录">
+              {(views.length > 0 || !workspace?.cloud_work) && <section className="grid grid-cols-[minmax(0,1fr)] gap-3" aria-label="执行记录">
                 {views.length === 0 ? (
                   <div className="flex items-center gap-2 text-muted text-[13px] py-2">
                     <Icon name="clock" size={16} />还没有执行过
@@ -199,7 +205,7 @@ export default function TaskView({ id }: { id: string }) {
                 ) : (
                   views.map((v, i) => <RunCard key={v.run.id} view={v} nodeName={nodeName} latest={i === 0} />)
                 )}
-              </section>
+              </section>}
             </>
           ) : (
             <div className="grid gap-3">

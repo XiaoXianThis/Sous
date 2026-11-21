@@ -1,6 +1,7 @@
 # Release build for apps/core (design §15). Run by .github/workflows/release.yml
 # when a v* tag is pushed; try it locally with:
 #   goreleaser release --snapshot --clean   (in apps/core, after `wok build web`)
+# CI adds desktop ZIPs before publishing so the common checksums cover them.
 # Archive names are what internal/update looks for: <binary>_<version>_<os>_<arch>.
 version: 2
 project_name: sous
@@ -69,6 +70,8 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ../../build/desktop/release/*/sous-desktop_*.zip
 
 changelog:
   use: github
@@ -77,3 +80,5 @@ changelog:
 release:
   draft: false
   prerelease: auto
+  extra_files:
+    - glob: ../../build/desktop/release/*/sous-desktop_*.zip

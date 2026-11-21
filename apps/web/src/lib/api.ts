@@ -2,7 +2,7 @@
 import type {
   SysGraph, SysHistory, SysTrace, AgentInfo, Attachment, Note, Approval, ConfigFile, ConfigOption, HubEvent, Inbox, JobStarted, JobTail, Me, Memory, MemoryKind, Message,
   Node, Project, Run, Schedule, Shell, RepoResult, ModelsView, McpView, Settings, ThreadContext, Task, Thread, Updates, Usage, Overview, Persona, RepoScan, MessageContext, Topic, Talk,
-  MeetingDetail, MeetingHost, MinutesRow,
+  MeetingDetail, MeetingHost, MinutesRow, WorkspaceCapabilities, SandboxDispatch, CloudWork, CloudCapacityPhase, SupervisorBinding, SupervisorChoice,
 } from './types'
 
 export interface McpInput {
@@ -33,8 +33,10 @@ export interface ProviderInput {
 
 import { b64, fromUtf8, sha256, utf8 } from '../trust/bytes'
 import { nodeAddr } from '../trust/docs'
-import { rpc, rpcJSON } from '../trust/rpc'
+import { isDirectWorkspace, workspaceRequest, workspaceJSON } from './workspace-transport'
+import { workspacePasskey } from './workspace-passkey'
 import { ask, intentHeaders, permit } from '../trust/vault'
+import { desktopPage, unlockDesktop } from './desktop-workspace'
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -42,16 +44,22 @@ export class ApiError extends Error {
   }
 }
 
-// Every request goes to the brain through the relay, end-to-end encrypted
-// (decision 0030): there is no cookie and no HTTP API on any server.
+// Relay requests remain end-to-end encrypted. An explicitly detected local
+// Hub uses the same API directly, with its own Passkey session and CSRF.
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  let res = await rpcJSON<{ error?: { code?: string; message?: string } }>(method, path, body)
+  let res = await workspaceJSON<{ error?: { code?: string; message?: string } }>(method, path, body)
   if (res.status === 401 && res.json?.error?.code === 'reauth') {
     // A critical request to the brain itself: the user approves exactly this
     // request with Face ID, and the brain checks that approval.
-    const raw = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body))
-    const headers = await intentHeaders(method, path, raw)
-    res = await rpcJSON(method, path, body, headers)
+    if (isDirectWorkspace()) {
+      if (desktopPage()) await unlockDesktop()
+      else await workspacePasskey()
+      res = await workspaceJSON(method, path, body)
+    } else {
+      const raw = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body))
+      const headers = await intentHeaders(method, path, raw)
+      res = await workspaceJSON(method, path, body, headers)
+    }
   }
   if (res.status >= 300) {
     const e = res.json?.error
@@ -62,7 +70,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 
 async function upload(file: Blob, name: string): Promise<Attachment> {
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const res = await rpc('POST', `/api/v1/attachments?name=${encodeURIComponent(name)}`, bytes, { 'Content-Type': 'application/octet-stream' })
+  const res = await workspaceRequest('POST', `/api/v1/attachments?name=${encodeURIComponent(name)}`, bytes, { 'Content-Type': 'application/octet-stream' })
   const data = JSON.parse(fromUtf8(res.body) || '{}')
   if (res.status >= 300) throw new ApiError(res.status, data?.error?.code ?? 'http', data?.error?.message ?? `HTTP ${res.status}`)
   return data as Attachment
@@ -91,6 +99,19 @@ async function jobDirect(nodeId: string, k: 'job.input' | 'job.resize', args: Re
 }
 
 export const api = {
+  loadSandboxDispatch: (taskID: string) => request<{ dispatch: SandboxDispatch | null }>('GET', `/api/v1/tasks/${encodeURIComponent(taskID)}/sandbox-dispatch`),
+  requestSandboxDispatch: (taskID: string) => request<{ dispatch: SandboxDispatch }>('POST', `/api/v1/tasks/${encodeURIComponent(taskID)}/sandbox-dispatch`, {}),
+  cancelSandboxDispatch: (id: string) => request<{ dispatch: SandboxDispatch }>('POST', `/api/v1/sandbox-dispatch/${encodeURIComponent(id)}/cancel`, {}),
+  loadCloudWork: (taskID: string) => request<{ job: CloudWork | null; capacity_phase?: CloudCapacityPhase }>('GET', `/api/v1/tasks/${encodeURIComponent(taskID)}/cloud-work`),
+  requestCloudWork: (taskID: string, body: { request_id: string; task_revision: number; script: string; files?: Record<string, string>; base_job_id?: string }) => request<{ job: CloudWork }>('POST', `/api/v1/tasks/${encodeURIComponent(taskID)}/cloud-work`, body),
+  cancelCloudWork: (id: string) => request<{ job: CloudWork }>('POST', `/api/v1/cloud-work/${encodeURIComponent(id)}/cancel`, {}),
+
+  cloudWorkResults: (id: string) => request<{ files: Record<string, string> | null }>('GET', `/api/v1/cloud-work/${encodeURIComponent(id)}/results`),
+  projectCloudResults: (id: string) => request<{ results: CloudWork[] }>('GET', `/api/v1/projects/${encodeURIComponent(id)}/cloud-work-results`),
+
+  capabilities: () => request<WorkspaceCapabilities>('GET', '/api/v1/capabilities'),
+  selectSupervisor: (selection: SupervisorChoice, generation: number, reconnect = false) =>
+    request<SupervisorBinding>('PUT', '/api/v1/supervisor/binding', { selection, generation, reconnect }),
   me: () => request<Me>('GET', '/api/v1/me'),
   threads: (projectId = '') =>
     request<{ threads: Thread[] }>('GET', `/api/v1/threads${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),
@@ -124,7 +145,7 @@ export const api = {
   runs: (threadId: string) => request<{ runs: Run[] }>('GET', `/api/v1/runs?thread_id=${encodeURIComponent(threadId)}`),
   run: (id: string) => request<{ run: Run; events: HubEvent[]; approvals: Approval[] }>('GET', `/api/v1/runs/${id}`),
   runText: async (id: string, what: 'log' | 'diff') => {
-    const res = await rpc('GET', `/api/v1/runs/${id}/${what}`)
+    const res = await workspaceRequest('GET', `/api/v1/runs/${id}/${what}`)
     if (res.status >= 300) throw new Error(`HTTP ${res.status}`)
     return fromUtf8(res.body)
   },

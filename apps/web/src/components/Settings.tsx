@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { ui } from '../lib/app'
 import { disablePush, enablePush, pushState, type PushState } from '../lib/push'
 import { agentChoices, modeText, pushKindText } from '../lib/tasks'
@@ -14,6 +15,8 @@ const modeHelp: Record<string, string> = {
 const roleText: Record<string, string> = { supervisor: '主管', reviewer: '验收', approver: '审批', inspector: '巡检' }
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
+  const workspace = useDirectWorkspace()
+  const compatibleModels = !workspace || workspace.supervisor.module === 'legacy'
   const [s, setS] = useState<Settings | null>(null)
   const [nodes, setNodes] = useState<Node[]>([])
   const [push, setPush] = useState<PushState>('off')
@@ -25,10 +28,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void (async () => {
       try {
-        const [st, n] = await Promise.all([api.settings(), api.nodes()])
+        const [st, n] = await Promise.all([api.settings(), workspace ? Promise.resolve({ nodes: [] as Node[] }) : api.nodes()])
         setS(st)
         setNodes(n.nodes)
-        setPush(await pushState())
+        if (!workspace) setPush(await pushState())
       } catch (e) {
         setError((e as Error).message)
       }
@@ -79,7 +82,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     <Sheet title="设置" onClose={onClose}>
       {s && (
         <>
-          <section className="grid gap-2">
+          {!workspace && <section className="grid gap-2">
             <h3 className="m-0 text-[14px]">权限模式（全局默认）</h3>
             <div className="grid gap-1.5" role="radiogroup" aria-label="权限模式">
               {Object.entries(modeText).map(([k, v]) => (
@@ -95,9 +98,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               ))}
             </div>
             <p className="text-muted text-[13px] m-0">项目和单个任务可以覆盖这里的设置。派发时会固定下当时的模式。</p>
-          </section>
+          </section>}
 
-          <section className="grid gap-2">
+          {!workspace && <section className="grid gap-2">
             <h3 className="m-0 text-[14px]">默认 agent</h3>
             <select
               className="border border-line bg-page rounded-[10px] px-2 py-[5px] text-ink justify-self-start"
@@ -108,11 +111,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               <option value="">自动（第一个可用的）</option>
               {agents.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
-          </section>
+          </section>}
 
           <section className="grid gap-2">
             <h3 className="m-0 text-[14px]">推送通知</h3>
-            {push === 'unsupported' ? (
+            {workspace ? <p className="m-0 text-muted text-[13px]">此工作区未启用外部推送服务。</p> : push === 'unsupported' ? (
               <p className="text-muted text-[13px] m-0">这个浏览器不支持推送。iPhone 和 iPad 上要先把 sous“添加到主屏幕”，再从主屏幕打开。</p>
             ) : (
               <div className="flex gap-2.5 items-center flex-wrap">
@@ -123,6 +126,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <span className="text-muted text-[13px]">已开启的设备：{s.push_devices}</span>
               </div>
             )}
+            {!workspace && <>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-x-3 gap-y-1">
               {Object.entries(pushKindText).map(([k, v]) => (
                 <label key={k} className="flex gap-1.5 items-center text-[14px]">
@@ -156,7 +160,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
               <span className="text-muted text-[13px]">期间只推送审批</span>
             </div>
-            <div className="flex gap-2.5 items-center flex-wrap">
+            </>}
+            {compatibleModels && <div className="flex gap-2.5 items-center flex-wrap">
               <label className="flex gap-1.5 items-center text-[14px]">
                 <input
                   type="checkbox"
@@ -166,11 +171,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 纪要直接发出
               </label>
               <span className="text-muted text-[13px]">散会后不再让你确认，纪要整理好就发回原来的对话</span>
-            </div>
+            </div>}
             {info && <p className="text-muted text-[13px] m-0">{info}</p>}
           </section>
 
-          <section className="grid gap-2">
+          {compatibleModels && <section className="grid gap-2">
             <h3 className="m-0 text-[14px]">模型</h3>
             <table className="border-collapse text-[14px]">
               <tbody>
@@ -180,7 +185,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               </tbody>
             </table>
             <button className="link justify-self-start" onClick={() => { ui.state.settings = 'models'; ui.emit() }}>在“模型”里添加供应商、切换模型和思考强度</button>
-          </section>
+          </section>}
         </>
       )}
       {error && <p className="text-danger text-[13px] m-0" role="alert">{error}</p>}

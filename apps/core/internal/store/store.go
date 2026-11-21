@@ -34,7 +34,28 @@ type Store struct {
 
 // Open opens (creating if needed) the database at path and runs migrations.
 // Use ":memory:" for tests.
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return open(path, "NORMAL", nil) }
+
+// OpenDurable requests a WAL sync on every commit before acknowledging work.
+func OpenDurable(path string) (*Store, error) { return open(path, "FULL", nil) }
+
+// OpenInitialized creates an identified workspace. The identity is committed
+// with the initial schema; a failed init cannot leave an unmarked workspace
+// that a different assembly might adopt.
+func OpenInitialized(path, key, value string, durable bool) (*Store, error) {
+	if key == "" || value == "" {
+		return nil, fmt.Errorf("workspace identity is required")
+	}
+	sync := "NORMAL"
+	if durable {
+		sync = "FULL"
+	}
+	return open(path, sync, &initialSetting{key, value})
+}
+
+type initialSetting struct{ Key, Value string }
+
+func open(path, synchronous string, initial *initialSetting) (*Store, error) {
 	dsn := fmt.Sprintf("file:mem%d?mode=memory&cache=shared", memSeq.Add(1))
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -43,7 +64,7 @@ func Open(path string) (*Store, error) {
 		// A plain path, not a file: URI, so Windows paths with backslashes work.
 		dsn = path
 	}
-	dsn += sep(dsn) + "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	dsn += sep(dsn) + "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(" + synchronous + ")"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -52,7 +73,7 @@ func Open(path string) (*Store, error) {
 		db.SetMaxOpenConns(1)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(context.Background()); err != nil {
+	if err := s.migrate(context.Background(), initial); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

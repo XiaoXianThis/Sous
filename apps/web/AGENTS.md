@@ -2,7 +2,7 @@
 
 - Purpose: sous 的 PWA 前端：聊天、任务、审批、机器与设置界面。手机、平板、浏览器直接用；构建产物同时被 desktop 内嵌。
 - Stack: React 19 + TypeScript + Vite 6 + Tailwind CSS 4（设计变量在 `src/app.css`，映射成 `bg-page`、`text-ink` 等类），Vitest；`react-markdown` + `remark-gfm` + `highlight.js`（聊天的 Markdown）；PWA（手写 Service Worker 和 manifest，见 `public/`；主屏图标是 `apple-touch-icon.png`（180px）和 `icon-192.png` / `icon-512.png`，由 `icon.svg` 去掉圆角渲染而来，因为 iOS 不认 SVG 图标）；`@xterm/xterm`（机器上安装、登录 agent 时的终端）；shadcn/ui 风格的浮层组件（手抄进 `src/components/ui/`，不用 `npx shadcn`，外观改成本项目的 CSS 变量）：`popover.tsx`（`@radix-ui/react-popover`）、`dropdown-menu.tsx`（`@radix-ui/react-dropdown-menu`）、`dialog.tsx`（`@radix-ui/react-dialog`）、`tooltip.tsx`（全局 portal 悬停提示层 `TipLayer`），类名合并用 `src/lib/utils.ts` 的 `cn()`（`clsx` + `tailwind-merge`）；`motion`（motion.dev，从 `motion/react` 引入，见下面“动画”）。
-- Depends on: core 的契约 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`。构建产物 `build/web/` 部署到 Vercel（决策 0030），也被 desktop 消费。`@noble/post-quantum`、`@noble/curves`、`@noble/hashes` 补 WebCrypto 没有的 X-Wing（ML-KEM-768 + X25519）和 HKDF 分步。
+- Depends on: core 的契约 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`、`core-desktop-sandbox-dispatch.md`、`core-cloud-work.md`、`core-external-mcp.md`。构建产物 `build/web/` 部署到 Vercel（决策 0030），也被 desktop 随包携带并由本机 Hub 提供。`@noble/post-quantum`、`@noble/curves`、`@noble/hashes` 补 WebCrypto 没有的 X-Wing（ML-KEM-768 + X25519）和 HKDF 分步。
 
 ## Tasks
 
@@ -18,6 +18,8 @@ Commands run in `apps/web/`. Leave a command empty to use what `wok` detects; `w
 | deploy | bunx vercel@latest deploy "$WOK_OUT" --prod | |
 
 ## Conventions
+
+- `src/lib/workspace-transport.ts`：本机 Hub 的 `/api/v1/me` 声明 `local_workspace`，或同源 HTTPS 页面和 `/me` 同时声明 `hosted_workspace` 时，才走直连 REST、会话与 WebSocket。Mac 桌面 `/desktop` 路由使用 `desktop-workspace.ts` 的原生桥，不注册 Service Worker；浏览器和云端仍用 Passkey。普通静态部署仍走加密 Relay；已知云页面掉线不自动换工作区。
 
 - 使用 bun 运行前端 CLI（`bun install`、`bun run`），锁文件是 `bun.lock`（由 `package-lock.json` 迁移，CI 与本地都固定 bun 1.3.14）。
 - `bun run dev` 在 5173 端口启动，页面只连中继（首次设置时填写的地址，或构建时的 `VITE_SOUS_RELAY`），先 `wok dev core` 起本地中继。

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { api } from '../lib/api'
+import { api, request } from '../lib/api'
 import { ui as uiStore, useChat, useUi, useWb } from '../lib/app'
 import { filesOf, formatSize, isImage, MAX_FILE, MAX_FILES, nameOf, readyIds, shrinkImage, uploading, type Pending } from '../lib/attachments'
 import { usePhone } from '../lib/phone'
@@ -12,6 +12,7 @@ import { ContextPanel, ContextRing, useThreadContext } from './ContextMeter'
 import { dividerAt } from '../lib/context'
 import AgentIcon from './AgentIcon'
 import ModelSwitch from './ModelSwitch'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import Icon from './Icon'
 import MessageView from './Message'
 import RunChip from './RunChip'
@@ -104,8 +105,14 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   const section = useRef<HTMLElement>(null)
   const composer = useRef<HTMLFormElement>(null)
   const composerBox = useRef<HTMLDivElement>(null)
-  const [ctxView, reloadContext] = useThreadContext(threadId)
+  const workspace = useDirectWorkspace()
+  const acpPreview = workspace?.supervisor.module === 'acp'
+  const unbound = workspace?.supervisor.state === 'unbound'
+  const missingModel = workspace?.supervisor.state === 'unconfigured'
+  const [ctxView, reloadContext] = useThreadContext(unbound || acpPreview ? '' : threadId)
   const [contextOpen, setContextOpen] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
   // @ references: the projects picked so far, the query at the caret and the highlighted candidate.
   const [picked, setPicked] = useState<Mention[]>([])
   const [mq, setMq] = useState<MentionQuery | null>(null)
@@ -164,7 +171,24 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
 
   const nodeName = (id: string) => wbState.data?.nodes.find((n) => n.id === id)?.name ?? '机器'
   const messages = chatState.messages[threadId] ?? []
-  const answering = threadId !== '' && isAnswering(chatState, threadId)
+  const answering = !unbound && !missingModel && threadId !== '' && isAnswering(chatState, threadId)
+
+  const activeTopic = chatState.answering[threadId] ?? ''
+  const activeReplyTo = messages.reduce((seq, m) =>
+    m.role === 'user' && m.seen && (m.topic_id ?? '') === activeTopic ? Math.max(seq, m.seq) : seq, 0)
+  useEffect(() => { setStopError('') }, [threadId, answering])
+
+  async function stopTurn() {
+    setStopping(true)
+    setStopError('')
+    try {
+      await request('POST', `/api/v1/threads/${encodeURIComponent(threadId)}/supervisor/cancel`, { reply_to: activeReplyTo })
+    } catch {
+      setStopError('未能停止回合。它可能已结束或尚未开始，请检查最新回复。')
+    } finally {
+      setStopping(false)
+    }
+  }
 
   const timeline: Item[] = visibleMessages(messages).map((m) => ({ kind: 'message', seq: m.seq, message: m }))
   for (const r of Object.values(chatState.runs)) {
@@ -236,6 +260,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
   // Files are uploaded as soon as they are added; the message refers to them by id.
   function addFiles(files: File[]) {
     if (dm || files.length === 0) return
+    if (acpPreview) { setSendError('ACP 主管预览暂不读取附件，请发送文字。'); return }
     const room = MAX_FILES - pending.length
     if (files.length > room) setSendError(`一条消息最多 ${MAX_FILES} 个附件`)
     else setSendError('')
@@ -430,7 +455,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
           </div>
         )}
         </div>
-        {phone && picker ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
+        {phone && picker && !unbound && !acpPreview ? <ModelSwitch placement="header" /> : <span className="flex-1"></span>}
         <div className={phone ? 'glass-group glass gap-0.5 px-1.5 min-w-0' : 'contents'}>
           {onSendIn && (
             <button className="icon-btn" aria-label={topics ? '按时间看' : '按话题看'} data-tip={topics ? '按时间看' : '按话题看'} data-tip-pos="bottom"
@@ -490,6 +515,13 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
       <form ref={composer} className="chat-composer px-3 pt-1 pb-[calc(12px+var(--safe-b))] grid gap-1.5 mx-auto w-full max-w-[852px]" onSubmit={(e) => { e.preventDefault(); void submit() }}>
         {phone && typing && <button type="button" className="kb-hide glass-btn glass" aria-label="收起键盘"
           onPointerDown={(e) => e.preventDefault()} onClick={() => input.current?.blur()}><Icon name="chevron" size={18} /></button>}
+        {unbound && !dm && <p className="text-muted text-[12.5px] m-0 ml-2" role="status">未连接主管。消息会保存，暂不会收到 AI 回复；也可以在工作台手动管理任务。</p>}
+        {missingModel && !dm && <p className="text-muted text-[12.5px] m-0 ml-2" role="status">尚未配置主管模型。添加模型之前，消息只会保存到本机。</p>}
+        {acpPreview && !dm && <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 text-muted text-[12.5px]">
+          <span>ACP 主管预览 · 仅文本，可登记待分配任务，不会执行</span>
+          {answering && activeReplyTo > 0 && <button type="button" className="btn" disabled={stopping} onClick={() => void stopTurn()}>{stopping ? '正在停止…' : '停止本轮'}</button>}
+        </div>}
+        {stopError && <p role="alert" className="text-danger text-[12.5px] m-0 px-2">{stopError}</p>}
         {sendError && <p className="text-danger text-[12.5px] m-0 ml-2 flex items-center gap-1" role="alert"><Icon name="alert" size={13} />{sendError}</p>}
         <Popover open={mentionOpen} onOpenChange={(o) => { if (!o && mq) setDismissed(mq.start) }}>
         <PopoverAnchor asChild>
@@ -499,7 +531,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             ? 'composer-box glass relative grid gap-1 rounded-[26px] px-3.5 pt-2 pb-2 cursor-text'
             : `relative grid grid-cols-[minmax(0,1fr)_auto] gap-1 bg-panel rounded-[16px] border border-line-strong px-3 pt-2.5 pb-2 shadow-[0_1px_2px_rgb(0_0_0/.04)] focus-within:border-[color-mix(in_srgb,var(--text)_28%,transparent)] transition-colors cursor-text${dm ? ' !border-accent' : ''}`}
           onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) input.current?.focus() }}
-          onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); setDragging(true) } }}
+          onDragOver={(e) => { if (!acpPreview && hasFiles(e)) { e.preventDefault(); setDragging(true) } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false) }}
           onDrop={onDrop}
         >
@@ -667,7 +699,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               hidden
               onChange={(e) => { addFiles(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = '' }}
             />}
-            {!dm && <button
+            {!dm && !acpPreview && <button
               type="button"
               className="icon-btn flex-none"
               aria-label="添加图片或文件"
@@ -677,7 +709,7 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
             >
               <Icon name="paperclip" size={17} />
             </button>}
-            {!phone && !dm && picker && <ModelSwitch />}
+            {!phone && !dm && picker && !unbound && !acpPreview && <ModelSwitch />}
             <span className="w-1 flex-none"></span>
             {context ? (
               <span className="inline-flex gap-1 items-center text-[12px] text-muted bg-sunken rounded-[8px] h-7 pl-2 pr-0.5 max-w-full min-w-0" title="sous 会知道你在看这个">
@@ -709,6 +741,11 @@ export default function ChatView({ threadId, threads, title, avatar, threadLabel
               type="submit"
               disabled={!canSend}
               aria-label="发送"
+              onPointerDown={(e) => {
+                // Keep the focused composer in place until submit. Blurring
+                // here can reinsert the phone tab bar beneath the pointer.
+                if (phone && document.activeElement === input.current) e.preventDefault()
+              }}
             >
               <Icon name={sending ? 'refresh' : 'send'} size={16} stroke={2.2} className={sending ? 'spin' : ''} />
             </button>

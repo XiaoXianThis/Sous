@@ -1,6 +1,7 @@
 name: release
 # Pushing a tag such as v0.1.0 tests everything, builds the PWA, and
-# publishes sous (Windows, macOS, Linux) and sous-relay (Linux) to GitHub
+# publishes sous (Windows, macOS, Linux), sous-relay (Linux), and desktop
+# (Apple Silicon and Windows amd64) to GitHub
 # Releases with goreleaser (apps/core/.goreleaser.yaml). Daemons update
 # themselves from these releases (internal/update), but only after the author
 # signed checksums.txt locally with the offline release key (decision 0030):
@@ -86,7 +87,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: apps/core/go.mod
-          cache-dependency-path: apps/core/go.sum
+          cache-dependency-path: |
+            apps/core/go.sum
+            apps/desktop/go.sum
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -97,9 +100,51 @@ jobs:
       - name: Install wok
         run: go install github.com/XiaoXianThis/wokspace/apps/wok@latest
       - run: wok test core
+      - run: wok test desktop
       - run: wok install web
       - run: wok test web
       - run: wok build web
+      - name: Build and sign desktop companion binaries
+        working-directory: apps/core
+        env:
+          SOUS_SIGN: require
+        run: |
+          set -eu
+          root="$RUNNER_TEMP/sous-desktop-binaries"
+          mkdir -p "$root/darwin" "$root/windows"
+          ldflags="-s -w -X github.com/XiaoXianThis/Sous/apps/core/internal/version.Version=$GITHUB_REF_NAME"
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$root/darwin/sous" ./cmd/sous
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -o "$root/darwin/sous-sandbox" ./cmd/sous-sandbox
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$root/windows/sous.exe" ./cmd/sous
+          sh scripts/sign-darwin.sh "$root/darwin/sous" "$root/darwin/sous-sandbox"
+      - name: Package and verify desktop applications
+        working-directory: apps/desktop
+        env:
+          SOUS_SIGN: require
+        run: |
+          set -eu
+          root="$RUNNER_TEMP/sous-desktop-binaries"
+          out="$GITHUB_WORKSPACE/build/desktop/release"
+          web="$GITHUB_WORKSPACE/build/web"
+          version="${GITHUB_REF_NAME#v}"
+          set --
+          case "$GITHUB_REF_NAME" in v*-alpha*) set -- -debug-login;; esac
+          go run ./tools/package -goos darwin -goarch arm64 -sous "$root/darwin/sous" \
+            -sandbox "$root/darwin/sous-sandbox" -out "$out/darwin" -web-dir "$web" -version "$GITHUB_REF_NAME" "$@"
+          go run ./tools/package -goos windows -goarch amd64 -sous "$root/windows/sous.exe" \
+            -out "$out/windows" -web-dir "$web" -version "$GITHUB_REF_NAME" "$@"
+          app="$out/darwin/sous.app"
+          codesign --verify --deep --strict "$app"
+          want=$(printf '%s' "$SOUS_SIGN_CERT_SHA1" | tr 'A-F' 'a-f')
+          for name in sous sous-sandbox sous-desktop; do
+            req=$(codesign -d -r- "$app/Contents/MacOS/$name" 2>&1)
+            case "$req" in
+              *"identifier \"cc.wxian.$name\" and certificate leaf = H\"$want\""*) ;;
+              *) echo "::error title=macOS signing::$name has an unexpected designated requirement"; exit 1 ;;
+            esac
+          done
+          test -s "$out/darwin/sous-desktop_${version}_darwin_arm64.zip"
+          test -s "$out/windows/sous-desktop_${version}_windows_amd64.zip"
       # The build hook (scripts/sign-darwin.sh) signs each darwin binary before
       # it is archived, so checksums.txt covers the signed files.
       - uses: goreleaser/goreleaser-action@v6

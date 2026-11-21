@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { go, loadOverview, useWb } from '../lib/app'
 import { setArchived } from '../lib/projects'
 import { modeText } from '../lib/tasks'
@@ -15,6 +16,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
   onClose: () => void
 }) {
   const wb = useWb()
+  const canExecute = useDirectWorkspace()?.node_pairing !== false
   const isNew = !project
   const [name, setName] = useState(project?.name ?? preset?.name ?? '')
   const [repo, setRepo] = useState(project?.repo_url ?? preset?.repo_url ?? '')
@@ -109,7 +111,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
             />
           </label>
         </div>
-        <p className="m-0 text-[12px] text-muted">同一个仓库在各台机器的工作空间里会被自动找到，不用手填路径。</p>
+        <p className="m-0 text-[12px] text-muted">{canExecute ? '同一个仓库在各台机器的工作空间里会被自动找到，不用手填路径。' : '现在只保存项目资料，不会读取或创建本机仓库。'}</p>
         <label className="grid gap-1 text-[13px] text-muted">
           项目说明（会写进 agent 的提示）
           <textarea
@@ -144,7 +146,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
           </label>
         </div>
 
-        <fieldset className="border border-line rounded-[14px] px-3 pt-2 pb-3 grid gap-2">
+        {canExecute && <fieldset className="border border-line rounded-[14px] px-3 pt-2 pb-3 grid gap-2">
           <legend className="text-[13px] text-muted px-1">在哪些机器上（越靠前越优先）</legend>
           {places.map((p, i) => (
             <div key={i} className="flex gap-1.5 items-center">
@@ -168,7 +170,7 @@ export default function ProjectEditor({ project = null, preset = null, onClose }
             </div>
           ))}
           {nodes.length > places.length && <button type="button" className="link accent justify-self-start" onClick={addPlace}>添加机器</button>}
-        </fieldset>
+        </fieldset>}
 
         <fieldset className="border border-line rounded-[14px] px-3 pt-2 pb-3 grid gap-2">
           <legend className="text-[13px] text-muted px-1">部署目标</legend>

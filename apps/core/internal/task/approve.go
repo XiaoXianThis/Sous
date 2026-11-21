@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 )
@@ -98,7 +98,7 @@ func (e *Engine) Approve(ctx context.Context, eff store.Effect) error {
 		return e.decideApproval(ctx, a.ID, optionOf(a, "allow_once"), "复用用户 allow_always："+prev.ID+"（operation_key v1）", event.ActorApprover)
 	}
 
-	if !models.Usable(ctx, e.Approver.Provider) {
+	if !provider.Usable(ctx, e.Approver.Provider) {
 		return e.escalateApproval(ctx, a.ID, "没有配置审批模型，交给你决定")
 	}
 	t, _ := e.store().Task(ctx, a.TaskID)

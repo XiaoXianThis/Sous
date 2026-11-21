@@ -23,9 +23,15 @@ import (
 func (h *Hub) Routes(mux *http.ServeMux, protect func(string, http.HandlerFunc)) {
 	mux.HandleFunc("POST /api/v1/node/pair", h.handlePair)
 	mux.HandleFunc("GET /node", h.ServeNode)
+	h.WorkspaceRoutes(mux, protect)
+	protect("POST /api/v1/nodes/pairing-code", h.pairingCode)
+}
+
+// WorkspaceRoutes exposes the inventory and workbench without exposing the
+// legacy device handshake. A local workspace is not an execution endpoint.
+func (h *Hub) WorkspaceRoutes(_ *http.ServeMux, protect func(string, http.HandlerFunc)) {
 
 	protect("GET /api/v1/nodes", h.listNodes)
-	protect("POST /api/v1/nodes/pairing-code", h.pairingCode)
 	protect("PATCH /api/v1/nodes/{id}", h.renameNode)
 	protect("DELETE /api/v1/nodes/{id}", h.revokeNode)
 	h.adminRoutes(protect)
@@ -43,6 +49,16 @@ func (h *Hub) Routes(mux *http.ServeMux, protect func(string, http.HandlerFunc))
 
 	protect("GET /api/v1/approvals", h.listApprovals)
 	protect("POST /api/v1/approvals/{id}/decide", h.decide)
+}
+
+// HostedPlanningRoutes supplies read-only inventory for the workbench. The
+// hosted entry does not register legacy execution, pairing or node admin.
+func (h *Hub) HostedPlanningRoutes(_ *http.ServeMux, protect func(string, http.HandlerFunc)) {
+	protect("GET /api/v1/nodes", h.listNodes)
+	protect("GET /api/v1/repos", h.listRepos)
+	protect("GET /api/v1/runs", h.listRuns)
+	protect("GET /api/v1/runs/{id}", h.getRun)
+	protect("GET /api/v1/approvals", h.listApprovals)
 }
 
 func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {

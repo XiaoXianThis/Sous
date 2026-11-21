@@ -58,6 +58,10 @@ func usage() {
   sous brain import <0.2 的 hub.db 备份>
   sous release keygen --key FILE | sign --key FILE --tag vX.Y.Z <checksums.txt>
   sous daemon
+  sous hub [--config FILE] [--web-dir DIR] [--agent none|acp|legacy] [--home DIR]
+  sous hosted-hub --config FILE [--setup-link-file FILE]
+  sous cloud-worker --help
+  sous cloud-controller --help
   sous status
   sous agents
   sous chat [--thread ID]
@@ -77,6 +81,24 @@ func run(args []string) error {
 		return errors.New("missing command")
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "hub" {
+		return runHub(rest)
+	}
+	if cmd == "hosted-hub" {
+		return runHostedHub(rest)
+	}
+	if cmd == "cloud-controller" {
+		return runCloudController(rest)
+	}
+	if cmd == "cloud-worker" {
+		return runCloudWorker(rest)
+	}
+	if cmd == "agent" {
+		return runACPAgent(rest)
+	}
+	if cmd == "agent-mcp" {
+		return runACPBridge(rest)
+	}
 	if cmd == "mcp" {
 		// Its stdout is the MCP stream: nothing else may write to it.
 		if code := sousmcp.Main(rest); code != 0 {

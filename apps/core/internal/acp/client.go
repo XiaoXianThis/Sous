@@ -20,10 +20,12 @@ const ProtocolVersion = 1
 
 // Command starts an agent's ACP server.
 type Command struct {
-	Path string
-	Args []string
-	Dir  string
-	Env  []string // added to the current environment
+	Path        string
+	Args        []string
+	Dir         string
+	Env         []string        // added to the current environment unless IsolatedEnv is set
+	IsolatedEnv bool            // pass only Env; not a process sandbox
+	Lifetime    context.Context // optional hard limit on the subprocess lifetime
 }
 
 // Update is a normalized session/update notification.
@@ -184,10 +186,22 @@ const stderrKeep = 8 * 1024
 
 // Start launches the agent and runs initialize.
 func Start(ctx context.Context, c Command, cb Callbacks) (*Client, error) {
-	cmd := exec.Command(c.Path, c.Args...)
+	var cmd *exec.Cmd
+	if c.Lifetime != nil {
+		cmd = exec.CommandContext(c.Lifetime, c.Path, c.Args...)
+	} else {
+		cmd = exec.Command(c.Path, c.Args...)
+	}
 	cmd.Dir = c.Dir
 	cmd.Env = append(os.Environ(), c.Env...)
+	if c.IsolatedEnv {
+		cmd.Env = append([]string{}, c.Env...)
+	}
 	configureProcess(cmd)
+	if c.Lifetime != nil {
+		cmd.Cancel = func() error { killProcess(cmd); return nil }
+	}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -225,6 +239,10 @@ func Start(ctx context.Context, c Command, cb Callbacks) (*Client, error) {
 	if err != nil {
 		cl.Close()
 		return nil, cl.withStderr(fmt.Errorf("initialize: %w", err))
+	}
+	if cl.Init.ProtocolVersion != ProtocolVersion {
+		cl.Close()
+		return nil, fmt.Errorf("ACP protocol version %d is not supported", cl.Init.ProtocolVersion)
 	}
 	return cl, nil
 }

@@ -24,7 +24,7 @@ Requirements, designs, and tasks: documents about work in progress.
 | [e2e-review-2026-11](e2e-review-2026-11/) | core, web | 已完成端到端测试（浏览器/CLI），修复任务待排期 |
 | [flexible-workflow](flexible-workflow/) | core, web | 已实现并通过自动测试（含端到端），真实模型验收进行中 |
 | [supervisor-loop](supervisor-loop/) | core, web | 已实现并通过自动测试（含端到端），真实 agent 实测 sous mcp 待做 |
-| [modular-sous](modular-sous/discussion-results.md) | core, desktop, web | 模块化讨论结论、[架构图](modular-sous/architecture.md)、[技术设计](modular-sous/design.md)与[任务](modular-sous/tasks.md)；待实施 |
+| [modular-sous](modular-sous/discussion-results.md) | core, desktop, web | 模块化讨论结论、[架构图](modular-sous/architecture.md)、[技术设计](modular-sous/design.md)与[任务](modular-sous/tasks.md)；本机工作区及第一方 ACP 预览，完整发布未验收 |
 | [chat-topics](chat-topics/) | core, web | 已实现并通过自动测试和浏览器验收（mock 主管），真实模型验收待做 |
 | [message-hygiene](message-hygiene/) | core, web | 诊断与方案待拍板（[plan](message-hygiene/plan.md)，统计 SQL 待在 hub 上跑） |
 | [approval-friction](approval-friction/) | core | 已分批实施并自测，见[实施与16条对比](approval-friction/implementation.md)；medium/300额度仍按方案等待观测 |

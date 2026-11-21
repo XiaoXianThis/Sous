@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XiaoXianThis/Sous/apps/core/internal/hub"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/trust"
 )
 
@@ -212,6 +214,11 @@ func setOf(names []string) map[string]bool {
 
 // restore replaces the local data with the newest snapshot when it is newer.
 func (b *Brain) restore(ctx context.Context) error {
+	current := DataDir(b.Root)
+	if err := hub.CheckPairedDatabase(ctx, current); err != nil {
+		return err
+	}
+
 	m, ok := b.C.Snapshot()
 	b.mu.Lock()
 	mine := b.snapSeq
@@ -254,19 +261,19 @@ func (b *Brain) restore(ctx context.Context) error {
 	if int64(len(data)) != m.Size {
 		return errors.New("快照大小和清单不符")
 	}
-	tmp := DataDir(b.Root) + ".restoring"
-	os.RemoveAll(tmp)
-	if err := unpack(bytes.NewReader(data), tmp); err != nil {
-		os.RemoveAll(tmp)
+	parent := filepath.Dir(current)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	if _, err := os.Stat(DataDir(b.Root)); err == nil {
-		old := DataDir(b.Root) + ".before-" + time.Now().Format("20060102-150405")
-		if err := os.Rename(DataDir(b.Root), old); err != nil {
-			return err
-		}
+	tmp, err := os.MkdirTemp(parent, ".snapshot-restore-")
+	if err != nil {
+		return err
 	}
-	if err := os.Rename(tmp, DataDir(b.Root)); err != nil {
+	defer os.RemoveAll(tmp)
+	if err := unpack(bytes.NewReader(data), tmp); err != nil {
+		return err
+	}
+	if err := installPairedSnapshot(ctx, current, tmp); err != nil {
 		return err
 	}
 	b.mu.Lock()
@@ -277,6 +284,46 @@ func (b *Brain) restore(ctx context.Context) error {
 	b.mu.Unlock()
 	writeLocalSeq(b.Root, m.Seq)
 	slog.Info("brain: restored the newest state", "seq", m.Seq, "from", m.Holder)
+	return nil
+}
+
+// Snapshot replacement may happen before a Hub opens. Check both kinds
+// before rename so a confused deployment cannot overwrite or import another
+// assembly. Keep a recoverable original if installation does not complete.
+func installPairedSnapshot(ctx context.Context, current, staged string) error {
+	if current == staged {
+		return errors.New("snapshot staging directory equals the live destination")
+	}
+	info, err := os.Lstat(filepath.Join(staged, "hub.db"))
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("snapshot does not contain a regular hub.db")
+	}
+	if err := hub.CheckPairedDatabase(ctx, staged); err != nil {
+		return fmt.Errorf("invalid paired snapshot: %w", err)
+	}
+	if err := hub.CheckPairedDatabase(ctx, current); err != nil {
+		return fmt.Errorf("cannot replace workspace: %w", err)
+	}
+	backup := ""
+	if info, err := os.Lstat(current); err == nil {
+		if !info.IsDir() {
+			return errors.New("snapshot destination is not a real directory")
+		}
+		backup = current + ".before-" + ids.New()
+		if err := os.Rename(current, backup); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(staged, current); err != nil {
+		if backup != "" {
+			if rollback := os.Rename(backup, current); rollback != nil {
+				return errors.Join(err, fmt.Errorf("original workspace retained at %s: %w", backup, rollback))
+			}
+		}
+		return err
+	}
 	return nil
 }
 

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { go, loadOverview, ui, useWb } from '../lib/app'
 import { registerable } from '../lib/workbench'
 import Icon from './Icon'
@@ -8,6 +9,7 @@ import Sheet from './Sheet'
 
 export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) {
   const wb = useWb()
+  const canExecute = useDirectWorkspace()?.node_pairing !== false
   const [name, setName] = useState('')
   const [nodeId, setNodeId] = useState('')
   const [layout, setLayout] = useState<'wokspace' | 'plain'>('wokspace')
@@ -41,6 +43,8 @@ export default function ProjectSetupSheet({ onClose }: { onClose: () => void }) 
       setBusy(false)
     }
   }
+
+  if (!canExecute) return <ProjectEditor onClose={onClose} />
 
   return (
     <>

@@ -26,15 +26,15 @@ import (
 )
 
 const (
-	SessionCookie   = "sous_session"
-	CSRFCookie      = "sous_csrf"
-	CSRFHeader      = "X-CSRF-Token"
-	ceremonyCookie  = "sous_ceremony"
-	sessionTTL      = 30 * 24 * time.Hour
-	ceremonyTTL     = 5 * time.Minute
-	setupTokenKey   = "auth.setup_token_hash"
-	setupExpiresKey = "auth.setup_token_expires"
-	setupTokenTTL   = 24 * time.Hour
+	SessionCookie  = "sous_session"
+	CSRFCookie     = "sous_csrf"
+	CSRFHeader     = "X-CSRF-Token"
+	ceremonyCookie = "sous_ceremony"
+	sessionTTL     = 30 * 24 * time.Hour
+	ceremonyTTL    = 5 * time.Minute
+	setupTokenTTL  = 24 * time.Hour
+	hostedSetupTTL = 15 * time.Minute
+	maxCeremonies  = 512
 )
 
 var ErrForbidden = errors.New("forbidden")
@@ -44,13 +44,19 @@ type Auth struct {
 	cfg *config.Hub
 	wa  *webauthn.WebAuthn
 
+	desktop    desktopAuth
 	mu         sync.Mutex
 	ceremonies map[string]ceremony
+	streamMu   sync.Mutex
+	streams    map[string]map[context.Context]context.CancelFunc
 }
 
 type ceremony struct {
-	data    *webauthn.SessionData
-	expires time.Time
+	data      *webauthn.SessionData
+	expires   time.Time
+	register  bool
+	setupHash string
+	owner     string
 }
 
 func New(st *store.Store, cfg *config.Hub) (*Auth, error) {
@@ -68,7 +74,7 @@ func New(st *store.Store, cfg *config.Hub) (*Auth, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Auth{st: st, cfg: cfg, wa: wa, ceremonies: map[string]ceremony{}}, nil
+	return &Auth{st: st, cfg: cfg, wa: wa, ceremonies: map[string]ceremony{}, streams: make(map[string]map[context.Context]context.CancelFunc)}, nil
 }
 
 // owner is the only WebAuthn user.
@@ -97,50 +103,45 @@ func (a *Auth) owner(ctx context.Context) (owner, error) {
 
 // HasPasskey reports whether any passkey is registered.
 func (a *Auth) HasPasskey(ctx context.Context) (bool, error) {
-	raw, err := a.st.Credentials(ctx)
-	return len(raw) > 0, err
+	return a.st.HasCredentials(ctx)
 }
 
 // NewSetupToken creates a one-time token for registering a passkey without
 // being logged in, valid for 24 hours. It replaces any earlier token.
 func (a *Auth) NewSetupToken(ctx context.Context) (string, error) {
 	tok := randomToken()
-	if err := a.st.SetSetting(ctx, setupTokenKey, hash(tok)); err != nil {
-		return "", err
+	ttl := setupTokenTTL
+	if a.cfg.HostedWorkspace {
+		ttl = hostedSetupTTL
 	}
-	if err := a.st.SetSetting(ctx, setupExpiresKey, time.Now().Add(setupTokenTTL).Format(time.RFC3339)); err != nil {
+	if err := a.st.ReplacePasskeySetup(ctx, hash(tok), time.Now().Add(ttl)); err != nil {
 		return "", err
 	}
 	return tok, nil
 }
 
-// SetupURL returns the link that opens the passkey setup page.
+// SetupURL keeps direct workspace enrollment credentials in a fragment, which
+// is not part of the URL seen by the HTTP server or reverse proxy.
 func (a *Auth) SetupURL(tok string) string {
+	if a.cfg.DirectWorkspace() {
+		return a.cfg.PublicURL + "/setup#token=" + tok
+	}
 	return a.cfg.PublicURL + "/setup?token=" + tok
 }
 
-func (a *Auth) validSetupToken(ctx context.Context, tok string) bool {
-	if tok == "" {
-		return false
+func (a *Auth) setupHash(ctx context.Context, tok string) string {
+	if len(tok) != 43 {
+		return ""
 	}
-	want, err := a.st.Setting(ctx, setupTokenKey)
-	if err != nil {
-		return false
+	want, expires, err := a.st.PasskeySetup(ctx)
+	if err != nil || !time.Now().Before(expires) {
+		return ""
 	}
-	exp, err := a.st.Setting(ctx, setupExpiresKey)
-	if err != nil {
-		return false
+	sum := hash(tok)
+	if subtle.ConstantTimeCompare([]byte(sum), []byte(want)) != 1 {
+		return ""
 	}
-	t, err := time.Parse(time.RFC3339, exp)
-	if err != nil || time.Now().After(t) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(hash(tok)), []byte(want)) == 1
-}
-
-func (a *Auth) consumeSetupToken(ctx context.Context) {
-	a.st.DeleteSetting(ctx, setupTokenKey)
-	a.st.DeleteSetting(ctx, setupExpiresKey)
+	return sum
 }
 
 // ResetPasskeys is the recovery path for `sous-hub admin passkey-reset`.
@@ -162,11 +163,15 @@ func (a *Auth) Session(r *http.Request) (string, error) {
 	if t, ok := TunnelOf(r.Context()); ok && t.SID != "" {
 		return "", nil
 	}
-	c, err := r.Cookie(SessionCookie)
+	c, err := r.Cookie(a.cookieName(SessionCookie))
 	if err != nil || c.Value == "" {
 		return "", ErrForbidden
 	}
-	csrf, err := a.st.Session(r.Context(), hash(c.Value))
+	id := hash(c.Value)
+	if session, ok := a.desktop.session(id); ok {
+		return session.csrf, nil
+	}
+	csrf, err := a.st.Session(r.Context(), id)
 	if err != nil {
 		return "", ErrForbidden
 	}
@@ -212,12 +217,20 @@ func (a *Auth) RequireFresh(w http.ResponseWriter, r *http.Request) bool {
 		writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要你刷一次 Face ID")
 		return false
 	}
-	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
-		if at, err := a.st.SessionCreated(r.Context(), hash(c.Value)); err == nil && time.Since(at) < FreshLogin {
+	if c, err := r.Cookie(a.cookieName(SessionCookie)); err == nil && c.Value != "" {
+		id := hash(c.Value)
+		if session, ok := a.desktop.session(id); ok && session.native && time.Since(session.created) < FreshLogin {
+			return true
+		}
+		if at, err := a.st.SessionCreated(r.Context(), id); err == nil && time.Since(at) < FreshLogin {
 			return true
 		}
 	}
-	writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要重新验证 Passkey")
+	if a.cfg.LocalDesktopAuth {
+		writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要重新验证系统身份")
+	} else {
+		writeError(w, http.StatusUnauthorized, "reauth", "这个操作需要重新验证 Passkey")
+	}
 	return false
 }
 
@@ -228,11 +241,18 @@ func (a *Auth) Owner(r *http.Request) string {
 	if t, ok := TunnelOf(r.Context()); ok && t.SID != "" {
 		return hash("sous-session-owner:tunnel:" + t.SID)
 	}
-	c, err := r.Cookie(SessionCookie)
+	c, err := r.Cookie(a.cookieName(SessionCookie))
 	if err != nil || c.Value == "" {
 		return ""
 	}
 	return hash("sous-session-owner:" + hash(c.Value))
+}
+
+func (a *Auth) cookieName(name string) string {
+	if a.cfg.HostedWorkspace {
+		return "__Host-" + name
+	}
+	return name
 }
 
 // login creates a session and sets its cookies.
@@ -242,51 +262,77 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) error {
 	if err := a.st.CreateSession(r.Context(), hash(tok), csrf, exp); err != nil {
 		return err
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: tok, Path: "/", Expires: exp,
-		HttpOnly: true, Secure: a.cfg.Secure(), SameSite: http.SameSiteLaxMode})
-	// The CSRF cookie is readable by the page, which echoes it in a header.
-	http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: csrf, Path: "/", Expires: exp,
-		Secure: a.cfg.Secure(), SameSite: http.SameSiteStrictMode})
+	a.setSessionCookies(w, tok, csrf, exp)
 	return nil
 }
 
-func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(SessionCookie); err == nil {
-		a.st.DeleteSession(r.Context(), hash(c.Value))
-	}
-	for _, name := range []string{SessionCookie, CSRFCookie} {
-		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1})
-	}
+func (a *Auth) setSessionCookies(w http.ResponseWriter, tok, csrf string, exp time.Time) {
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(SessionCookie), Value: tok, Path: "/", Expires: exp,
+		HttpOnly: true, Secure: a.cfg.Secure(), SameSite: http.SameSiteLaxMode})
+	// The CSRF cookie is readable by the page, which echoes it in a header.
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(CSRFCookie), Value: csrf, Path: "/", Expires: exp,
+		Secure: a.cfg.Secure(), SameSite: http.SameSiteStrictMode})
 }
 
-func (a *Auth) putCeremony(w http.ResponseWriter, data *webauthn.SessionData) {
+func (a *Auth) logout(w http.ResponseWriter, r *http.Request) error {
+	if c, err := r.Cookie(a.cookieName(SessionCookie)); err == nil {
+		id := hash(c.Value)
+		if !a.desktop.revoke(id) {
+			if err := a.st.DeleteSession(r.Context(), id); err != nil {
+				return err
+			}
+		}
+		a.endStreams(id)
+	}
+	for _, name := range []string{SessionCookie, CSRFCookie} {
+		http.SetCookie(w, &http.Cookie{Name: a.cookieName(name), Value: "", Path: "/", MaxAge: -1, Secure: a.cfg.Secure()})
+	}
+	return nil
+}
+
+func (a *Auth) putCeremony(w http.ResponseWriter, r *http.Request, c ceremony) bool {
 	id := randomToken()
 	a.mu.Lock()
 	now := time.Now()
-	for k, c := range a.ceremonies {
-		if now.After(c.expires) {
-			delete(a.ceremonies, k)
+	if old, err := r.Cookie(a.cookieName(ceremonyCookie)); err == nil {
+		delete(a.ceremonies, old.Value)
+	}
+	for key, pending := range a.ceremonies {
+		if !now.Before(pending.expires) {
+			delete(a.ceremonies, key)
 		}
 	}
-	a.ceremonies[id] = ceremony{data: data, expires: now.Add(ceremonyTTL)}
+	if len(a.ceremonies) >= maxCeremonies {
+		a.mu.Unlock()
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusTooManyRequests, "ceremonies_busy", "身份验证请求过多，请稍后重试")
+		return false
+	}
+	c.expires = now.Add(ceremonyTTL)
+	a.ceremonies[id] = c
 	a.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: ceremonyCookie, Value: id, Path: "/api/v1/auth/", MaxAge: int(ceremonyTTL.Seconds()),
+	cookiePath := "/api/v1/auth/"
+	if a.cfg.HostedWorkspace {
+		cookiePath = "/"
+	}
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(ceremonyCookie), Value: id, Path: cookiePath, MaxAge: int(ceremonyTTL.Seconds()),
 		HttpOnly: true, Secure: a.cfg.Secure(), SameSite: http.SameSiteStrictMode})
+	return true
 }
 
-func (a *Auth) takeCeremony(r *http.Request) (*webauthn.SessionData, error) {
-	c, err := r.Cookie(ceremonyCookie)
+func (a *Auth) takeCeremony(r *http.Request, register bool) (ceremony, error) {
+	c, err := r.Cookie(a.cookieName(ceremonyCookie))
 	if err != nil {
-		return nil, ErrForbidden
+		return ceremony{}, ErrForbidden
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cer, ok := a.ceremonies[c.Value]
 	delete(a.ceremonies, c.Value)
-	if !ok || time.Now().After(cer.expires) {
-		return nil, ErrForbidden
+	if !ok || cer.register != register || !time.Now().Before(cer.expires) {
+		return ceremony{}, ErrForbidden
 	}
-	return cer.data, nil
+	return cer, nil
 }
 
 // isLoopback reports whether r came directly from this machine.

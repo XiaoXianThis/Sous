@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src wails:; style-src wails:; base-uri 'none'; form-action 'none'; connect-src 'none'; frame-src 'none'">
+  <title>Sous · 本机沙盒</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div><p class="eyebrow">SOUS / 本机执行</p><h1>沙盒工作台</h1></div>
+    <span class="badge">Microsandbox · Guest 无网络</span>
+  </header>
+  <p class="intro">在隔离的副本上试运行。原文件不会自动修改；你可以逐项查看结果并决定是否写回。</p>
+  <div id="notice" role="status" aria-live="polite">正在连接本机沙盒…</div>
+  <div class="tabs" role="tablist" aria-label="工作台视图">
+    <button role="tab" id="runTab" aria-selected="true" aria-controls="runPanel">运行</button>
+    <button role="tab" id="reviewTab" aria-selected="false" aria-controls="reviewPanel">审阅</button>
+  </div>
+  <section id="runPanel" role="tabpanel" aria-labelledby="runTab">
+    <div class="task-strip">
+      <div class="task-head"><div><h2>工作台请求</h2><p id="taskHint">可以先在浏览器的本机工作区请求沙盒，也可以独立运行。</p></div><div class="actions"><button data-action="open-workspace">打开本机工作区</button><button data-action="list-tasks">刷新请求</button></div></div>
+      <label class="task-choice" for="taskSelect">关联到一次工作台请求
+        <select id="taskSelect" disabled><option value="">独立本机运行</option></select>
+      </label>
+      <p id="taskDetail" class="task-detail" hidden></p>
+    </div>
+    <h2>授权本次输入</h2>
+    <div class="source">
+      <div><strong id="sourceLabel">尚未选择文件或目录</strong><p id="sourceDetail">仅用于一次运行；选择后 10 分钟内有效。</p></div>
+      <div class="actions"><button id="clearSource" data-action="clear-source" hidden>撤回</button><button data-action="pick-source" id="pickSource">选择文件或目录…</button></div>
+    </div>
+    <form id="runForm">
+      <label for="script">Guest 命令</label>
+      <textarea id="script" name="script" rows="6" maxlength="8192" spellcheck="false" placeholder="例如：find . -maxdepth 2 -type f -print" required></textarea>
+      <div class="run-actions"><label class="check"><input id="offline" type="checkbox"> 禁止宿主拉取镜像（须已准备镜像）</label>
+        <div class="actions"><button id="cancel" type="button" hidden>停止并清理</button><button class="primary" id="runButton" type="submit" disabled>授权并运行…</button></div>
+      </div>
+    </form>
+    <details id="setup" open>
+      <summary>运行时与离线设置</summary>
+      <p>需要官方 Microsandbox v0.7.16 的 Apple Silicon 运行时和匹配固件。Sous 会验证文件摘要；不会安装未知运行时。</p>
+      <div class="setup-row"><span>msb <small id="msb">未选择</small></span><button data-action="pick-msb">选择 msb…</button></div>
+      <div class="setup-row"><span>libkrunfw.dylib <small id="firmware">未选择</small></span><button data-action="pick-firmware">选择固件…</button></div>
+      <div class="setup-row"><span>离线镜像 <small id="image">未选择（可选）</small></span><div class="actions"><button data-action="clear-image" id="clearImage" hidden>移除</button><button data-action="pick-image">选择 OCI 归档…</button></div></div>
+      <button id="recover" data-action="recover">对账并清理中断的运行</button>
+    </details>
+  </section>
+  <section id="reviewPanel" role="tabpanel" aria-labelledby="reviewTab" hidden>
+    <div class="review-heading"><div><h2>审阅变更</h2><p id="reviewSummary">完成一次运行，或打开之前保存的审阅目录。</p></div><div class="actions"><button id="logs" data-action="logs" hidden>运行日志</button><button id="reveal" data-action="reveal" hidden>在访达查看</button><button data-action="pick-review">打开审阅目录…</button></div></div>
+    <div class="review-layout" id="reviewLayout" hidden>
+      <ul id="files" aria-label="变更文件"></ul>
+      <article class="file-preview" aria-label="文件审阅">
+        <div class="file-heading"><h3 id="path">选择变更文件</h3><button class="primary" id="apply" disabled>写回这一项…</button></div>
+        <p id="previewWarning"></p>
+        <div class="diff" id="diff" hidden>
+          <section><h4>原件</h4><pre id="before" tabindex="0"></pre></section>
+          <section><h4>沙盒结果</h4><pre id="after" tabindex="0"></pre></section>
+        </div>
+        <pre class="log" id="log" tabindex="0" hidden></pre>
+      </article>
+    </div>
+    <p id="backup" role="status" hidden></p>
+  </section>
+</main>
+</body>
+</html>

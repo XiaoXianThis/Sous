@@ -23,6 +23,12 @@ func (n *Notifier) Routes(roles func(context.Context) map[string]string) func(*h
 		protect("POST /api/v1/push/subscriptions", n.subscribe)
 		protect("DELETE /api/v1/push/subscriptions", n.unsubscribe)
 		protect("POST /api/v1/push/test", n.test)
+		n.SettingsRoutes(roles)(mux, protect)
+	}
+}
+
+func (n *Notifier) SettingsRoutes(roles func(context.Context) map[string]string) func(*http.ServeMux, func(string, http.HandlerFunc)) {
+	return func(_ *http.ServeMux, protect func(string, http.HandlerFunc)) {
 		protect("GET /api/v1/settings", func(w http.ResponseWriter, r *http.Request) { n.getSettings(w, r, roles) })
 		protect("PATCH /api/v1/settings", func(w http.ResponseWriter, r *http.Request) { n.patchSettings(w, r, roles) })
 	}

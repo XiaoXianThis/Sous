@@ -1,7 +1,5 @@
-// sous desktop: a tray icon and the sous page in one app, with the
-// machine's sous daemon (worker, and brain when the roster says so) kept
-// running underneath. The page is the same one the browser shows (apps/web
-// on Vercel); the app only adds the tray, the window and the daemon.
+// Sous desktop hosts the bundled local workspace and separate native tools.
+// Legacy remote workspaces remain an explicit secondary entry.
 package main
 
 import (
@@ -11,7 +9,9 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -26,6 +26,9 @@ var fallbackPage embed.FS
 
 // version is set by the build (-ldflags "-X main.version=...").
 var version = "dev"
+
+// Release packaging can opt into the isolated debug workspace for alphas.
+var debugLoginBuild = "off"
 
 // pageURL is the default page when the daemon does not know one yet
 // (-ldflags "-X main.pageURL=https://..."; SOUS_PAGE_URL overrides it).
@@ -43,37 +46,67 @@ func inWindow() bool {
 }
 
 type tray struct {
-	app    *application.App
-	t      *application.SystemTray
-	win    *application.WebviewWindow
-	winURL string
-	d      *Daemon
-	status *application.MenuItem
-	brain  *application.MenuItem
-	runs   *application.MenuItem
-	update *application.MenuItem
-	svc    *application.MenuItem
-	last   Status
-	ok     bool
+	app     *application.App
+	t       *application.SystemTray
+	win     *application.WebviewWindow
+	winURL  string
+	d       *Daemon
+	status  *application.MenuItem
+	brain   *application.MenuItem
+	runs    *application.MenuItem
+	update  *application.MenuItem
+	svc     *application.MenuItem
+	local   *LocalHub
+	display *desktopWorkspace
+	sandbox *sandboxHost
+	last    Status
+	ok      bool
 }
 
 func main() {
+	debug := (version == "dev" || debugLoginBuild == "on") && slices.Contains(os.Args[1:], "--debug-login")
+	root := sousHome()
+	if debug {
+		root = filepath.Join(root, "desktop-debug")
+	}
+	local := &LocalHub{Home: root, NativeAuth: nativeUnlockSupported || debug, Debug: debug}
+	sandbox := &sandboxHost{home: root, hub: local}
+	display := &desktopWorkspace{hub: local, debug: debug, openSandbox: sandbox.open}
 	app := application.New(application.Options{
+		RawMessageHandler: func(w application.Window, message string, origin *application.OriginInfo) {
+			display.raw(w, message, origin)
+			sandbox.raw(w, message, origin)
+		},
 		Name:        "sous",
 		Description: "sous 桌面版",
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(mustSub(fallbackPage, "assets/page")),
 		},
 		Mac: application.MacOptions{
-			ActivationPolicy: application.ActivationPolicyAccessory,
+			ActivationPolicy: application.ActivationPolicyRegular,
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "cc.wxian.sous.desktop",
 		},
 	})
-	tr := &tray{app: app, d: &Daemon{Home: sousHome()}}
+	sandbox.app, display.app = app, app
+	sandbox.openWorkspace = display.open
+	tr := &tray{app: app, d: &Daemon{Home: root}, local: local, sandbox: sandbox, display: display}
 	tr.build()
-	app.OnShutdown(tr.d.Stop)
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go tr.openLocal() })
+	if runtime.GOOS == "darwin" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) { go tr.openLocal() })
+	}
+	if sandboxSupported() && slices.Contains(os.Args[1:], "--open-sandbox") {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidFinishLaunching, func(*application.ApplicationEvent) { sandbox.open() })
+	}
+	app.OnShutdown(func() {
+		sandbox.stop()
+		tr.d.Stop()
+		if tr.local != nil {
+			tr.local.Stop()
+		}
+	})
 	go tr.loop()
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
@@ -93,22 +126,27 @@ func (tr *tray) build() {
 	tr.t.SetIcon(trayIcon)
 	tr.t.SetTooltip("sous")
 	m := tr.app.NewMenu()
-	m.Add("打开 sous").OnClick(func(*application.Context) { tr.open() })
+	m.Add("打开 Sous 工作台").OnClick(func(*application.Context) { go tr.openLocal() })
+	if !tr.local.Debug {
+		m.Add("打开旧版配对工作区").OnClick(func(*application.Context) { tr.openRemote() })
+	}
+	if sandboxSupported() && sandboxBinary() != "" {
+		m.Add("本机沙盒与审阅…").OnClick(func(*application.Context) { tr.sandbox.open() })
+	}
 	m.AddSeparator()
 	tr.status = m.Add("正在连接本机的 sous…").SetEnabled(false)
 	tr.brain = m.Add("").SetEnabled(false).SetHidden(true)
 	tr.runs = m.Add("").SetEnabled(false).SetHidden(true)
 	m.AddSeparator()
-	tr.update = m.Add("检查更新").OnClick(func(*application.Context) { go tr.checkUpdate() })
-	tr.svc = m.Add("开机自动运行（安装为后台服务）").OnClick(func(*application.Context) { go tr.installService() })
-	if !inWindow() {
-		m.Add("在应用窗口中打开（实验）").OnClick(func(*application.Context) { tr.openWindow() })
+	if !tr.local.Debug {
+		tr.update = m.Add("检查更新").OnClick(func(*application.Context) { go tr.checkUpdate() })
+		tr.svc = m.Add("开机自动运行（安装为后台服务）").OnClick(func(*application.Context) { go tr.installService() })
 	}
 	m.AddSeparator()
 	m.Add(fmt.Sprintf("sous 桌面版 %s", version)).SetEnabled(false)
 	m.Add("退出").OnClick(func(*application.Context) { tr.app.Quit() })
 	tr.t.SetMenu(m)
-	tr.t.OnClick(func() { tr.open() })
+	tr.t.OnClick(func() { go tr.openLocal() })
 }
 
 func (tr *tray) page() string {
@@ -121,7 +159,7 @@ func (tr *tray) page() string {
 	return pageURL
 }
 
-func (tr *tray) open() {
+func (tr *tray) openRemote() {
 	if inWindow() {
 		tr.openWindow()
 		return
@@ -132,6 +170,14 @@ func (tr *tray) open() {
 		}
 	}
 	tr.openWindow()
+}
+
+func (tr *tray) openLocal() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := tr.display.open(ctx); err != nil {
+		tr.info("无法打开本机工作区", err.Error())
+	}
 }
 
 func (tr *tray) openWindow() {
@@ -153,7 +199,7 @@ func (tr *tray) openWindow() {
 			e.Cancel()
 		})
 		tr.winURL = url
-	} else if tr.winURL == "/" && url != "/" {
+	} else if tr.winURL != url {
 		tr.win.SetURL(url)
 		tr.winURL = url
 	}
@@ -165,10 +211,24 @@ func (tr *tray) openWindow() {
 func (tr *tray) loop() {
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := tr.d.Ensure(ctx)
-		st, serr := tr.d.Status(ctx)
+		if !tr.local.Debug && tr.d.paired() {
+			err := tr.d.Ensure(ctx)
+			st, serr := tr.d.Status(ctx)
+			application.InvokeAsync(func() { tr.show(st, serr, err) })
+		} else {
+			application.InvokeAsync(func() {
+				tr.ok, tr.last = false, Status{}
+				label := "本机工作区 · 点击打开"
+				if tr.local.Page() != "" {
+					label = "本机工作区 · 已运行"
+				}
+				tr.status.SetLabel(label)
+				tr.brain.SetHidden(true)
+				tr.runs.SetHidden(true)
+				tr.t.SetTooltip("sous · 本机工作区")
+			})
+		}
 		cancel()
-		application.InvokeAsync(func() { tr.show(st, serr, err) })
 		time.Sleep(5 * time.Second)
 	}
 }
@@ -224,7 +284,7 @@ func (tr *tray) checkUpdate() {
 	}
 	application.InvokeAsync(func() {
 		q := tr.app.Dialog.Question().SetTitle("有新版本").SetMessage(fmt.Sprintf("sous %s 可以更新到 %s。更新是关键操作：机器会在页面上请你用 Face ID / 指纹 / PIN 确认。现在打开 sous 去更新吗？", u.Current, u.Latest))
-		q.AddButton("打开 sous").SetAsDefault().OnClick(func() { tr.open() })
+		q.AddButton("打开 sous").SetAsDefault().OnClick(func() { tr.openRemote() })
 		q.AddButton("以后再说")
 		q.Show()
 	})
@@ -232,7 +292,7 @@ func (tr *tray) checkUpdate() {
 
 func (tr *tray) installService() {
 	if !tr.d.paired() {
-		tr.info("还不能安装", errNotPaired.Error())
+		tr.info("本机工作区", "本机工作区会随桌面版运行；后台服务安装目前只适用于已配对的执行机器。")
 		return
 	}
 	started := tr.d.Started()

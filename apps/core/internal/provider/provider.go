@@ -254,3 +254,15 @@ func ModelOf(resp Response, asked string) string {
 	}
 	return asked
 }
+
+// Usable tells callers whether an optional provider can be consulted. A
+// runtime-selected provider may change its configuration without restarting.
+func Usable(ctx context.Context, p Provider) bool {
+	if p == nil {
+		return false
+	}
+	if configured, ok := p.(interface{ Configured(context.Context) bool }); ok {
+		return configured.Configured(ctx)
+	}
+	return true
+}

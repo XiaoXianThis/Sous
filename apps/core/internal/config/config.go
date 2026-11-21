@@ -18,7 +18,18 @@ import (
 )
 
 type Hub struct {
-	ApprovalPolicy ApprovalPolicy `yaml:"approval_policy"`
+	// LocalWorkspace selects the relay-free, loopback-only assembly. It is
+	// chosen by the entry point, not loaded from brain or service settings.
+	LocalWorkspace       bool                `yaml:"-"`
+	HostedWorkspace      bool                `yaml:"-"`
+	CloudWorkerToken     string              `yaml:"-" json:"-"` // mutually exclusive with the managed option
+	CloudControllerToken string              `yaml:"-" json:"-"`
+	CloudIdleTimeout     time.Duration       `yaml:"-" json:"-"`
+	ExternalMCPClients   []ExternalMCPClient `yaml:"-" json:"-"`
+	// LocalSandboxDispatch is set only for the desktop's private pipe protocol.
+	LocalDesktopAuth     bool           `yaml:"-"` // native desktop login via inherited pipes only
+	LocalSandboxDispatch bool           `yaml:"-"`
+	ApprovalPolicy       ApprovalPolicy `yaml:"approval_policy"`
 	// Listen is the address the HTTP server binds, e.g. 127.0.0.1:8787.
 	Listen string `yaml:"listen"`
 	// PublicURL is the origin users open, e.g. https://agent.wxian.cc. It is
@@ -220,6 +231,25 @@ func (c *Hub) Validate() error {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("public_url %q must be an http(s) origin", c.PublicURL)
 	}
+	if c.HostedWorkspace {
+		if err := c.validateHosted(u); err != nil {
+			return err
+		}
+	}
+	if c.LocalDesktopAuth && (!c.LocalWorkspace || c.HostedWorkspace) {
+		return fmt.Errorf("native desktop authentication requires a local workspace")
+	}
+	if c.LocalWorkspace {
+		_, port, err := net.SplitHostPort(c.Listen)
+		if err != nil || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") ||
+			!loopbackListen(c.Listen) || port == "0" || port != u.Port() || u.User != nil ||
+			u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || c.Secure() != c.TLS() {
+			return fmt.Errorf("local workspace requires a loopback listen address and matching http(s) origin with an explicit port")
+		}
+		if c.Dev || c.InsecureListen {
+			return fmt.Errorf("local workspace requires Passkey authentication; dev and insecure_listen are not supported")
+		}
+	}
 	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
 		return fmt.Errorf("public_url must use https outside localhost")
 	}
@@ -344,4 +374,15 @@ func ForBrain(dataDir, publicURL, file string) (*Hub, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// ForLocalWorkspace uses an independent directory, never the relay brain DB.
+// Production local workspaces do not start web-fetch or MCP subprocesses by default.
+// DirectWorkspace uses an owner Passkey and same-origin HTTP, not Relay.
+func (c *Hub) DirectWorkspace() bool { return c.LocalWorkspace || c.HostedWorkspace }
+
+func ForLocalWorkspace(dataDir string) *Hub {
+	c := &Hub{LocalWorkspace: true, DataDir: dataDir, Web: Web{Disabled: true}, MCP: MCP{Disabled: true}}
+	c.applyDefaults(".")
+	return c
 }

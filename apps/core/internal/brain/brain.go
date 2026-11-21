@@ -21,6 +21,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/hub"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/legacyagent"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/trust"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tunnel"
 )
@@ -39,16 +40,17 @@ type Brain struct {
 	SnapshotEvery time.Duration
 	Tick          time.Duration
 
-	mu      sync.Mutex
-	leading bool
-	term    int64
-	h       *hub.Hub
-	ln      *memListener
-	stop    context.CancelFunc
-	done    chan struct{}
-	streams map[string]context.CancelFunc
-	snapSeq int64
-	lastEv  int64
+	mu       sync.Mutex
+	rosterMu sync.Mutex
+	leading  bool
+	term     int64
+	h        *hub.Hub
+	ln       *memListener
+	stop     context.CancelFunc
+	done     chan struct{}
+	streams  map[string]context.CancelFunc
+	snapSeq  int64
+	lastEv   int64
 	// onRelay holds the snapshot chunk names known to be on the relay (the
 	// newest manifest's), so an upload sends only the chunks that changed.
 	onRelay   map[string]bool
@@ -280,9 +282,17 @@ func (b *Brain) lead(ctx context.Context, term int64) {
 		slog.Error("brain: config", "err", err)
 		return
 	}
-	h, err := hub.Open(cfg)
+	h, err := hub.Open(cfg, legacyagent.New)
 	if err != nil {
 		slog.Error("brain: cannot open the Hub", "err", err)
+		return
+	}
+	// Project the roster before making the new Hub routable. Otherwise the
+	// first valid RPC/Node link can race this write and see an unknown machine.
+	roster := b.C.Roster()
+	mirrorRoster(ctx, h, roster)
+	if ctx.Err() != nil {
+		_ = h.Close()
 		return
 	}
 	ln := newMemListener()
@@ -304,7 +314,9 @@ func (b *Brain) lead(ctx context.Context, term int64) {
 	b.mu.Lock()
 	b.leading, b.term, b.h, b.ln, b.stop, b.done = true, term, h, ln, cancel, done
 	b.mu.Unlock()
-	b.syncRoster(ctx)
+	if now := b.C.Roster(); now != nil && (roster == nil || now.V != roster.V) {
+		b.syncRoster(ctx) // a roster update may have arrived during startup
+	}
 	slog.Info("brain: this machine now thinks for everyone", "term", term)
 }
 
@@ -357,8 +369,12 @@ func (b *Brain) stepDown(why string, final bool) {
 // syncRoster mirrors the roster into the Hub's machines: new ones are
 // added, kicked ones revoked (and disconnected).
 func (b *Brain) syncRoster(ctx context.Context) {
-	h := b.Hub()
-	r := b.C.Roster()
+	b.rosterMu.Lock()
+	defer b.rosterMu.Unlock()
+	mirrorRoster(ctx, b.Hub(), b.C.Roster())
+}
+
+func mirrorRoster(ctx context.Context, h *hub.Hub, r *trust.Roster) {
 	if h == nil || r == nil {
 		return
 	}

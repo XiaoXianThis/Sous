@@ -24,7 +24,9 @@ func (e *Engine) Routes(mux *http.ServeMux, protect func(string, http.HandlerFun
 	protect("POST /api/v1/tasks/{id}/verdict", e.verdictTask)
 	protect("POST /api/v1/tasks/{id}/review", e.reviewTask)
 	protect("GET /api/v1/tasks/{id}/talk", e.taskTalk)
-	protect("POST /api/v1/threads/{id}/dm", e.dmThread)
+	if !e.PlanningOnly {
+		protect("POST /api/v1/threads/{id}/dm", e.dmThread)
+	}
 
 	protect("GET /api/v1/projects", e.listProjects)
 	protect("POST /api/v1/projects", e.putProject)

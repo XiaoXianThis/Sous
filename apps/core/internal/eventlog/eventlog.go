@@ -5,6 +5,7 @@ package eventlog
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -16,13 +17,19 @@ import (
 // Listener is called after commit for every stored event. It must not block.
 type Listener func(event.Event)
 
+type subscription struct {
+	id uint64
+	fn Listener
+}
+
 type Log struct {
 	Store *store.Store
 	Bus   *event.Bus
 
-	mu        sync.RWMutex
-	listeners []Listener
-	effectsCh chan struct{}
+	mu         sync.RWMutex
+	listeners  []subscription
+	listenerID uint64
+	effectsCh  chan struct{}
 }
 
 var lastSeq atomic.Int64
@@ -45,11 +52,24 @@ func New(s *store.Store, b *event.Bus) *Log {
 	return &Log{Store: s, Bus: b, effectsCh: make(chan struct{}, 1)}
 }
 
-// Listen registers a listener for stored events.
-func (l *Log) Listen(fn Listener) {
+// Listen registers a listener for stored events. The returned function removes
+// it from future dispatch; a notification already in flight may still finish.
+func (l *Log) Listen(fn Listener) func() {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.listeners = append(l.listeners, fn)
+	l.listenerID++
+	id := l.listenerID
+	l.listeners = append(slices.Clone(l.listeners), subscription{id, fn})
+	l.mu.Unlock()
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for i, sub := range l.listeners {
+			if sub.id == id {
+				l.listeners = slices.Delete(slices.Clone(l.listeners), i, i+1)
+				break
+			}
+		}
+	}
 }
 
 // EffectsEnqueued signals when a write enqueued effects, so the runner wakes early.
@@ -84,8 +104,8 @@ func (l *Log) Write(ctx context.Context, fn func(w *store.Writer) error) ([]even
 	l.mu.RUnlock()
 	for _, ev := range evs {
 		l.Bus.Publish(ev)
-		for _, fn := range listeners {
-			fn(ev)
+		for _, sub := range listeners {
+			sub.fn(ev)
 		}
 	}
 	if effects {

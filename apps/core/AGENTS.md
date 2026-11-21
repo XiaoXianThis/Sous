@@ -1,8 +1,8 @@
 # core
 
-- Purpose: sous 的 Go 核心。编译出两个二进制：`sous-relay`（服务器上的盲中继，决策 0030）和 `sous`（每台电脑上的 daemon + 命令行；被用户指定为大脑的电脑还在 daemon 里运行大脑，即 0.2 的 Hub，决策 0031）。
-- Stack: Go（版本见 `go.mod`），SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO），`coder/websocket`，`go-webauthn/webauthn`，`kardianos/service`（客户端的系统服务），`aymanbagabas/go-pty`（安装和登录用的伪终端，含 Windows ConPTY），`pelletier/go-toml/v2`（校验 TOML 配置文件），`mvdan.cc/sh/v3 v3.12.0`（只使用 syntax 解析，不执行 shell）。
-- Depends on: none（0.3 起页面托管在 Vercel，不再由 core 托管）。对外提供 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`、`core-hub-node.md`、`core-daemon-ipc.md`。
+- Purpose: sous 的 Go 核心。编译出两个二进制：`sous-relay`（服务器上的盲中继，决策 0030）和 `sous`（每台电脑上的 daemon + 命令行；被用户指定为大脑的电脑还在 daemon 里运行大脑，即 0.2 的 Hub，决策 0031）。按需另构建 `sous-sandbox`：Apple Silicon 本机授权执行预览，不链接进 Hub 或旧 Node。`sous hub`：本机回环上的独立工作区，不依赖 Relay、默认无主管，使用 Passkey；旧 daemon 的大脑仍显式装配兼容主管。
+- Stack: Go（版本见 `go.mod`），SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO），`coder/websocket`，`go-webauthn/webauthn`，`kardianos/service`（客户端的系统服务），`aymanbagabas/go-pty`（安装和登录用的伪终端，含 Windows ConPTY），`pelletier/go-toml/v2`（校验 TOML 配置文件），`mvdan.cc/sh/v3 v3.12.0`（只使用 syntax 解析，不执行 shell）。`golang.org/x/sys` 用于本机工作区的跨进程文件锁与沙盒宿主的安全目录遍历。`sous-sandbox` 单独链接 Microsandbox Go SDK v0.7.16；Apple Silicon 的托管参考 worker 也链接 SDK；普通 Linux Hub、Relay 与 Windows 构建不带 SDK。Linux worker 仅在 Linux amd64/arm64 上用 CGO 与 `sous_linux_worker` 标签显式构建，用于 KVM 验收。AWS SDK v2 仅链接进独立 `sous-ec2-driver`，普通 Hub、worker 和 Desktop 不链接 AWS SDK。托管外部 MCP 使用官方 MCP Go SDK，启用条件与授权范围见 `docs/api/core-external-mcp.md`。
+- Depends on: 本机入口可提供 `build/web` 构建产物；配对模式的网页独立部署，不引用 web 源码。对外提供 `docs/api/core-relay.md`、`sous-envelope.md`、`core-brain-rpc.md`、`core-hub-http.md`、`core-hub-node.md`、`core-daemon-ipc.md`、`core-sandbox-cli.md`、`core-desktop-sandbox-dispatch.md`。
 
 ## Tasks
 
@@ -16,14 +16,28 @@ Commands run in `apps/core/`. Leave a command empty to use what `wok` detects; `
 | test | go test ./... | |
 | vet | go vet ./... | |
 | fmt | gofmt -l -w . | |
-| build | go build -trimpath -o "$WOK_OUT/" ./cmd/... && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-relay" | go build -trimpath -o "$WOK_OUT/" ./cmd/... |
+| build | go build -trimpath -o "$WOK_OUT/" ./cmd/sous ./cmd/sous-relay && sh scripts/sign-darwin.sh "$WOK_OUT/sous" "$WOK_OUT/sous-relay" | go build -trimpath -o "$WOK_OUT/" ./cmd/sous ./cmd/sous-relay |
+| build-sandbox | go build -trimpath -o "$WOK_OUT/" ./cmd/sous-sandbox | |
 | release-snapshot | goreleaser release --snapshot --clean | |
 | setup-signing | sh scripts/setup-macos-signing.sh | echo setup-signing is for macOS only |
 | build-windows | GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/windows-amd64/" ./cmd/sous | set GOOS=windows&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/windows-amd64/" ./cmd/sous |
+| build-hosted-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$WOK_OUT/linux-amd64/sous" ./cmd/sous | |
+| build-hosted-linux-arm64 | GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$WOK_OUT/linux-arm64/sous" ./cmd/sous | |
+| build-cloud-worker | GOOS=linux CGO_ENABLED=1 go build -trimpath -tags sous_linux_worker -ldflags "-s -w" -o "$WOK_OUT/linux-worker/sous" ./cmd/sous | echo build-cloud-worker requires Linux amd64 or arm64 and a C compiler for the target |
+| build-ec2-driver | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/sous-ec2-driver" ./cmd/sous-ec2-driver | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/sous-ec2-driver" ./cmd/sous-ec2-driver |
 | build-relay-linux | GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay | set GOOS=linux&& set GOARCH=amd64&& set CGO_ENABLED=0&& go build -trimpath -o "$WOK_OUT/linux-amd64/" ./cmd/sous-relay |
 
 ## Conventions
 
+- 桌面本机专用登录只在 `sous hub --app-managed --desktop-native-auth` 启用；登录授权来自继承管道并在回环同源交换为内存会话。与命令行 Passkey、云 Hub、Relay 和沙盒审批分开，见 `docs/api/core-hub-http.md`。
+
+- 本机独立工作区：`sous hub --web-dir <build/web>` 默认监听 `127.0.0.1:8787`，打开启动时输出的 `localhost` 地址或首次注册链接。数据库单独存放，对旧 brain 不双写；`--agent legacy` 显式启用兼容模块；`--agent acp --agent-config <model.yaml>` 显式选择第一方文本 ACP 预览（`sous agent` 子进程、逐回合短时 MCP 工具桥，参见 `docs/guides/local-workspace.md`）。本机工作区不暴露 Node 配对。
+- `sous hosted-hub --config <hosted.yaml>` 启动独立单所有者 HTTPS 工作区。保留原有 Relay 模式。配置、数据目录、HTTPS origin、首个 Passkey 的私有初始化方式见 `docs/guides/hosted-workspace.md`；旧 Node 握手、宿主运维、自动派发和本机沙盒桥不装配。支持选配内置 ACP，不在 Hub 进程内推理。
+- 托管预览可选装配 `internal/cloudwork`；单独 `sous cloud-worker` 只通过专用 HTTPS 租约 API 与它通信，Mac arm64 参考 worker 与显式构建的 Linux 验收版只用固定架构的离线 Microsandbox；Linux 版要求真实 `/dev/kvm`，本机授权与写回仍只装配到 Apple Silicon。持久化和回收顺序见 `docs/api/core-cloud-work.md`；禁止让旧 Node、任意宿主路径或第三方主管直连执行。
+- `sous cloud-controller` 是独立的托管容量协调进程。配置专用控制面 token、独立引导种子和受信任的厂商驱动；它不拿浏览器、任务或旧 Node 凭据。托管模式与静态参考 worker 的 token 互斥，代次、启动、排空和回收确认由 Hub 持久化；厂商适配契约见 `docs/api/core-cloud-capacity.md`。
+- EC2 容量驱动由 `build-ec2-driver` 独立构建。`SOUS_EC2_DRIVER_CONFIG` 指定运维配置；新部署显式 `init-ledger`，`status` 只读本地记录，`verify` 只做 AWS 账户、镜像、网络、可用区的只读检查。默认 stdin 模式仅由控制器调用。实机发布门槛见 `docs/guides/ec2-worker.md`。
+- `--desktop-agent-switch` 为独立本机 Hub 装配 `hub.LocalAgents`，只从本机 `SOUS_HOME/supervisor.yaml` 构建内置 ACP 主管；API 只接受目录内的绑定名称与版本。新主管先探测，繁忙时不切，配置快照与代次持久化，不由 Hub 对外通告宿主文件、命令或密钥。
+- 本机执行实验入口 `sous-sandbox`：只接收本机 CLI 或桌面原生窗口的一次性授权；不被旧 daemon、Hub 或外部 WebUI 调用。运行独立无网络 Guest 并生成供本机审阅的结果，不自动写回原项目；`review` / `preview` / `apply` 独立校验审阅版本、授权范围和本机原件。兼容平台与运行方法见 `docs/guides/local-sandbox.md`。
 - 零信任（0.3，`docs/architecture/trust.md`，`work/specs/zero-trust`）：
   - `internal/trust`：密钥（P-256 签名、X-Wing HPKE）、签名文档、名册、断言校验、通道、配对串、数据密钥。格式和页面的 `apps/web/src/trust` 逐字节一致，改动要同时改两边，并重新生成向量：`SOUS_WRITE_VECTORS=1 go test ./internal/trust -run Vectors` 和 `SOUS_WRITE_VECTORS=1 bun run test`（在 apps/web）。测试里用 `trust/trusttest` 的软件 Passkey。
   - `internal/relay`（`cmd/sous-relay`）：盲中继。它的检查只是让诚实的中继保持整洁，接收方会再校验一遍。`Tap` / `Inject` / `InjectDoc` 只给测试扮演撒谎的中继用。

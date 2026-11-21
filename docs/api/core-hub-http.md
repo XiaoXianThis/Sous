@@ -1,10 +1,32 @@
 # core-hub-http：Hub ↔ 客户端（PWA、desktop）
 
-> 0.3（决策 0030）：这些接口由大脑机器上的大脑提供，只能经由加密通道访问（`core-brain-rpc.md`），不再有 Cookie、CSRF、Passkey 登录和配对码。下面“认证”“近期登录”两条已被 `core-brain-rpc.md` 的规则取代，其余语义不变。
+> 已配对的 0.3 工作区（决策 0030）经端到端加密通道访问 Hub，认证用 [core-brain-rpc](core-brain-rpc.md)，不用 HTTP Cookie、CSRF、Passkey 登录端点或旧配对码。独立本机工作区使用下面的直连方式。
 
-- Provider: core（大脑，`internal/hub` 运行在 `internal/brain` 里）
+- Provider: core（独立本机 Hub 或大脑内的 Hub）
 - Consumers: web、desktop
-- Status: 已实现（M2 起，M3–M5 陆续增补），以代码为准；没有单独的 OpenAPI 描述。
+- Status: 已实现；以代码为准。没有单独的 OpenAPI 描述。
+
+## 本机工作区直连
+
+`sous hub` 是桌面 App 的本机 Hub 入口，仍复用 `/api/v1` 与 `/ws` 业务契约，但传输不经过 Relay：页面只能通过启动时显示的 loopback `public_url` 访问。它使用独立的 SQLite 数据目录，支持下面两种本机验证入口；`GET /api/v1/me` 额外返回 `local_workspace: true`，`GET /api/v1/capabilities` 返回当前主管状态和节点配对能力。
+
+独立命令默认 `--agent none`；桌面显式选择 `--agent legacy` 作为首次使用的兼容默认值，并可更改绑定。`supervisor.state` 为 `unbound`、`unconfigured` 或 `configured`；`supervisor.module` 可为 `""`、`"legacy"` 或 `"acp"`。前两种状态只保存消息，不生成 AI 回复。本机 `node_pairing: false`，不暴露 `/node`、节点配对和设备凭证接口，也不开 Web Push。浏览器用同源 Cookie + CSRF；Host、Origin 和跨站写请求由 Hub 检查，注销撤销会话并关闭该会话的事件流。
+
+桌面启动契约：`sous hub --home DIR --web-dir DIR --agent legacy --app-managed --desktop-agent-switch`，由桌面保持子进程 stdin 打开。回环监听已绑定、工作区初始化后，stdout 写单行 JSON `{"origin":"http://localhost:8787","setup_url":""}`。若需首次注册，`setup_url` 为同源 `/setup#token=…`；仅私有管道返回，不写入启动日志。stdin 关闭后 Hub 退出。CLI 交互启动则从终端读取首次注册链接。
+
+macOS 内置工作台添加 `--desktop-native-auth`：启动记录 `desktop_auth: 1`，`setup_url` 为空。桌面验证系统身份后经同一继承管道发 `{"id":1,"action":"desktop-login","outcome":"native"}`，回复 `data` 为 20 秒内有效的一次性授权。`outcome: "debug"` 仅用于开发桌面的隔离工作区验证码验证。桌面仅把授权交给本机 `/desktop` 主窗口，该窗口同源 JSON `POST /api/v1/auth/desktop`（`{"grant":"…"}`），由 Hub 签发内存会话。`desktop-lock` 可经管道撤销授权及其会话，退出 Hub 或网页注销也会终止会话。授权不进 URL、日志或数据库。普通 CLI、云 Hub 和 Relay 不启用该端点。只有近期系统身份验证可通过本机敏感操作的再验证；调试会话不能通过。
+
+只有在 `--app-managed --desktop-agent-switch` 的本机装配中，能力响应的 `supervisor` 还包含 `selection`（期望绑定）、`generation`（当前绑定版本）、`choices` 和可选 `notice`。`PUT /api/v1/supervisor/binding` 要求同源、CSRF 及近期系统身份或 Passkey 验证，请求只接受 `{ "selection": "none" | "legacy" | "acp", "generation": number, "reconnect"?: boolean }`；返回更新后的 `supervisor`。在旧模块继续在线时探测 ACP：实际打开 ACP 会话与空权限工具桥，只向已在本机配置的模型发送探测文本，不发送真实任务或对话。相同选择通常幂等；ACP `reconnect: true` 需要重探测，经授权后用新配置更新绑定。`409 binding_unavailable` 保留旧绑定；`409 binding_busy` 等旧回合和模型能力调用结束后再试；`409 binding_stale` 先刷新。切换不重启 Hub 或本机沙盒。当前配置摘要与重启时本机 profile 不一致时不自动连接，工作区仍可登录管理，显式确认后才能连接。浏览器无法提交文件、命令、任意模型地址或密钥。
+
+第一方 ACP 主管预览启用时提供 `POST /api/v1/threads/{id}/supervisor/cancel`。请求 `{ "reply_to": <本轮最新用户消息 seq> }` 带本机会话与 CSRF。成功 `202 { "cancelling": true }`；没有匹配回合时返回 `409 not_running`，不会误停已切换的新回合。取消结果通过普通助理消息持久化；已成功登记的任务不会回滚。该路由不会接收 ACP 或 MCP 请求，也不替代 Node/Run 取消接口。
+
+带沙盒执行器的桌面开发包可启用 [本机待授权派发](core-desktop-sandbox-dispatch.md)。浏览器只能发起或撤回请求及读取最小状态回执。领取、运行与写回不开放网络接口。
+
+## 独立云工作区直连
+
+`sous hosted-hub --config FILE` 启用单工作区 HTTPS 入口，和配对/中继模式及本机 Hub 独立。页面 HTML 标记 `sous-workspace=hosted`，`GET /api/v1/me` 回 `hosted_workspace: true`、`local_workspace: false`；只接受配置的浏览器 Host 和 Origin，写请求要求明确的同源 `Origin`。静态 Relay 页面不会探测该入口；已标记的云页面连接失败时也不回退到 Relay。
+
+Passkey 首次注册由停服时的运维命令写入私有文件；链接令牌在 URL fragment 中，15 分钟有效，提交注册时与凭据在同一数据库事务中核销。会话和 CSRF 使用 HTTPS 的 `__Host-sous_session`、`__Host-sous_csrf` Cookie；CSRF Header 仍为 `X-CSRF-Token`。登出或会话过期会撤销对应 WebSocket。业务状态保存在该云工作区；`node_pairing: false`，无旧设备标记、旧 Node/Run 执行、宿主文件或终端路由。旧式手动派发返回 409；如启用专用 Worker，使用独立的[云执行入口](core-cloud-work.md)。`agent_config` 可由服务运维选择第一方 ACP；无主管、手工管理不依赖家庭设备或模型服务。云工作区 `POST /api/v1/threads/{id}/messages` 返回 `202` 后，`Server-Timing: hub_persist;dur=…` 提供消息写入和内部发布（毫秒），不包含客户端往返或模型推理。参见[部署指南](../guides/hosted-workspace.md)。
 
 ## 约定
 
@@ -171,3 +193,8 @@
 - 客户端跟不上推送时，服务端会以 1013（Try Again Later）关闭连接；客户端带上最后收到的 seq 重连即可补齐。
 
 系统图的流量记录只保存在内存中，不进事件日志；四个系统接口只接受登录会话，设备令牌无法访问。
+
+
+## 云工作机执行（可选托管预览）
+
+启用时 `capabilities.cloud_work: true`，使用[云工作机契约](core-cloud-work.md)。与旧配对和本机路径分别授权，既不隐式派发，也不跨工作区搬运项目。

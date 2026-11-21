@@ -5,6 +5,7 @@ import './app.css'
 import { TipLayer } from './components/ui/tooltip'
 import { installTouch } from './lib/ios'
 import { applyTheme } from './lib/theme'
+import { desktopPage } from './lib/desktop-workspace'
 
 applyTheme()
 installTouch()
@@ -19,6 +20,6 @@ createRoot(document.getElementById('root')!).render(
   </MotionConfig>,
 )
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+if (!desktopPage() && 'serviceWorker' in navigator && import.meta.env.PROD) {
   navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('service worker', e))
 }

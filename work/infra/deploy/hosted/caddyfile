@@ -1,0 +1,4 @@
+# Replace with the dedicated workspace domain and keep public_url in sync.
+workspace.example.com {
+    reverse_proxy 127.0.0.1:8787
+}

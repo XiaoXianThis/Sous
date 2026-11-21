@@ -62,6 +62,8 @@ flowchart TB
 
 ## 3. 云 Hub 到本机 Node：运行请求不是宿主文件权限
 
+图中的本机临时 microVM 由 **Microsandbox** 提供；此选型不限定第 4 节的云工作机。
+
 ```mermaid
 flowchart TB
     hub["云 Hub / 对应 Relay<br/>Run 与不透明项目授权 ID"]
@@ -127,3 +129,49 @@ stateDiagram-v2
 ```
 
 草稿、普通聊天、前置审批、等本地 Node 都不触发 `Off → Starting`。已进入 Run 的审批等待不是空闲。无法取消排空时，新任务先留在 Hub，回收后按新代次启动。恢复的是持久成果和业务记录，不是原进程内存；启动/回收失败要对账，不盲目再执行。
+
+
+## 当前已实测的托管执行路径（参考 worker）
+
+```mermaid
+sequenceDiagram
+  participant Owner as 手机 WebUI / Passkey
+  participant Hub as 常在线 Hosted Hub
+  participant Work as 独立 worker
+  participant Guest as 临时无网络 Microsandbox
+  Owner->>Hub: 显式授权任务版本、命令及材料副本
+  Hub-->>Owner: 持久化等待意图（202）
+  Work->>Hub: 领取并持有短时租约
+  Work->>Guest: 启动并导入本次授权材料
+  Guest-->>Work: 执行结果快照
+  Note over Work: 私有检查点同步落盘
+  Work->>Guest: 销毁并验证
+  Work->>Hub: 租约绑定的幂等完成回执
+  Hub-->>Owner: 成果已保存；可复用于同项目新执行
+```
+
+该证据只覆盖 Apple Silicon 的离线 Guest，不包含云厂商启动或停止 Linux 宿主，也不支持云 Hub 操作个人电脑或旧 Node。
+
+## 当前已联合验证的容量控制路径（厂商夹具）
+
+```mermaid
+sequenceDiagram
+  participant UI as 手机 WebUI
+  participant Hub as 常在线 Hosted Hub
+  participant Control as 独立容量控制器
+  participant Driver as 厂商驱动（验收为文件夹具）
+  participant Worker as 逐代 worker 与内层 Guest
+  UI->>Hub: 近期 Passkey + 明确授权 → 待执行
+  Control->>Hub: 提交下一代预留与引导摘要
+  Hub-->>Control: 条件满足时持久化 starting
+  Control->>Driver: 幂等确保外层实例；仅交短时引导
+  Worker->>Hub: 预检后用一次性引导换逐代会话
+  Worker->>Hub: 领取、回执、清完检查点后再次确认空闲
+  Control->>Hub: 无排队/在途且空闲已确认 → 原子封锁旧代
+  Control->>Driver: 回收指定预留；未确认则继续对账
+  Note over UI,Hub: 回收期间可授权新任务，留在队列等下一代
+  Driver-->>Control: 确认实例不存在且迟到创建已封锁
+  Control->>Hub: 确认 off，允许下一代申请
+```
+
+已测的是 Hub、控制器进程、worker 和真实内层 Guest；外层厂商实例仍以夹具代替。当前版本跨过排空栅栏后不复活旧代，回收期间来的任务始终排队。不把夹具的 `absent` 当成真实账单归零。

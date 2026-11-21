@@ -6,7 +6,7 @@
 //
 // Usage (in apps/desktop):
 //
-//	go run ./tools/package -goos darwin -sous ../../build/core/sous -out ../../build/desktop -version v0.3.0
+//	go run ./tools/package -goos darwin -sous ../../build/core/sous -web-dir ../../build/web -out ../../build/desktop -version v0.3.0
 package main
 
 import (
@@ -29,19 +29,34 @@ func main() {
 	out := flag.String("out", "", "output directory")
 	ver := flag.String("version", "dev", "version")
 	page := flag.String("page", os.Getenv("SOUS_PAGE_URL"), "default page URL")
+	debugLogin := flag.Bool("debug-login", false, "allow isolated debug login in alpha builds")
+	sandbox := flag.String("sandbox", "", "optional built Apple Silicon sandbox module (not its runtime)")
+	web := flag.String("web-dir", os.Getenv("SOUS_WEB_DIR"), "built WebUI directory to bundle")
 	flag.Parse()
-	if *sous == "" || *out == "" {
-		log.Fatal("need -sous and -out")
+	if *sandbox != "" && (*goos != "darwin" || *goarch != "arm64") {
+		log.Fatal("the sandbox module is enabled only on Apple Silicon macOS")
+	}
+	if *sous == "" || *out == "" || *web == "" {
+		log.Fatal("need -sous, -out and -web-dir (build web first)")
+	}
+	if st, err := os.Stat(filepath.Join(*web, "index.html")); err != nil || !st.Mode().IsRegular() {
+		log.Fatal("WebUI build missing index.html; build web first")
 	}
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatal(err)
 	}
+	if *debugLogin && !strings.Contains(*ver, "-alpha") {
+		log.Fatal("debug login opt-in is only supported by alpha release builds")
+	}
 	ldflags := fmt.Sprintf("-s -w -X main.version=%s -X main.pageURL=%s", *ver, *page)
+	if *debugLogin {
+		ldflags += " -X main.debugLoginBuild=on"
+	}
 	switch *goos {
 	case "darwin":
-		mac(*out, *sous, *goarch, *ver, ldflags)
+		mac(*out, *sous, *goarch, *ver, ldflags, *web, *sandbox)
 	case "windows":
-		windows(*out, *sous, *goarch, *ver, ldflags)
+		windows(*out, *sous, *goarch, *ver, ldflags, *web)
 	default:
 		log.Fatalf("unsupported -goos %q", *goos)
 	}
@@ -61,15 +76,19 @@ func build(goos, goarch, out, ldflags string) {
 	}
 }
 
-func mac(out, sous, goarch, ver, ldflags string) {
+func mac(out, sous, goarch, ver, ldflags, web, sandbox string) {
 	app := filepath.Join(out, "sous.app")
 	os.RemoveAll(app)
 	macos := filepath.Join(app, "Contents", "MacOS")
 	res := filepath.Join(app, "Contents", "Resources")
 	must(os.MkdirAll(macos, 0o755))
 	must(os.MkdirAll(res, 0o755))
+	must(copyDir(web, filepath.Join(res, "web")))
 	build("darwin", goarch, filepath.Join(macos, "sous-desktop"), ldflags)
 	copyFile(sous, filepath.Join(macos, "sous"), 0o755)
+	if sandbox != "" {
+		copyFile(sandbox, filepath.Join(macos, "sous-sandbox"), 0o755)
+	}
 	icns(filepath.Join(res, "icon.icns"))
 	plist := strings.NewReplacer("{{VERSION}}", strings.TrimPrefix(ver, "v")).Replace(infoPlist)
 	must(os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644))
@@ -98,7 +117,10 @@ func icns(dst string) {
 // Without the identity the bundle is ad-hoc signed.
 func sign(app string) {
 	home, _ := os.UserHomeDir()
-	kc := filepath.Join(home, "Library", "Keychains", "sous-signing.keychain-db")
+	kc := os.Getenv("SOUS_SIGN_KEYCHAIN")
+	if kc == "" {
+		kc = filepath.Join(home, "Library", "Keychains", "sous-signing.keychain-db")
+	}
 	hash := ""
 	if out, err := exec.Command("security", "find-identity", "-p", "codesigning", kc).Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
@@ -109,6 +131,9 @@ func sign(app string) {
 		}
 	}
 	if hash == "" {
+		if os.Getenv("SOUS_SIGN") == "require" {
+			log.Fatal("Sous Dev Signing identity unavailable; cannot sign a release app")
+		}
 		log.Print("没有找到 Sous Dev Signing 身份，改用 ad-hoc 签名（每次更新后 macOS 的隐私授权可能要重新给）")
 		run("codesign", "--force", "-s", "-", "-i", "cc.wxian.sous.desktop", app)
 		return
@@ -137,7 +162,7 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-func windows(out, sous, goarch, ver, ldflags string) {
+func windows(out, sous, goarch, ver, ldflags, web string) {
 	dir, err := os.MkdirTemp("", "sous-desktop-win")
 	must(err)
 	defer os.RemoveAll(dir)
@@ -147,18 +172,78 @@ func windows(out, sous, goarch, ver, ldflags string) {
 	f, err := os.Create(zipName)
 	must(err)
 	zw := zip.NewWriter(f)
-	for name, src := range map[string]string{"sous/sous-desktop.exe": exe, "sous/sous.exe": sous} {
+	add := func(name, src string) error {
 		w, err := zw.Create(name)
-		must(err)
+		if err != nil {
+			return err
+		}
 		r, err := os.Open(src)
-		must(err)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
 		_, err = io.Copy(w, r)
-		r.Close()
-		must(err)
+		return err
 	}
+	must(add("sous/sous-desktop.exe", exe))
+	must(add("sous/sous.exe", sous))
+	must(filepath.WalkDir(web, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("unexpected WebUI entry: %s", path)
+		}
+		rel, err := filepath.Rel(web, path)
+		if err != nil {
+			return err
+		}
+		return add("sous/web/"+filepath.ToSlash(rel), path)
+	}))
 	must(zw.Close())
 	must(f.Close())
 	fmt.Println(zipName)
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(to, info.Mode().Perm())
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unexpected WebUI entry: %s", path)
+		}
+		return copyFileErr(path, to, info.Mode().Perm())
+	})
+}
+
+func copyFileErr(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	_, cpErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if cpErr != nil {
+		return cpErr
+	}
+	return closeErr
 }
 
 func copyFile(src, dst string, mode os.FileMode) {
@@ -194,7 +279,6 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>CFBundleShortVersionString</key><string>{{VERSION}}</string>
 	<key>CFBundleVersion</key><string>{{VERSION}}</string>
 	<key>LSMinimumSystemVersion</key><string>11.0</string>
-	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

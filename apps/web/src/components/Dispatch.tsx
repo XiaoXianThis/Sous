@@ -1,4 +1,4 @@
-import { BrainSocket } from '../trust/rpc'
+import { WorkspaceSocket } from '../lib/workspace-transport'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { chat, go, onHubEvent, ui, useChat, useWb, wb } from '../lib/app'
 import { COLUMNS, FEED_MAX, floorOf, focusOf, inFocus, moveOf, seatingOf, type Move, type Seating } from '../lib/dispatch'
@@ -33,9 +33,9 @@ function backfill(upTo: number, toMove: (ev: HubEvent) => Move | null): Promise<
   return new Promise((resolve) => {
     if (upTo <= 0) return resolve([])
     const out: Move[] = []
-    let ws: BrainSocket
+    let ws: WorkspaceSocket
     try {
-      ws = new BrainSocket(`/ws?since=${Math.max(0, upTo - BACKFILL)}`)
+      ws = new WorkspaceSocket(`/ws?since=${Math.max(0, upTo - BACKFILL)}`)
     } catch {
       return resolve([])
     }

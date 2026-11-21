@@ -1,0 +1,28 @@
+# Put this unit in the approved Linux worker AMI, not on the Hub.
+# Cloud-init supplies only the workspace origin, generation and one-use token.
+[Unit]
+Description=Sous isolated EC2 execution worker
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/sous-ec2/worker.env
+
+[Service]
+Type=simple
+User=sous-worker
+Group=sous-worker
+SupplementaryGroups=kvm
+UMask=0077
+StateDirectory=sous-ec2-worker
+StateDirectoryMode=0700
+EnvironmentFile=/etc/sous-ec2/worker.env
+ExecStart=/opt/sous/bin/sous cloud-worker --hub=${SOUS_HUB} --generation=${SOUS_GENERATION} --token-file=/run/sous-ec2-bootstrap/worker-token --state=/var/lib/sous-ec2-worker --runtime-home=/var/lib/sous-ec2-worker/vm --msb=/opt/sous/runtime/msb --firmware=/opt/sous/runtime/libkrunfw.so --image-archive=/opt/sous/runtime/alpine-amd64.oci.tar
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=70s
+
+[Install]
+WantedBy=multi-user.target

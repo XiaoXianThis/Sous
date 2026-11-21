@@ -296,6 +296,7 @@ export function stopSession() {
   ui.state.newTask = ''
   ui.state.projectThread = {}
   for (const k of Object.keys(projectLoads)) delete projectLoads[k]
+  wb.state.data = null
   wb.state.live = {}
   wb.state.inbox = null
   seeded.clear()

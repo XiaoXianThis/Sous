@@ -263,16 +263,9 @@ func (p *roleProvider) Stream(ctx context.Context, req provider.Request, onDelta
 	return resp, err
 }
 
-// Usable reports whether p will answer: false for nil and for a role
-// with no model configured.
-func Usable(ctx context.Context, p provider.Provider) bool {
-	if p == nil {
-		return false
-	}
-	if rp, ok := p.(*roleProvider); ok {
-		return rp.r.Configured(ctx, rp.role)
-	}
-	return true
+// Configured reports whether this role can currently make a model call.
+func (p *roleProvider) Configured(ctx context.Context) bool {
+	return p.r.Configured(ctx, p.role)
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)

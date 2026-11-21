@@ -20,6 +20,11 @@ func (e *Engine) workbenchRoutes(protect func(string, http.HandlerFunc)) {
 	protect("PATCH /api/v1/personas/{id}", e.putPersona)
 	protect("DELETE /api/v1/personas/{id}", e.deletePersona)
 
+	protect("GET /api/v1/overview", e.overview)
+	if e.PlanningOnly {
+		return
+	}
+
 	protect("POST /api/v1/projects/new", e.newProject)
 	protect("POST /api/v1/projects/{id}/clone", e.cloneProject)
 
@@ -33,7 +38,6 @@ func (e *Engine) workbenchRoutes(protect func(string, http.HandlerFunc)) {
 	protect("GET /api/v1/projects/{id}/shells", e.listShells)
 	protect("POST /api/v1/projects/{id}/shells", e.openShell)
 
-	protect("GET /api/v1/overview", e.overview)
 }
 
 // repoOp brings a project's checkout on one machine up to date with its

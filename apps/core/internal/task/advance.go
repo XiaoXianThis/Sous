@@ -13,7 +13,6 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/prompts"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/proto"
@@ -366,7 +365,7 @@ func (e *Engine) review(ctx context.Context, taskID string, r store.Run) error {
 		return err
 	}
 	e.checkOverlap(ctx, t, r)
-	if !models.Usable(ctx, e.Reviewer.Provider) {
+	if !provider.Usable(ctx, e.Reviewer.Provider) {
 		// No reviewer model: the user decides instead of a silent pass.
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -410,7 +409,7 @@ func (e *Engine) afterReviewRun(ctx context.Context, t store.Task, r store.Run) 
 // reviewFallback is called with e.mu held. Release it while asking the model,
 // then recheck the task and latest run before applying the result.
 func (e *Engine) reviewFallback(ctx context.Context, t store.Task, review, work store.Run, reason string) error {
-	if work.ID == "" || !models.Usable(ctx, e.Reviewer.Provider) {
+	if work.ID == "" || !provider.Usable(ctx, e.Reviewer.Provider) {
 		return e.askUserReview(ctx, t, work, reason)
 	}
 	if t.Status != event.TaskReview {

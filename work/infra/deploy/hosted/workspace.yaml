@@ -1,0 +1,7 @@
+# Operator configuration for one workspace. Use your actual HTTPS origin.
+listen: 127.0.0.1:8787
+public_url: https://workspace.example.com
+data_dir: /var/lib/sous-hosted
+web_dir: /opt/sous-hosted/web
+# Optional: private 32-byte lowercase hex token shared only with sous cloud-worker.
+# cloud_worker_token_file: /etc/sous-hosted/worker.token

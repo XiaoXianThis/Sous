@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { useDirectWorkspace } from '../lib/direct-workspace'
 import { runStatusText as runStatus } from '../lib/status'
 import { useChat } from '../lib/app'
 import { agentChoices, agentUnavailable, isOpen, modeText, nodeLabel, statusText } from '../lib/tasks'
@@ -153,7 +154,8 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
   const nodeName = (nid: string) => nodes.find((n) => n.id === nid)?.name ?? '未知机器'
   const purposeText: Record<string, string> = { work: '开发', rebase: 'rebase', deliver: '交付', review: '验收', git: 'git 操作' }
 
-  const canDispatch = task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
+  const local = useDirectWorkspace()
+  const canDispatch = !local && task && !['running', 'waiting_approval', 'review'].includes(task.status) && !['merged', 'discarded', 'pr'].includes(task.git_state)
   const when = (ts: number) => new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const badgeCls = task
     ? task.status === 'blocked' || task.status === 'failed'
@@ -351,7 +353,7 @@ export default function TaskDetail({ id, onClose, onOpenTask, onOpenThread, proj
             <div className="flex gap-3 items-center flex-wrap">
               {isNew ? (
                 <>
-                  <button className="btn small" type="button" disabled={busy} onClick={() => void save(true)}><Icon name="send" size={14} stroke={2.2} />创建并派发</button>
+                  {!local && <button className="btn small" type="button" disabled={busy} onClick={() => void save(true)}><Icon name="send" size={14} stroke={2.2} />创建并派发</button>}
                   <button className="btn small ghost" type="submit" disabled={busy}><Icon name="plus" size={14} />只创建</button>
                 </>
               ) : (

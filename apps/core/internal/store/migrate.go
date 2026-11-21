@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -509,38 +510,102 @@ CREATE TABLE minutes (meeting_id TEXT NOT NULL, version INTEGER NOT NULL, conten
 	// so a chat without changes puts the task back where it was.
 	`ALTER TABLE runs ADD COLUMN chat_from TEXT NOT NULL DEFAULT '';
 `,
+	// Private desktop dispatch inbox, separate from network Node Runs.
+	`CREATE TABLE sandbox_dispatches (
+ id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), task_rev INTEGER NOT NULL,
+ title TEXT NOT NULL, detail TEXT NOT NULL, project_id TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','running','cancel_requested','cancelled','ready','failed','interrupted','expired','stale')),
+ lease TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0,
+ changes INTEGER NOT NULL DEFAULT 0,
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE INDEX sandbox_dispatch_task ON sandbox_dispatches(task_id, created_at DESC);
+CREATE INDEX sandbox_dispatch_pending ON sandbox_dispatches(status, created_at);
+CREATE UNIQUE INDEX sandbox_dispatch_active_task ON sandbox_dispatches(task_id) WHERE status IN ('pending','running','cancel_requested');
+`,
+	`CREATE TABLE cloud_work (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL,
+ task_id TEXT NOT NULL REFERENCES tasks(id), task_rev INTEGER NOT NULL, title TEXT NOT NULL, detail TEXT NOT NULL,
+ project_id TEXT NOT NULL, base_job_id TEXT NOT NULL, script TEXT NOT NULL, input BLOB NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','running','cancel_requested','cancelled','succeeded','failed','expired','stale','interrupted')),
+ lease_hash TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0,
+ result BLOB, result_hash TEXT NOT NULL DEFAULT '', files INTEGER NOT NULL DEFAULT 0, exit_code INTEGER NOT NULL DEFAULT -1,
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE INDEX cloud_work_task ON cloud_work(task_id,created_at DESC);
+CREATE INDEX cloud_work_queue ON cloud_work(status,created_at);
+CREATE UNIQUE INDEX cloud_work_active_task ON cloud_work(task_id) WHERE status IN ('queued','running','cancel_requested');
+CREATE UNIQUE INDEX cloud_work_active_worker ON cloud_work((1)) WHERE status IN ('running','cancel_requested');
+`,
+	`CREATE TABLE cloud_capacity (
+ slot INTEGER PRIMARY KEY CHECK (slot=1), managed INTEGER NOT NULL DEFAULT 0 CHECK (managed IN (0,1)),
+ generation INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT 'off' CHECK (phase IN ('off','starting','online','retiring')),
+ reservation TEXT NOT NULL DEFAULT '', boot_hash TEXT NOT NULL DEFAULT '', boot_until INTEGER NOT NULL DEFAULT 0,
+ session_hash TEXT NOT NULL DEFAULT '', session_until INTEGER NOT NULL DEFAULT 0, idle_since INTEGER NOT NULL DEFAULT 0,
+ worker_seen INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO cloud_capacity(slot) VALUES(1);
+`,
+	`CREATE TABLE external_mcp_codes (
+ code_hash TEXT PRIMARY KEY, client_key TEXT NOT NULL, project_id TEXT NOT NULL,
+ challenge TEXT NOT NULL, write_draft INTEGER NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE external_mcp_grants (
+ id TEXT PRIMARY KEY, client_id TEXT NOT NULL, client_key TEXT NOT NULL, project_id TEXT NOT NULL,
+ write_draft INTEGER NOT NULL, access_hash TEXT NOT NULL UNIQUE, refresh_hash TEXT NOT NULL UNIQUE,
+ created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, access_until INTEGER NOT NULL, revoked_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE external_mcp_spent_refresh (
+ token_hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES external_mcp_grants(id) ON DELETE CASCADE
+);
+CREATE INDEX external_mcp_refresh_by_grant ON external_mcp_spent_refresh(grant_id);
+`,
 }
 
-func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+// Apply a candidate's schema as a single commit. The running Hub never
+// observes a partially migrated version, and an error leaves the previous
+// schema version and data intact. The first commit can also identify the DB.
+func (s *Store) migrate(ctx context.Context, initial *initialSetting) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	var v int
-	err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&v)
-	if err != nil {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_version(version) VALUES (0)`); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+		return err
+	}
+	var count int
+	var current sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*),min(version) FROM schema_version`).Scan(&count, &current); err != nil {
+		return err
+	}
+	if count > 1 || count == 1 && (!current.Valid || current.Int64 < 0) {
+		return fmt.Errorf("database has invalid schema version records")
+	}
+	if count == 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_version(version) VALUES (0)`); err != nil {
 			return err
 		}
 	}
-	if v > len(migrations) {
+	v := current.Int64
+	if v > int64(len(migrations)) {
 		return fmt.Errorf("database schema %d is newer than this build (%d)", v, len(migrations))
 	}
-	for i := v; i < len(migrations); i++ {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
+	if initial != nil && v != 0 {
+		return fmt.Errorf("cannot replace the identity of an existing workspace")
+	}
+	for i := int(v); i < len(migrations); i++ {
 		if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
-			tx.Rollback()
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE schema_version SET version = ?`, i+1); err != nil {
-			tx.Rollback()
-			return err
+		if initial != nil && i == 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES(?,?)`, initial.Key, initial.Value); err != nil {
+				return fmt.Errorf("workspace identity: %w", err)
+			}
 		}
-		if err := tx.Commit(); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE schema_version SET version=?`, i+1); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }

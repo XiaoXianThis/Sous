@@ -6,56 +6,57 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/mcp"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/models"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/XiaoXianThis/Sous/apps/core/internal/attach"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/cloudwork"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/effects"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/externalmcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/httpapi"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/inspector"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/localdispatch"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/nodehub"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/notify"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/supervisor"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/task"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/trigger"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/update"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/version"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/watchdog"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/web"
 )
 
 type Hub struct {
-	Cfg        *config.Hub
-	Store      *store.Store
-	Log        *eventlog.Log
-	Auth       *auth.Auth
-	Models     *models.Registry
-	MCP        *mcp.Manager
-	Supervisor *supervisor.Supervisor
-	Effects    *effects.Runner
-	Nodes      *nodehub.Hub
-	Tasks      *task.Engine
-	Notifier   *notify.Notifier
-	Triggers   *trigger.Scheduler
-	Inspector  *inspector.Inspector
-	Updates    *update.Checker
-	Watchdog   *watchdog.Watchdog
-	HTTP       *httpapi.Server
+	Cfg             *config.Hub
+	Store           *store.Store
+	Log             *eventlog.Log
+	Auth            *auth.Auth
+	module          AgentModule
+	bindings        *agentBindings
+	lock            *os.File
+	Effects         *effects.Runner
+	Nodes           *nodehub.Hub
+	Tasks           *task.Engine
+	Notifier        *notify.Notifier
+	Triggers        *trigger.Scheduler
+	Inspector       *inspector.Inspector
+	Updates         *update.Checker
+	Watchdog        *watchdog.Watchdog
+	HTTP            *httpapi.Server
+	SandboxDispatch *localdispatch.Queue
+	CloudWork       *cloudwork.Queue
 	// WatchdogOn makes a stuck process exit so its service manager restarts
 	// it. The sous-hub command turns it on; tests leave it off.
 	WatchdogOn bool
@@ -66,13 +67,49 @@ type Hub struct {
 	Brain       bool
 	ConnContext func(ctx context.Context, c net.Conn) context.Context
 	Started     chan struct{}
+	LocalReady  func(origin, setupURL string) error
 }
 
 // DBPath is where the Hub keeps its database inside the data directory.
 func DBPath(cfg *config.Hub) string { return filepath.Join(cfg.DataDir, "hub.db") }
 
-// Open builds every part from the config. Call Run to start serving.
-func Open(cfg *config.Hub) (*Hub, error) {
+// Open builds a workspace. A nil factory leaves it fully usable without AI.
+// The caller chooses the optional Agent module; Hub never creates one itself.
+func Open(cfg *config.Hub, factory AgentFactory) (*Hub, error) { return open(cfg, factory, nil) }
+
+// OpenLocalWithAgents enables live binding selection from a fixed local catalog.
+func OpenLocalWithAgents(cfg *config.Hub, catalog LocalAgents) (*Hub, error) {
+	return open(cfg, nil, &catalog)
+}
+
+func open(cfg *config.Hub, factory AgentFactory, catalog *LocalAgents) (_ *Hub, err error) {
+	var lock *os.File
+	if cfg.DirectWorkspace() {
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		lock, err = lockWorkspace(cfg.DataDir)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				lock.Close()
+			}
+		}()
+	}
+	if cfg.HostedWorkspace {
+		if _, err := httpapi.HostedShell(cfg.WebDir); err != nil {
+			return nil, err
+		}
+		if err := verifyHostedDirectory(cfg); err != nil {
+			return nil, err
+		}
+	}
+	identity, err := preflightWorkspace(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
 	sysmap.Reset()
 	notify.RegisterSystemProbes()
 	sysmap.RegisterProbe("web", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
@@ -88,39 +125,40 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		}
 		return sysmap.Status{State: state, Summary: fmt.Sprintf("最近 15 分钟 %d 次", sysmap.Sum("web>search", 900))}
 	}))
-	st, err := store.Open(DBPath(cfg))
+	var st *store.Store
+	switch {
+	case identity.initialize:
+		st, err = store.OpenInitialized(DBPath(cfg), identity.key, identity.value, cfg.HostedWorkspace)
+	case cfg.HostedWorkspace:
+		st, err = store.OpenDurable(DBPath(cfg))
+	default:
+		st, err = store.Open(DBPath(cfg))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
-	h := &Hub{Cfg: cfg, Store: st}
+	if identity.adopt { // positive marker from an earlier Desktop preview
+		if err := st.SetSetting(context.Background(), identity.key, identity.value); err != nil {
+			_ = st.Close()
+			return nil, err
+		}
+	}
+	h := &Hub{Cfg: cfg, Store: st, lock: lock}
 	h.Log = eventlog.New(st, event.NewBus())
 	if h.Auth, err = auth.New(st, cfg); err != nil {
 		st.Close()
 		return nil, err
-	}
-	// Models are configured on the page and kept in the database; hub.yaml's
-	// providers and roles are imported on the first start.
-	h.Models = models.New(h.Log)
-	h.Models.Wrap = func(p provider.Provider) provider.Provider { return provider.WithRetry(p, 3, 2*time.Second) }
-	if err := h.Models.Seed(context.Background(), cfg); err != nil {
-		st.Close()
-		return nil, fmt.Errorf("import models from hub.yaml: %w", err)
-	}
-	if !h.Models.Configured(context.Background(), config.RoleSupervisor) {
-		slog.Warn("no model is configured for the supervisor yet: add a provider in Settings → Models")
 	}
 	if h.Nodes, err = nodehub.New(h.Log, cfg.DataDir); err != nil {
 		st.Close()
 		return nil, err
 	}
 	h.Nodes.Owner, h.Nodes.Fresh = h.Auth.Owner, h.Auth.RequireFresh
-	// Each role's provider looks up its current model on every call.
-	role := func(r string) task.Model { return task.Model{Provider: h.Models.For(r), Name: r} }
 	h.Watchdog = watchdog.New()
 	h.Tasks = task.New(h.Log, h.Nodes)
+	h.Tasks.PlanningOnly = cfg.HostedWorkspace
 	h.Tasks.ApprovalPolicy = task.ApprovalPolicy{AllowMedium: cfg.ApprovalPolicy.AllowMedium, MaxAIAllowsPerRun: cfg.ApprovalPolicy.MaxAIAllowsPerRun}
 	h.Nodes.MaxAIAllowsPerRun = cfg.ApprovalPolicy.MaxAIAllowsPerRun
-	h.Tasks.Reviewer, h.Tasks.Approver = role(config.RoleReviewer), role(config.RoleApprover)
 	h.Tasks.Beat = h.Watchdog.Loop("task engine", 5*time.Minute)
 
 	tc := cfg.Triggers
@@ -130,19 +168,8 @@ func Open(cfg *config.Hub) (*Hub, error) {
 		RetentionDays: cfg.RetentionDays, Archive: h.Nodes.Archive,
 		Beat: h.Watchdog.Loop("triggers", 5*time.Minute),
 	})
-	ic := cfg.Inspector
-	insp := role(config.RoleInspector)
-	every := ic.Every
-	if every <= 0 {
-		every = 10 * time.Minute
-	}
-	h.Inspector = inspector.New(h.Log, h.Nodes, insp.Provider, insp.Name, inspector.Options{
-		Every: every, Repeat: ic.Repeat, StalledAfter: ic.StalledAfter, LongAfter: ic.LongAfter, TokenAlarm: ic.TokenAlarm,
-		Beat: h.Watchdog.Loop("inspector", every+5*time.Minute),
-	})
 	h.Updates = &update.Checker{Client: update.Client{Repo: cfg.UpdateRepo}}
 
-	sup := role(config.RoleSupervisor)
 	tools := tool.NewRegistry(
 		tool.CurrentTime{},
 		tool.MemorySave{Log: h.Log}, tool.MemorySearch{Log: h.Log}, tool.MemoryForget{Log: h.Log},
@@ -155,31 +182,6 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	for _, t := range webTools(cfg) {
 		tools.Register(t)
 	}
-	if !cfg.MCP.Disabled {
-		h.MCP = mcp.NewManager(h.Log, tools)
-		h.MCP.StdioDisabled = cfg.MCP.StdioDisabled
-		for _, t := range h.MCP.Tools() {
-			tools.Register(t)
-		}
-	}
-	h.Supervisor = supervisor.New(supervisor.Options{
-		Log:      h.Log,
-		Provider: sup.Provider,
-		Fixed:    h.Models.Fixed,
-		Model:    sup.Name,
-		Tools:    tools,
-		Environment: func(ctx context.Context, threadID string) []string {
-			return append(h.Nodes.Environment(ctx), h.Tasks.Environment(ctx, threadID)...)
-		},
-		DescribeContext: h.Tasks.DescribeContext,
-		Attachments:     attach.Open(filepath.Join(cfg.DataDir, "attachments")),
-		Compactor:       h.Models.For(config.RoleCompactor),
-		CompactorModel:  config.RoleCompactor,
-		ContextWindow: func(ctx context.Context) int {
-			return h.Models.ContextWindow(ctx, config.RoleSupervisor)
-		},
-		Gather: supervisor.DefaultGather,
-	})
 
 	vapid, err := notify.LoadVAPID(cfg.DataDir)
 	if err != nil {
@@ -188,12 +190,52 @@ func Open(cfg *config.Hub) (*Hub, error) {
 	}
 	h.Notifier = &notify.Notifier{Log: h.Log, Sender: &notify.Sender{VAPID: vapid, Subject: pushSubject(cfg)}}
 
+	deps := AgentDeps{Config: cfg, Log: h.Log, Tools: tools, Tasks: h.Tasks, Nodes: h.Nodes, Auth: h.Auth}
+	if cfg.HostedWorkspace && catalog != nil {
+		_ = st.Close()
+		return nil, errors.New("hosted supervisor is operator-configured")
+	}
+	if catalog != nil {
+		h.bindings, err = newBindings(context.Background(), deps, *catalog)
+		if err != nil {
+			st.Close()
+			return nil, err
+		}
+		h.module = h.bindings.module()
+	} else if factory != nil {
+		module, err := factory(deps)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("attach agent module: %w", err)
+		}
+		if cfg.HostedWorkspace && module.Name != "acp" {
+			_ = st.Close()
+			return nil, errors.New("hosted workspace only supports the bundled ACP supervisor")
+		}
+		h.module = module
+	}
+	h.Tasks.Reviewer, h.Tasks.Approver = h.module.Reviewer, h.module.Approver
+	ic := cfg.Inspector
+	every := ic.Every
+	if every <= 0 {
+		every = 10 * time.Minute
+	}
+	h.Inspector = inspector.New(h.Log, h.Nodes, h.module.Inspector.Provider, h.module.Inspector.Name, inspector.Options{
+		Every: every, Repeat: ic.Repeat, StalledAfter: ic.StalledAfter, LongAfter: ic.LongAfter, TokenAlarm: ic.TokenAlarm,
+		Beat: h.Watchdog.Loop("inspector", every+5*time.Minute),
+	})
+
 	h.Effects = effects.NewRunner(st, h.Log.EffectsEnqueued(), 2*time.Second)
 	h.Effects.Beat = h.Watchdog.Loop("effects", 2*time.Minute)
 	h.Effects.Handle(store.EffectTaskAdvance, h.Tasks.Advance)
 	h.Effects.Handle(store.EffectApprove, h.Tasks.Approve)
 	h.Effects.Handle(store.EffectSetup, h.Tasks.Setup)
-	h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
+	if cfg.DirectWorkspace() {
+		// Old queued notifications must not leave an offline workspace.
+		h.Effects.Handle(store.EffectPush, func(context.Context, store.Effect) error { return nil })
+	} else {
+		h.Effects.Handle(store.EffectPush, h.Notifier.Handle)
+	}
 	origins := []string{}
 	if u, err := url.Parse(cfg.PublicURL); err == nil {
 		origins = append(origins, u.Host)
@@ -218,29 +260,65 @@ func Open(cfg *config.Hub) (*Hub, error) {
 				r, err := st.Run(ctx, id)
 				return err == nil && r.Status == "running"
 			case "thread":
-				return h.Supervisor.Active(id)
+				return h.module.Active != nil && h.module.Active(id)
 			}
 			return false
 		}})
 	}
-	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, sysroutes, h.Nodes.Routes, h.Tasks.Routes, h.Notifier.Routes(h.Models.RoleRefs), h.Models.Routes(h.Auth.RequireFresh),
-		h.mcpRoutes(), h.Triggers.Routes, h.Inspector.Routes, h.Updates.Routes(st, h.Nodes), h.Supervisor.Routes)
-	h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
-	h.Nodes.DeviceRoutes(h.HTTP.Mux())
+	nodeRoutes := h.Nodes.Routes
+	if cfg.HostedWorkspace {
+		nodeRoutes = h.Nodes.HostedPlanningRoutes
+	} else if cfg.LocalWorkspace {
+		nodeRoutes = h.Nodes.WorkspaceRoutes
+	}
+	routes := []httpapi.Routes{sysroutes, nodeRoutes, h.Tasks.Routes, h.Triggers.Routes, h.Inspector.Routes, h.capabilityRoutes}
+	if cfg.HostedWorkspace && len(cfg.ExternalMCPClients) > 0 {
+		inbound := externalmcp.New(st, h.Tasks, cfg.PublicURL, cfg.ExternalMCPClients)
+		routes = append(routes, inbound.Routes(h.Auth.RequireFresh))
+	}
+	if cfg.HostedWorkspace && (cfg.CloudWorkerToken != "" || cfg.CloudControllerToken != "") {
+		if cfg.CloudControllerToken != "" {
+			h.CloudWork, err = cloudwork.NewManaged(context.Background(), st, cfg.CloudControllerToken, cfg.CloudIdleTimeout)
+		} else {
+			h.CloudWork, err = cloudwork.New(context.Background(), st, cfg.CloudWorkerToken)
+		}
+		if err != nil {
+			_ = st.Close()
+			return nil, err
+		}
+		routes = append(routes, h.CloudWork.Routes(h.Auth.RequireFresh))
+	}
+	if cfg.DirectWorkspace() {
+		if cfg.LocalWorkspace && cfg.LocalSandboxDispatch {
+			h.SandboxDispatch = localdispatch.New(st)
+			if err := h.SandboxDispatch.Recover(context.Background()); err != nil {
+				_ = st.Close()
+				return nil, fmt.Errorf("recover sandbox dispatch: %w", err)
+			}
+			routes = append(routes, h.SandboxDispatch.Routes)
+		}
+		routes = append(routes, h.Notifier.SettingsRoutes(h.module.roleRefs))
+	} else {
+		routes = append(routes, h.Notifier.Routes(h.module.roleRefs), h.Updates.Routes(st, h.Nodes))
+	}
+	routes = append(routes, h.module.Routes...)
+	if h.bindings != nil {
+		routes = append(routes, h.bindings.Routes)
+	}
+	h.HTTP = httpapi.New(cfg, h.Log, h.Auth, routes...)
+	if h.bindings != nil {
+		h.HTTP.SetAPIFallback(h.bindings)
+	}
+	if !cfg.DirectWorkspace() {
+		h.HTTP.DeviceRoutes(h.Nodes.DeviceAuth)
+		h.Nodes.DeviceRoutes(h.HTTP.Mux())
+	}
 	// The single writer's lock must never hang: every write goes through it.
 	h.Watchdog.Probe("store", 2*time.Minute, func(ctx context.Context) error {
 		_, err := h.Log.Write(ctx, func(*store.Writer) error { return nil })
 		return err
 	})
 	return h, nil
-}
-
-// mcpRoutes serves the MCP settings page's API unless MCP is switched off.
-func (h *Hub) mcpRoutes() httpapi.Routes {
-	if h.MCP == nil {
-		return func(*http.ServeMux, func(string, http.HandlerFunc)) {}
-	}
-	return h.MCP.Routes(h.Auth.RequireFresh)
 }
 
 // pushSubject is the contact push services see in the VAPID token.
@@ -251,10 +329,20 @@ func pushSubject(cfg *config.Hub) string {
 	return "mailto:sous@localhost"
 }
 
+// Close releases resources on a Hub that has stopped or was never started.
+func (h *Hub) Close() error {
+	err := h.Store.Close()
+	if h.lock != nil {
+		err = errors.Join(err, h.lock.Close())
+	}
+	return err
+}
+
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (h *Hub) Run(ctx context.Context) error {
 	ln, err := net.Listen("tcp", h.Cfg.Listen)
 	if err != nil {
+		h.Close()
 		return err
 	}
 	return h.RunOn(ctx, ln)
@@ -264,34 +352,60 @@ func (h *Hub) Run(ctx context.Context) error {
 // passes an in-memory listener: in 0.3 nothing reaches the API except
 // through the relay.
 func (h *Hub) RunOn(ctx context.Context, ln net.Listener) error {
-	defer h.Store.Close()
+	defer h.Close()
+	defer ln.Close()
 	if _, err := h.Log.EnsureMainThread(ctx); err != nil {
 		return err
 	}
-	if !h.Brain {
-		if err := h.announceSetup(ctx); err != nil {
-			return err
+	if !h.Brain && !h.Cfg.HostedWorkspace {
+		var setup string
+		if !h.Cfg.LocalDesktopAuth {
+			var err error
+			setup, err = h.setupURL(ctx)
+			if err != nil {
+				return err
+			}
+		}
+		if h.LocalReady != nil {
+			if err := h.LocalReady(h.Cfg.PublicURL, setup); err != nil {
+				return err
+			}
+		} else if setup != "" {
+			slog.Info("no passkey registered yet; open this link within 24 hours to register one", "url", setup)
 		}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	h.Supervisor.Start(runCtx)
-	if h.MCP != nil {
-		if err := h.MCP.Start(runCtx); err != nil {
-			slog.Warn("mcp: cannot start the servers", "err", err)
-		}
-	}
+	// Seed Hub domain data before an attached module resumes saved turns.
 	h.Tasks.Start(runCtx)
+	if h.module.Start != nil {
+		h.module.Start(runCtx)
+	}
+	if h.module.Wait != nil {
+		defer func() {
+			cancel()
+			h.module.Wait()
+		}()
+	}
 	h.Triggers.Start(runCtx)
 	h.Inspector.Start(runCtx)
-	go h.Effects.Run(runCtx)
+	effectsDone := make(chan struct{})
+	go func() {
+		defer close(effectsDone)
+		h.Effects.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		<-effectsDone
+	}()
 	if h.WatchdogOn {
 		go h.Watchdog.Run(runCtx)
 	}
 
 	srv := &http.Server{Handler: h.HTTP, ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnContext: h.ConnContext}
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnContext: h.ConnContext,
+		BaseContext: func(net.Listener) context.Context { return runCtx }}
 	errCh := make(chan error, 1)
 	go func() {
 		if h.Cfg.TLS() && !h.Brain {
@@ -313,34 +427,25 @@ func (h *Hub) RunOn(ctx context.Context, ln net.Listener) error {
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			cancel()
-			h.Supervisor.Wait()
 			return err
 		}
 	case <-ctx.Done():
 	}
 	shutdownCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
-	err := srv.Shutdown(shutdownCtx)
-	cancel()
-	h.Supervisor.Wait()
-	if h.MCP != nil {
-		h.MCP.Stop()
-	}
-	return err
+	return srv.Shutdown(shutdownCtx)
 }
 
-func (h *Hub) announceSetup(ctx context.Context) error {
+func (h *Hub) setupURL(ctx context.Context) (string, error) {
 	has, err := h.Auth.HasPasskey(ctx)
 	if err != nil || has {
-		return err
+		return "", err
 	}
 	tok, err := h.Auth.NewSetupToken(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
-	slog.Info("no passkey registered yet; open this link within 24 hours to register one", "url", h.Auth.SetupURL(tok))
-	return nil
+	return h.Auth.SetupURL(tok), nil
 }
 
 // webTools returns web_search and web_fetch unless the config turns them off.

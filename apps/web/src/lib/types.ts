@@ -165,6 +165,51 @@ export interface Me {
   logged_in: boolean
   has_passkey: boolean
   dev_login: boolean
+  desktop_auth?: boolean
+  local_workspace?: boolean
+  hosted_workspace?: boolean
+}
+
+export type SupervisorChoice = 'none' | 'legacy' | 'acp'
+export interface SupervisorBinding {
+  state: 'unbound' | 'unconfigured' | 'configured'
+  module: string
+  generation?: number
+  selection?: SupervisorChoice
+  choices?: SupervisorChoice[]
+  notice?: string
+}
+
+export interface WorkspaceCapabilities {
+  external_mcp?: boolean
+  supervisor: SupervisorBinding
+  node_pairing: boolean
+  hosted_workspace?: boolean
+  local_sandbox_dispatch?: boolean
+  cloud_work?: boolean
+}
+
+export type CloudCapacityPhase = 'off' | 'starting' | 'online' | 'retiring' | 'needs_reconciliation'
+
+export interface CloudWork {
+  id: string
+  task_id: string
+  status: 'queued' | 'running' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed' | 'expired' | 'stale' | 'interrupted'
+  base_job_id?: string
+  files: number
+  exit_code: number
+  created_at: number
+  expires_at: number
+  updated_at: number
+}
+
+export interface SandboxDispatch {
+  id: string
+  task_id: string
+  status: 'pending' | 'running' | 'cancel_requested' | 'cancelled' | 'ready' | 'failed' | 'interrupted' | 'expired' | 'stale'
+  changes: number
+  updated_at: number
+  expires_at: number
 }
 
 export type MemoryKind = 'profile' | 'project' | 'lesson' | 'note'

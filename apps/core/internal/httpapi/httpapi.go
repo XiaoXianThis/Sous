@@ -3,10 +3,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -21,9 +23,11 @@ import (
 
 	"github.com/XiaoXianThis/Sous/apps/core/internal/attach"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/auth"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/cloudwork"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/config"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/event"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/eventlog"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/externalmcp"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
@@ -40,10 +44,11 @@ const (
 )
 
 type Server struct {
-	cfg  *config.Hub
-	log  *eventlog.Log
-	auth *auth.Auth
-	mux  *http.ServeMux
+	cfg         *config.Hub
+	log         *eventlog.Log
+	auth        *auth.Auth
+	mux         *http.ServeMux
+	apiFallback http.Handler
 	// files holds the attachments of messages.
 	files *attach.Store
 }
@@ -81,7 +86,13 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
-	protect := func(pattern string, h http.HandlerFunc) { s.mux.Handle(pattern, a.Require(h)) }
+	protect := func(pattern string, h http.HandlerFunc) {
+		if cfg.DirectWorkspace() && (pattern == "GET /ws" || pattern == "GET /api/v1/system/stream") {
+			s.mux.Handle(pattern, a.SessionStream(h))
+			return
+		}
+		s.mux.Handle(pattern, a.Require(h))
+	}
 	protect("GET /api/v1/threads", s.listThreads)
 	protect("POST /api/v1/threads", s.createThread)
 	protect("GET /api/v1/threads/{id}", s.getThread)
@@ -101,16 +112,71 @@ func New(cfg *config.Hub, log *eventlog.Log, a *auth.Auth, extra ...Routes) *Ser
 	}
 	protect("GET /ws", s.ws)
 	s.mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.apiFallback != nil {
+			s.apiFallback.ServeHTTP(w, r)
+			return
+		}
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
 	}))
 	s.mux.Handle("/", s.static())
 	return s
 }
 
+// SetAPIFallback installs a handler for API paths not claimed by the Hub.
+// It is set once during assembly; the handler owns authorization.
+func (s *Server) SetAPIFallback(h http.Handler) { s.apiFallback = h }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	s.secureHeaders(w.Header())
+	if s.cfg.DirectWorkspace() {
+		// Bind both the socket and the browser authority. Checking Host avoids
+		// accepting requests made through an unrelated name pointed at loopback.
+		// Browser writes, including the start of auth ceremonies, must be same-origin.
+		if r.Host != strings.TrimPrefix(strings.TrimPrefix(s.cfg.PublicURL, "http://"), "https://") {
+			writeError(w, http.StatusMisdirectedRequest, "host", "请使用工作区配置的地址")
+			return
+		}
+		if r.URL.Path == "/sw.js" && s.cfg.LocalDesktopAuth {
+			// Desktop assets are tied to this installed build, never a PWA cache.
+			http.NotFound(w, r)
+			return
+		}
+		if externalmcp.ReservedPath(r.URL.Path) {
+			if !s.cfg.HostedWorkspace || len(s.cfg.ExternalMCPClients) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			if (r.URL.Path == externalmcp.TokenPath || r.URL.Path == externalmcp.RevokePath) && r.Method != http.MethodPost {
+				w.Header().Set("Allow", "POST")
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+		}
+		nativeMachine := s.cfg.HostedWorkspace && r.Method == http.MethodPost && cloudwork.MachineRoute(r.URL.Path, s.cfg.CloudWorkerToken != "", s.cfg.CloudControllerToken != "")
+		nativeMachine = nativeMachine || (s.cfg.HostedWorkspace && len(s.cfg.ExternalMCPClients) > 0 && r.Method == http.MethodPost && externalmcp.MachineRoute(r.URL.Path))
+		if origin := r.Header.Get("Origin"); (origin != "" && origin != s.cfg.PublicURL) || (s.cfg.HostedWorkspace && !nativeMachine && origin == "" && r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			writeError(w, http.StatusForbidden, "origin", "不允许来自其他站点的工作区请求")
+			return
+		}
+		if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusForbidden, "origin", "请在工作区页面中操作")
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		if r.URL.Path == "/node" {
+			http.NotFound(w, r)
+			return
+		}
+	}
 	if r.Body != nil {
+		if s.cfg.HostedWorkspace && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			controller := http.NewResponseController(w)
+			_ = controller.SetReadDeadline(time.Now().Add(30 * time.Second))
+			defer controller.SetReadDeadline(time.Time{})
+		}
 		limit := int64(maxBodyBytes)
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/attachments" {
 			limit = maxUploadBytes
@@ -353,6 +419,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 			topicID = msgID
 		}
 	}
+	persistStart := time.Now()
 	evs, err := s.log.Write(r.Context(), func(w *store.Writer) error {
 		if _, err := w.Append(event.New(event.MessageUser, event.ActorUser, id, event.MessagePayload{MessageID: msgID, Content: content, Context: body.Context, Attachments: atts, TopicID: body.TopicID})); err != nil {
 			return err
@@ -366,6 +433,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		internal(w, err)
 		return
+	}
+	if s.cfg.HostedWorkspace {
+		w.Header().Set("Server-Timing", fmt.Sprintf("hub_persist;dur=%.3f", float64(time.Since(persistStart))/float64(time.Millisecond)))
 	}
 	topic := topicID
 	writeJSON(w, http.StatusAccepted, map[string]any{"message_id": msgID, "seq": evs[0].Seq, "topic_id": topic})
@@ -465,9 +535,46 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"days": days, "since": since.UnixMilli(), "usage": rows, "daily": daily, "by_project": byProject})
 }
 
+const workspaceShellMarker = `<meta name="sous-workspace" content="relay"`
+
+// HostedShell marks a current WebUI bundle as hosted. No dynamic credentials
+// are put in HTML; a cached shell can discover the correct offline experience.
+func HostedShell(dir string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	info, err := root.Stat("index.html")
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("hosted WebUI index.html must be a regular file")
+	}
+	f, err := root.Open("index.html")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	const limit = 128 << 10
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > limit || bytes.Count(raw, []byte(workspaceShellMarker)) != 1 {
+		return nil, errors.New("hosted web_dir needs a current WebUI build with a workspace marker")
+	}
+	return bytes.Replace(raw, []byte(workspaceShellMarker), []byte(`<meta name="sous-workspace" content="hosted"`), 1), nil
+}
+
 // static serves the built PWA with a fallback to index.html for client routes.
 func (s *Server) static() http.Handler {
 	dir := s.cfg.WebDir
+	var hosted []byte
+	if s.cfg.HostedWorkspace {
+		hosted, _ = HostedShell(dir)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dir == "" {
 			http.Error(w, "web_dir is not configured", http.StatusNotFound)
@@ -479,6 +586,43 @@ func (s *Server) static() http.Handler {
 			return
 		}
 		clean := path.Clean("/" + r.URL.Path)
+		if s.cfg.HostedWorkspace {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.NotFound(w, r)
+				return
+			}
+			if clean == externalmcp.AuthorizationPath {
+				if len(s.cfg.ExternalMCPClients) == 0 {
+					http.NotFound(w, r)
+					return
+				}
+				if !externalmcp.ValidAuthorization(s.cfg.PublicURL, r.URL.RawQuery, s.cfg.ExternalMCPClients) {
+					http.Error(w, "Invalid or unregistered authorization request. Restart this request from your client.", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Referrer-Policy", "no-referrer")
+			}
+			if clean == "/index.html" || path.Ext(clean) == "" {
+				if hosted == nil {
+					http.Error(w, "hosted WebUI not available", http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				if clean == externalmcp.AuthorizationPath {
+					w.Header().Set("Cache-Control", "no-store")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
+				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(hosted))
+				return
+			}
+			if !hostedPublicAsset(clean) {
+				http.NotFound(w, r)
+				return
+			}
+			serveHostedAsset(w, r, dir, clean)
+			return
+		}
 		p := filepath.Join(dir, filepath.FromSlash(clean))
 		if fi, err := os.Stat(p); err != nil || fi.IsDir() {
 			// Client routes get the app shell; a missing file (such as an
@@ -499,6 +643,44 @@ func (s *Server) static() http.Handler {
 		}
 		http.ServeFile(w, r, p)
 	})
+}
+
+// Root-relative access keeps an accidental bundle symlink from publishing a
+// file outside the WebUI root, independently of any request sanitization.
+func serveHostedAsset(w http.ResponseWriter, r *http.Request, dir, clean string) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer root.Close()
+	file, err := root.Open(filepath.FromSlash(strings.TrimPrefix(clean, "/")))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	if strings.HasPrefix(clean, "/assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
+func hostedPublicAsset(path string) bool {
+	if strings.HasPrefix(path, "/assets/") {
+		return true
+	}
+	switch path {
+	case "/sw.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/theme-init.js", "/third-party-notices.txt", "/build-info.json":
+		return true
+	}
+	return false
 }
 
 // DeviceRoutes serves the conversation to paired machines, authenticated by

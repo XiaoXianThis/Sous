@@ -233,9 +233,9 @@ func callersOf(funcs []string) (writer, caller string) {
 
 func moduleOf(pkg string) string {
 	switch pkg {
-	case "httpapi", "auth":
+	case "httpapi", "auth", "externalmcp":
 		return "httpapi"
-	case "supervisor", "tool", "prompts":
+	case "supervisor", "tool", "prompts", "acpagent":
 		return "supervisor"
 	case "task", "router":
 		return "task"

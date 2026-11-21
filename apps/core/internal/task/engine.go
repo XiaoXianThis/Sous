@@ -53,8 +53,9 @@ const (
 )
 
 var (
-	ErrInvalid  = errors.New("invalid task")
-	ErrConflict = errors.New("task cannot do that now")
+	ErrInvalid              = errors.New("invalid task")
+	ErrConflict             = errors.New("task cannot do that now")
+	ErrExecutionUnavailable = fmt.Errorf("%w: 此工作区尚未启用执行环境，任务可先保留为待办", ErrConflict)
 )
 
 // Model is a provider and model for one role.
@@ -64,6 +65,7 @@ type Model struct {
 }
 
 type Engine struct {
+	PlanningOnly   bool // no legacy host execution from this assembly
 	ApprovalPolicy ApprovalPolicy
 	Log            *eventlog.Log
 	Nodes          *nodehub.Hub
@@ -313,6 +315,9 @@ type Input struct {
 
 // Create validates and stores a new task, and dispatches it when asked.
 func (e *Engine) Create(ctx context.Context, in Input) (store.Task, error) {
+	if e.PlanningOnly && in.Dispatch {
+		return store.Task{}, ErrExecutionUnavailable
+	}
 	in.Title = strings.TrimSpace(in.Title)
 	if in.Title == "" {
 		return store.Task{}, fmt.Errorf("%w: 任务需要标题", ErrInvalid)
@@ -672,6 +677,9 @@ func (e *Engine) Cancel(ctx context.Context, id, reason, actor string) error {
 // given agent (remembered on the task). It runs now when it can, or waits in
 // the queue for its dependencies or a machine.
 func (e *Engine) Dispatch(ctx context.Context, id, node, agent, actor string) (store.Task, error) {
+	if e.PlanningOnly {
+		return store.Task{}, ErrExecutionUnavailable
+	}
 	t, err := e.store().Task(ctx, id)
 	if err != nil {
 		return store.Task{}, err

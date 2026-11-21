@@ -87,7 +87,7 @@ func TestRoleSwitchesLiveAndFallsBack(t *testing.T) {
 	r.store().SetModelKey(ctx, "p", "k1")
 
 	rev := r.For(config.RoleReviewer)
-	if Usable(ctx, rev) {
+	if provider.Usable(ctx, rev) {
 		t.Fatal("usable with nothing configured")
 	}
 	if _, err := rev.Stream(ctx, provider.Request{Messages: []provider.Message{provider.Text(provider.RoleUser, "hi")}}, nil); err != ErrNotConfigured {

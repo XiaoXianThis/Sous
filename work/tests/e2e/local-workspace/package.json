@@ -1,0 +1,8 @@
+{
+  "name": "sous-local-workspace-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun workspace.test.ts", "test:sandbox": "bun sandbox-dispatch.test.ts", "test:desktop-sandbox": "bun desktop-sandbox.test.ts", "test:binding": "bun supervisor-binding.test.ts", "test:hosted": "bun hosted-workspace.test.ts" },
+  "devDependencies": { "playwright-core": "1.56.1" }
+}

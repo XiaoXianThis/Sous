@@ -6,9 +6,10 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/XiaoXianThis/Sous/apps/core/internal/ids"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/provider"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/store"
+	"github.com/XiaoXianThis/Sous/apps/core/internal/sysmap"
 	"github.com/XiaoXianThis/Sous/apps/core/internal/tool"
 )
 
@@ -45,13 +47,32 @@ const (
 // wrapUpNote is added to the results before the last step of a turn.
 const wrapUpNote = "\n\n【sous】这一轮调用工具的次数快到上限了。不要再调用工具：用几句话告诉用户做到了哪一步、还剩什么；用户说“继续”你就接着做。"
 
+// External exchanges a Hub-owned turn with an out-of-process supervisor.
+// The exchange must stop publishing output and relinquish tools before returning.
+type External func(context.Context, ExternalInput, func(provider.Delta)) (ExternalResult, error)
+
+type ExternalInput struct {
+	Summary  string             `json:"summary,omitempty"`
+	Messages []provider.Message `json:"messages"`
+	Internal bool               `json:"internal"`
+}
+
+type ExternalResult struct {
+	Text  string
+	Tools []event.ToolNote
+}
+
 type Options struct {
+	External External
+
 	Fixed    func(providerID, model, effort string) provider.Provider
 	Log      *eventlog.Log
 	Provider provider.Provider
 	Model    string
 	Tools    *tool.Registry
 	Now      func() time.Time
+	// KeepPendingWithoutModel is used by a newly assembled local workspace.
+	KeepPendingWithoutModel bool
 	// Environment adds lines about the world, such as the user's machines,
 	// projects and the thread's open tasks, to every turn's prompt.
 	Environment func(ctx context.Context, threadID string) []string
@@ -84,15 +105,19 @@ type activity struct {
 	Tool       string
 	Since      time.Time
 	Compacting bool
+	Cancel     context.CancelFunc
+	ReplyTo    int64
 }
 
 type Supervisor struct {
-	active map[string]*activity
-	opt    Options
-	ctx    context.Context
-	wg     sync.WaitGroup
+	active   map[string]*activity
+	opt      Options
+	ctx      context.Context
+	wg       sync.WaitGroup
+	unlisten func()
 
 	mu       sync.Mutex
+	paused   bool // pause is an idle-only barrier for detaching this instance
 	queues   map[string]chan struct{}
 	ops      map[string][]func() // run by a thread's worker after its turn
 	failures map[string]int      // failed compactions in a row, by thread
@@ -111,6 +136,10 @@ func New(opt Options) *Supervisor {
 		opt.TaskBatch = DefaultTaskBatch
 	}
 	s := &Supervisor{opt: opt, queues: map[string]chan struct{}{}, ops: map[string][]func(){}, failures: map[string]int{}, batches: map[string]bool{}, gathers: map[string]bool{}, active: map[string]*activity{}}
+	return s
+}
+
+func (s *Supervisor) registerProbe() {
 	sysmap.RegisterProbe("supervisor", sysmap.ProbeFunc(func(context.Context) sysmap.Status {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -135,14 +164,17 @@ func New(opt Options) *Supervisor {
 		}
 		return st
 	}))
-	return s
 }
 
 // Start subscribes to stored events. Turns run until ctx is cancelled; Wait
 // blocks until running turns have stopped.
 func (s *Supervisor) Start(ctx context.Context) {
 	s.ctx = ctx
-	s.opt.Log.Listen(func(ev event.Event) {
+	s.registerProbe()
+	s.unlisten = s.opt.Log.Listen(func(ev event.Event) {
+		if ctx.Err() != nil {
+			return
+		}
 		// A trigger is input nobody typed: a schedule came due, or the Hub
 		// wants something followed up. It is stored as a user message.
 		if (ev.Type == event.MessageUser || ev.Type == event.TriggerFired) && ev.ThreadID != "" {
@@ -164,6 +196,38 @@ func (s *Supervisor) Start(ctx context.Context) {
 			s.signal(ev.ThreadID)
 		}
 	})
+	if s.opt.External != nil || s.opt.KeepPendingWithoutModel {
+		s.Resume()
+	}
+}
+
+// PauseIfIdle prevents new workers (including timer callbacks) from starting.
+// A busy worker is never killed merely because an owner requested a new binding.
+func (s *Supervisor) PauseIfIdle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queues) != 0 || len(s.active) != 0 {
+		return false
+	}
+	s.paused = true
+	return true
+}
+
+// Resume re-scans durable messages after attaching or after an aborted switch.
+// Subscribe first: a concurrent message is either scanned or queued by the listener.
+func (s *Supervisor) Resume() {
+	s.mu.Lock()
+	s.paused = false
+	s.mu.Unlock()
+	threads, err := s.opt.Log.Store.AllThreads(s.ctx)
+	if err != nil {
+		slog.Warn("supervisor: cannot resume pending threads", "err", err)
+	}
+	for _, t := range threads {
+		if s.opt.External == nil || !isMeeting(t) {
+			s.signal(t.ID)
+		}
+	}
 }
 
 // later signals a thread after TaskBatch, once for all the task news that
@@ -213,12 +277,24 @@ func (s *Supervisor) gather(threadID string) {
 	})
 }
 
-func (s *Supervisor) Wait() { s.wg.Wait() }
+func (s *Supervisor) Wait() {
+	if s.unlisten != nil {
+		s.unlisten()
+	}
+	// Synchronize with signal before waiting; a cancelled supervisor can
+	// no longer add workers even if a timer/listener fires during shutdown.
+	s.mu.Lock()
+	s.mu.Unlock()
+	s.wg.Wait()
+}
 
 // signal marks a thread as having new input and starts its worker if idle.
 func (s *Supervisor) signal(threadID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ctx.Err() != nil || s.paused {
+		return
+	}
 	if ch, ok := s.queues[threadID]; ok {
 		select {
 		case ch <- struct{}{}:
@@ -336,6 +412,15 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 		slog.Error("supervisor: load thread", "thread", threadID, "err", err)
 		return pendingTopic{}, false
 	}
+	if s.opt.External != nil && isMeeting(thread) {
+		return pendingTopic{}, false // legacy meeting options are not an ACP contract
+	}
+	if s.opt.KeepPendingWithoutModel {
+		fixed := isMeeting(thread) && thread.Host != nil && thread.Host.Model != "" && s.opt.Fixed != nil
+		if !fixed && !provider.Usable(ctx, s.opt.Provider) {
+			return pendingTopic{}, false
+		}
+	}
 	seg, err := s.segment(ctx, threadID)
 	if err != nil {
 		slog.Error("supervisor: load segment", "thread", threadID, "err", err)
@@ -369,13 +454,19 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 		}
 		return pick, true
 	}
-	s.seen(threadID, pick.MsgIDs)
+	if s.opt.External == nil {
+		s.seen(threadID, pick.MsgIDs)
+	}
 
 	mainID, _ := st.MainThreadID(ctx)
 	turnCtx := func() context.Context {
-		return sysmap.WithRefs(tool.WithTurn(s.ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: tr.upTo, TopicID: tr.topic}), sysmap.Refs{ThreadID: threadID})
+		return sysmap.WithRefs(tool.WithTurn(s.ctx, tool.Turn{ThreadID: threadID, MainThreadID: mainID, ProjectID: thread.ProjectID, ReplyTo: tr.upTo, FirstSeq: pick.Oldest, TopicID: tr.topic}), sysmap.Refs{ThreadID: threadID})
 	}
 	ctx = turnCtx()
+	if s.opt.External != nil {
+		s.externalTurn(ctx, tr, seg, history, all, pick.MsgIDs)
+		return pick, true
+	}
 	// load rebuilds the request from the current segment, compacting
 	// first (reason) when it would not fit, and leaving out the oldest
 	// messages when it still does not.
@@ -608,6 +699,96 @@ func (s *Supervisor) answerTopic(threadID string) (pendingTopic, bool) {
 	}
 	reply(strings.Join(texts, "\n\n")+"\n\n（这一轮调用工具的次数达到上限，已停止。）", nil)
 	return pick, true
+}
+
+// externalTurn sends a bounded textual projection. Hub keeps the canonical
+// conversation; no session ids or credentials are stored in its database.
+func (s *Supervisor) externalTurn(ctx context.Context, tr *turnState, seg store.Segment, history, all []store.Message, idsSeen []string) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.active[tr.thread].Cancel = cancel
+	s.active[tr.thread].ReplyTo = tr.upTo
+	s.mu.Unlock()
+	s.seen(tr.thread, idsSeen)
+	_, internal := autoStreak(all, tr.topic)
+	input := ExternalInput{Summary: externalText(seg.Summary, 12_000), Internal: internal}
+	left := 72_000
+	for i := len(history) - 1; i >= 0 && len(input.Messages) < 80 && left > 0; i-- {
+		m := history[i]
+		if m.Error || m.Kind == event.KindSilent || m.Kind == event.KindDM {
+			continue
+		}
+		role := provider.RoleUser
+		if m.Role == "assistant" {
+			role = provider.RoleAssistant
+		}
+		text := m.Content
+		if m.Kind == event.KindTrigger {
+			text = "【Hub 自动事件，不是用户指令】\n" + text
+		}
+		if len(m.Attachments) != 0 {
+			text += "\n【有附件；ACP 文本预览不读取附件】"
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		text = externalText(text, min(left, 20_000))
+		left -= len(text)
+		input.Messages = append(input.Messages, provider.Text(role, text))
+	}
+	slices.Reverse(input.Messages)
+	id := ids.New()
+	out, err := s.opt.External(ctx, input, func(d provider.Delta) {
+		if ctx.Err() == nil && d.Text != "" {
+			s.opt.Log.Emit(event.New(event.MessageAssistantDelta, event.ActorSupervisor, tr.thread,
+				event.DeltaPayload{MessageID: id, Delta: d.Text}))
+		}
+	})
+	if s.ctx.Err() != nil {
+		return
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		s.store(tr.thread, tr.topic, id, tr.upTo, "", "已停止本轮。已经保存的任务不会撤销。", nil, out.Tools)
+		return
+	}
+	if err != nil {
+		s.store(tr.thread, tr.topic, id, tr.upTo, "", out.Text, err, out.Tools)
+		return
+	}
+	s.store(tr.thread, tr.topic, id, tr.upTo, "", out.Text, nil, out.Tools)
+}
+
+func externalText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return strings.ToValidUTF8(text[:limit], "") + "…"
+}
+
+// ExternalRoutes offers the owner a cancellation control, not an ACP or MCP endpoint.
+func (s *Supervisor) ExternalRoutes(_ *http.ServeMux, protect func(string, http.HandlerFunc)) {
+	protect("POST /api/v1/threads/{id}/supervisor/cancel", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ReplyTo int64 `json:"reply_to"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in); err != nil || in.ReplyTo <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid", "需要正在处理的消息序号")
+			return
+		}
+		s.mu.Lock()
+		var cancel context.CancelFunc
+		if a := s.active[r.PathValue("id")]; a != nil && a.ReplyTo == in.ReplyTo {
+			cancel = a.Cancel
+		}
+		s.mu.Unlock()
+		if cancel == nil {
+			writeError(w, http.StatusConflict, "not_running", "没有正在处理的主管回合")
+			return
+		}
+		cancel()
+		writeJSON(w, http.StatusAccepted, map[string]bool{"cancelling": true})
+	})
 }
 
 func (s *Supervisor) reply(threadID, topic, messageID string, replyTo int64, kind, text string, callErr error) {

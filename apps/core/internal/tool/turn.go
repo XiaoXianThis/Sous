@@ -11,6 +11,8 @@ type Turn struct {
 	// ReplyTo is the seq of the user message the turn answers: messages a
 	// tool adds to the conversation (a consultant's answer) belong to it.
 	ReplyTo int64
+	// FirstSeq is the first unanswered message, stable across interrupted turns.
+	FirstSeq int64
 	// TopicID is the topic the turn answers (chat-topics): tasks it creates
 	// and messages tools add belong to it.
 	TopicID string
